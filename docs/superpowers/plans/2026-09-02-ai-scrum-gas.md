@@ -17,6 +17,8 @@
 - 外部 npm 依存を追加しない。テストは Node 標準の `node:test` と `node:assert/strict` のみ使う
 - 純関数ファイルは末尾に `if (typeof module !== 'undefined') { module.exports = { ... } }` を付ける。GAS では `module` が未定義のため無害で、Node からは `require` できる
 - GAS ファイルは `const` / `let` と関数宣言のみ使う。`import` / `export` は使わない（GAS は ES modules 非対応）
+- 例外として、Node と GAS の相互運用ガード（`if (typeof require !== 'undefined' && ...) { var { ... } = require(...) }`）
+  でのみ `var` を使う。この位置では巻き上げが必要で `const` / `let` では代替できない
 - シートへの書き込みは `setValues` で1シート1回にまとめる
 - `README.md` は **普段 Claude を使わない非エンジニア** を読者とする。専門用語を使うときは必ずその場で
   一言添え、コマンドは「どこに何を貼るか」まで書く。開発者向けの内容は `CLAUDE.md` と `docs/` に置き、
@@ -347,7 +349,6 @@ git commit -m "feat: ひな形行判定とスプリント名正規化を追加�
 - Produces:
   - `extractMarkdownTable(text: string, heading: string): {headers: string[], rows: string[][]} | null` — 指定見出し直下の表を返す。無ければ `null`
   - `extractSection(text: string, heading: string): string` — 指定見出しから次の見出しまでの本文を返す。無ければ空文字
-  - `tableToMap(table: {headers, rows}): Object` — 2列の表を「1列目→2列目」の辞書にする
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -356,7 +357,7 @@ git commit -m "feat: ひな形行判定とスプリント名正規化を追加�
 ```javascript
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { extractMarkdownTable, extractSection, tableToMap } = require('../pure_markdown.js');
+const { extractMarkdownTable, extractSection } = require('../pure_markdown.js');
 
 const MD = [
   '# スプリントバックログ - Sprint 001',
@@ -407,14 +408,9 @@ test('存在しない見出しでは空文字を返す', () => {
   assert.equal(extractSection(MD, '存在しない'), '');
 });
 
-test('2列の表を辞書にする', () => {
-  const t = extractMarkdownTable(MD, 'スプリント情報');
-  assert.deepEqual(tableToMap(t), { 'スプリント番号': 'Sprint 001', '開始日': '2026-09-08' });
-});
-
-test('null を渡しても壊れない', () => {
-  assert.deepEqual(tableToMap(null), {});
+test('空文字を渡しても壊れない', () => {
   assert.equal(extractMarkdownTable('', 'x'), null);
+  assert.equal(extractSection('', 'x'), '');
 });
 ```
 
@@ -490,25 +486,15 @@ function extractSection(text, heading) {
     .join('\n').trim();
 }
 
-/** 2列の表を「1列目 → 2列目」の辞書にする。 */
-function tableToMap(table) {
-  const map = {};
-  if (!table || !table.rows) return map;
-  table.rows.forEach(function (r) {
-    if (r.length >= 2) map[r[0]] = r[1];
-  });
-  return map;
-}
-
 if (typeof module !== 'undefined') {
-  module.exports = { extractMarkdownTable, extractSection, tableToMap };
+  module.exports = { extractMarkdownTable, extractSection };
 }
 ```
 
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計29件
+Expected: PASS — 累計28件
 
 - [ ] **Step 5: コミット**
 
@@ -672,7 +658,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計38件
+Expected: PASS — 累計37件
 
 - [ ] **Step 5: コミット**
 
@@ -856,7 +842,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計47件
+Expected: PASS — 累計46件
 
 - [ ] **Step 5: コミット**
 
@@ -874,7 +860,7 @@ git commit -m "feat: カンバンとロードマップのグリッド変換を�
 - Test: `gas/tests/pure_grid_report.test.js`
 
 **Interfaces:**
-- Consumes: `filterRealRows`, `normalizeSprint` (Task 2)、`extractMarkdownTable`, `extractSection`, `tableToMap` (Task 3)
+- Consumes: `filterRealRows` (Task 2)、`extractMarkdownTable`, `extractSection` (Task 3)
 - Produces:
   - `buildVelocityGrid(velocityRows: Object[]): string[][]`
   - `buildBurndownGrid(sprintBacklogMd: string): string[][] | null` — 表が無ければ `null`
@@ -1105,7 +1091,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計55件
+Expected: PASS — 累計54件
 
 - [ ] **Step 5: コミット**
 
@@ -1131,7 +1117,6 @@ git commit -m "feat: ベロシティ・バーンダウン・障害物・ダッ�
   - `ConfigError` — 設定不備を表す例外に付ける名前（`Error` に `name` を設定して投げる）
   - `getScrumFolder(): Folder` — `<フォルダ>/scrum` を返す。未設定・不在なら例外
   - `readTextFile(folder: Folder, name: string): string | null` — 直下のファイル本文。無ければ `null`
-  - `readScrumFile(name: string): string | null`
   - `findLatestSprintFolder(scrumFolder: Folder): Folder | null` — `sprint` で始まるフォルダのうち名前順で最後のもの
 
 **このタスクにテストはない。** GAS API に依存するため `node --test` では検証できない。Task 12 の手動確認で担保する。
@@ -1197,11 +1182,6 @@ function readTextFile(folder, name) {
   const it = folder.getFilesByName(name);
   if (!it.hasNext()) return null;
   return it.next().getBlob().getDataAsString('UTF-8');
-}
-
-/** scrum フォルダ直下のファイル本文を返す。無ければ null。 */
-function readScrumFile(name) {
-  return readTextFile(getScrumFolder(), name);
 }
 
 /** sprint で始まるフォルダのうち名前順で最後のものを返す。無ければ null。 */
@@ -1613,7 +1593,7 @@ Expected: `JSON OK`
 - [ ] **Step 5: 全テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計55件（純関数層は無傷）
+Expected: PASS — 累計54件（純関数層は無傷）
 
 - [ ] **Step 6: コミット**
 
@@ -1864,7 +1844,7 @@ Claude Code は、文章で指示すると作業してくれるツールです�
 - [ ] **Step 7: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計55件
+Expected: PASS — 累計54件
 
 - [ ] **Step 8: コミット**
 
@@ -1891,7 +1871,7 @@ npm test
 for f in gas/*.js; do node --check "$f" || echo "SYNTAX NG: $f"; done
 ```
 
-Expected: 55 tests PASS、`SYNTAX NG` の出力が無いこと
+Expected: 54 tests PASS、`SYNTAX NG` の出力が無いこと
 
 - [ ] **Step 2: 秘密情報が含まれていないことを確認する**
 
