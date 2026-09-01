@@ -1,0 +1,65 @@
+/**
+ * Markdown から表とセクション本文を取り出す。GAS API に依存しない純関数。
+ * 行番号ではなく見出しテキストを起点にすることで、成果物の編集に追従できるようにする。
+ */
+
+/** 見出し行（# の数は問わない）にマッチし、その見出しテキストを返す。 */
+function headingTextOf(line) {
+  const m = String(line).match(/^#{1,6}\s+(.*?)\s*$/);
+  return m ? m[1] : null;
+}
+
+/** 表の1行を解析してセル配列にする。 */
+function splitTableRow(line) {
+  return line.replace(/^\s*\|/, '').replace(/\|\s*$/, '')
+    .split('|').map(function (c) { return c.trim(); });
+}
+
+/** 区切り行（|---|---|）かどうか。 */
+function isSeparatorRow(line) {
+  return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.indexOf('-') !== -1;
+}
+
+/** 指定見出しから次の見出しまでの行を返す。 */
+function linesUnderHeading(text, heading) {
+  const lines = String(text || '').split('\n');
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (headingTextOf(lines[i]) === heading) { start = i + 1; break; }
+  }
+  if (start === -1) return null;
+  const out = [];
+  for (let i = start; i < lines.length; i++) {
+    if (headingTextOf(lines[i]) !== null) break;
+    out.push(lines[i]);
+  }
+  return out;
+}
+
+/** 指定見出し直下の表を返す。無ければ null。 */
+function extractMarkdownTable(text, heading) {
+  const lines = linesUnderHeading(text, heading);
+  if (!lines) return null;
+  const tableLines = lines.filter(function (l) { return l.trim().indexOf('|') === 0; });
+  if (tableLines.length < 2) return null;
+  const headers = splitTableRow(tableLines[0]);
+  const rows = [];
+  for (let i = 1; i < tableLines.length; i++) {
+    if (isSeparatorRow(tableLines[i])) continue;
+    rows.push(splitTableRow(tableLines[i]));
+  }
+  return { headers: headers, rows: rows };
+}
+
+/** 指定見出し直下の本文（表を除く）を返す。無ければ空文字。 */
+function extractSection(text, heading) {
+  const lines = linesUnderHeading(text, heading);
+  if (!lines) return '';
+  return lines
+    .filter(function (l) { return l.trim() !== '' && l.trim().indexOf('|') !== 0; })
+    .join('\n').trim();
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = { extractMarkdownTable, extractSection };
+}
