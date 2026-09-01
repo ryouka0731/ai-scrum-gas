@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "description": "AI Scrum の成果物を Google スプレッドシートのダッシュボードへ同期する GAS プロジェクト",
   "scripts": {
-    "test": "node --test gas/tests/"
+    "test": "node --test \"gas/tests/*.test.js\""
   }
 }
