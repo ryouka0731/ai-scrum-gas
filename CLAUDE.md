@@ -25,8 +25,8 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
 
 ## GAS 側の開発
 ```bash
-npm test                       # 純関数層のテスト
-cd gas && clasp push           # デプロイ（管理者のみ）
+npm test                              # 純関数層のテスト
+cd gas && npx @google/clasp@3 push    # デプロイ（管理者のみ）
 ```
 
 `pure_*.js` は GAS API に依存しない。ロジックはここに書き、`gas_*.js` は

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # 新しい Google Workspace テナントに AI Scrum のダッシュボードを一から作る。
 #
+# 前提: 実行前に https://script.google.com/home/usersettings で「Apps Script API」を
+# オンにしておくこと（オフのままだと create が失敗する）。
+#
 # 使い方:
 #   scripts/setup.sh ["スプレッドシートの名前"]
 #
