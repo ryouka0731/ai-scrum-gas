@@ -40,6 +40,8 @@ function findLatestSprintFolder(scrumFolder) {
     if (n.indexOf('sprint') === 0) { names.push(n); byName[n] = f; }
   }
   if (names.length === 0) return null;
+  // 文字列 sort。sprintXXX が3桁ゼロ埋めの間は正しく最新を選べるが、
+  // 桁数が不揃い（例: sprint9 と sprint10）になると誤判定するので注意。
   names.sort();
   return byName[names[names.length - 1]];
 }

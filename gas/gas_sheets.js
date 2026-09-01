@@ -13,7 +13,7 @@ function readNotes(ss, sheetName, keyCol, noteCol) {
   if (!sheet) return notes;
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
-  if (lastRow < 2 || lastCol <= noteCol) return notes;
+  if (lastRow < 2 || lastCol <= noteCol || lastCol <= keyCol) return notes;
   const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
   values.forEach(function (row) {
     const key = String(row[keyCol] || '').trim();
@@ -31,6 +31,7 @@ function writeGrid(ss, sheetName, grid) {
   if (!grid || grid.length === 0) return sheet;
 
   const width = grid.reduce(function (max, r) { return Math.max(max, r.length); }, 0);
+  if (width < 1) return sheet;
   const normalized = grid.map(function (r) {
     const copy = r.slice();
     while (copy.length < width) copy.push('');
@@ -49,9 +50,32 @@ function applyHeaderStyle(sheet, width) {
   sheet.setFrozenRows(1);
 }
 
-/** ロードマップの帯を塗る。marks は 0 起点の {row, col}。 */
+/**
+ * ロードマップの帯を塗る。marks は 0 起点の {row, col}。
+ * marks が外接する矩形を求め、setBackgrounds を1回だけ呼んで塗る（全体制約: セル単位の書き込み禁止）。
+ */
 function paintMarks(sheet, marks, color) {
-  (marks || []).forEach(function (m) {
-    sheet.getRange(m.row + 1, m.col + 1).setBackground(color || ROADMAP_BAND_COLOR);
+  if (!marks || marks.length === 0) return;
+  const fillColor = color || ROADMAP_BAND_COLOR;
+
+  let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
+  marks.forEach(function (m) {
+    if (m.row < minRow) minRow = m.row;
+    if (m.row > maxRow) maxRow = m.row;
+    if (m.col < minCol) minCol = m.col;
+    if (m.col > maxCol) maxCol = m.col;
   });
+
+  const numRows = maxRow - minRow + 1;
+  const numCols = maxCol - minCol + 1;
+  const matrix = [];
+  for (let r = 0; r < numRows; r++) {
+    matrix.push(new Array(numCols).fill(null));
+  }
+  marks.forEach(function (m) {
+    matrix[m.row - minRow][m.col - minCol] = fillColor;
+  });
+
+  // matrix は 0 起点の矩形内インデックス。getRange は 1 起点なので +1 する。
+  sheet.getRange(minRow + 1, minCol + 1, numRows, numCols).setBackgrounds(matrix);
 }
