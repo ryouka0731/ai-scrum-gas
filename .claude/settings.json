@@ -1,0 +1,28 @@
+{
+  "extraKnownMarketplaces": {
+    "open-code-review": {
+      "source": {
+        "source": "github",
+        "repo": "alibaba/open-code-review"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "open-code-review@open-code-review": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/ocr-auto-review.sh\"",
+            "timeout": 30,
+            "statusMessage": "OpenCodeReview: 変更を自動レビュー中..."
+          }
+        ]
+      }
+    ]
+  }
+}

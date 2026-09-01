@@ -1,0 +1,2 @@
+id,title,description,acceptance_criteria,priority,size,status,sprint,created_at,updated_at
+PBI-001,（PBIタイトル）,（ユーザーストーリー形式の説明）,（受入基準をセミコロン区切りで記述）,Critical/High/Medium/Low,0,New,,YYYY-MM-DD,YYYY-MM-DD
