@@ -9,10 +9,16 @@ function headingTextOf(line) {
   return m ? m[1] : null;
 }
 
-/** 表の1行を解析してセル配列にする。 */
+/** 表の1行を解析してセル配列にする。セル内の `\|` はエスケープされたパイプとして扱う。 */
 function splitTableRow(line) {
-  return line.replace(/^\s*\|/, '').replace(/\|\s*$/, '')
-    .split('|').map(function (c) { return c.trim(); });
+  // 半角スペース等は通常のセル内容（例: "Sprint 001"）で普通に使われるため、
+  // 退避先には表の内容として現れない制御文字を使う。
+  const PLACEHOLDER = '\u0000';
+  return String(line)
+    .replace(/\\\|/g, PLACEHOLDER)
+    .replace(/^\s*\|/, '').replace(/\|\s*$/, '')
+    .split('|')
+    .map(function (c) { return c.split(PLACEHOLDER).join('|').trim(); });
 }
 
 /** 区切り行（|---|---|）かどうか。 */
@@ -20,7 +26,7 @@ function isSeparatorRow(line) {
   return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.indexOf('-') !== -1;
 }
 
-/** 指定見出しから次の見出しまでの行を返す。 */
+/** 指定見出しから次の見出しまでの行を返す。同名の見出しが複数ある場合は最初の一致を採用する。 */
 function linesUnderHeading(text, heading) {
   const lines = String(text || '').split('\n');
   let start = -1;
@@ -36,7 +42,7 @@ function linesUnderHeading(text, heading) {
   return out;
 }
 
-/** 指定見出し直下の表を返す。無ければ null。 */
+/** 指定見出しのセクション内にある表を返す。無ければ null。 */
 function extractMarkdownTable(text, heading) {
   const lines = linesUnderHeading(text, heading);
   if (!lines) return null;

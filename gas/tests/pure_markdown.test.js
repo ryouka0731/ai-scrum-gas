@@ -55,3 +55,14 @@ test('空文字を渡しても壊れない', () => {
   assert.equal(extractMarkdownTable('', 'x'), null);
   assert.equal(extractSection('', 'x'), '');
 });
+
+test('セル内のエスケープされたパイプ（\\|）を分割せず復元する', () => {
+  const md = [
+    '## 表',
+    '| a | b |',
+    '|---|---|',
+    '| x\\|y | z |',
+  ].join('\n');
+  const t = extractMarkdownTable(md, '表');
+  assert.deepEqual(t.rows, [['x|y', 'z']]);
+});
