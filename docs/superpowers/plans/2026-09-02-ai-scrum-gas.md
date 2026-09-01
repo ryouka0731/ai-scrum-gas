@@ -20,6 +20,10 @@
 - 例外として、Node と GAS の相互運用ガード（`if (typeof require !== 'undefined' && ...) { var { ... } = require(...) }`）
   でのみ `var` を使う。この位置では巻き上げが必要で `const` / `let` では代替できない
 - シートへの書き込みは `setValues` で1シート1回にまとめる
+- **テナント固有の値をリポジトリにコミットしない。** スプレッドシート ID / スクリプト ID /
+  Drive フォルダ ID / ドメイン名は、`gas/.clasp.json`（gitignore 済み）かスクリプトプロパティに置く。
+  このリポジトリは複数の Google Workspace テナントで使い回すため、clone 直後の状態から
+  `scripts/setup.sh` だけで新しいテナントに再現できることを要件とする
 - `README.md` は **普段 Claude を使わない非エンジニア** を読者とする。専門用語を使うときは必ずその場で
   一言添え、コマンドは「どこに何を貼るか」まで書く。開発者向けの内容は `CLAUDE.md` と `docs/` に置き、
   README に混ぜない
@@ -52,7 +56,7 @@
   "version": "0.1.0",
   "description": "AI Scrum の成果物を Google スプレッドシートのダッシュボードへ同期する GAS プロジェクト",
   "scripts": {
-    "test": "node --test gas/tests/"
+    "test": "node --test \"gas/tests/*.test.js\""
   }
 }
 ```
@@ -658,7 +662,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計37件
+Expected: PASS — 累計38件
 
 - [ ] **Step 5: コミット**
 
@@ -842,7 +846,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計46件
+Expected: PASS — 累計47件
 
 - [ ] **Step 5: コミット**
 
@@ -1091,7 +1095,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計54件
+Expected: PASS — 累計55件
 
 - [ ] **Step 5: コミット**
 
@@ -1585,21 +1589,80 @@ tests/**
 .claspignore
 ```
 
-- [ ] **Step 4: 構文を確認する**
+- [ ] **Step 4: 別テナント向けのセットアップスクリプトを書く**
 
-Run: `node --check gas/gas_menu.js && node -e "JSON.parse(require('fs').readFileSync('gas/appsscript.json','utf8')); JSON.parse(require('fs').readFileSync('gas/.clasp.json.example','utf8')); console.log('JSON OK')"`
-Expected: `JSON OK`
+このリポジトリは複数の Google Workspace テナントで使い回します。新しいテナントで
+スプレッドシートとスクリプトを手作業で作らずに済むよう、`clasp` で一括生成します。
 
-- [ ] **Step 5: 全テストが通ることを確認する**
-
-Run: `npm test`
-Expected: PASS — 累計54件（純関数層は無傷）
-
-- [ ] **Step 6: コミット**
+`scripts/setup.sh`（実行権限を付けること）:
 
 ```bash
-git add gas/gas_menu.js gas/appsscript.json gas/.clasp.json.example gas/.claspignore
-git commit -m "feat: カスタムメニューとトリガー、clasp 設定を追加する"
+#!/usr/bin/env bash
+# 新しい Google Workspace テナントに AI Scrum のダッシュボードを一から作る。
+#
+# 使い方:
+#   scripts/setup.sh ["スプレッドシートの名前"]
+#
+# 作られるもの:
+#   - スプレッドシート（Google ドライブのマイドライブ直下）
+#   - それに紐づく Apps Script プロジェクト
+#   - gas/.clasp.json（テナント固有。git 管理しない）
+set -euo pipefail
+
+TITLE="${1:-AI Scrum Board}"
+cd "$(dirname "$0")/.."
+
+if ! command -v npx >/dev/null 2>&1; then
+  echo "Node.js が見つかりません。先に Node.js を入れてください。" >&2
+  exit 1
+fi
+
+if [[ -f gas/.clasp.json ]]; then
+  echo "gas/.clasp.json が既にあります。別のテナントに作り直す場合は削除してから再実行してください。" >&2
+  exit 1
+fi
+
+CLASP="npx --yes @google/clasp"
+
+echo "==> Google アカウントにログインします（ブラウザが開きます）"
+$CLASP login --status >/dev/null 2>&1 || $CLASP login
+
+echo "==> スプレッドシートと Apps Script プロジェクトを作ります: ${TITLE}"
+( cd gas && $CLASP create --type sheets --title "$TITLE" --rootDir . )
+
+echo "==> コードを配置します"
+( cd gas && $CLASP push -f )
+
+cat <<'MSG'
+
+作成しました。続けて次を行ってください。
+
+  1. 上に表示された Google スプレッドシートの URL を開く
+  2. メニュー「AI Scrum」→「設定（Drive フォルダ ID）」で、
+     scrum フォルダを含むプロジェクトフォルダの ID を登録する
+  3. 「今すぐ同期」を実行して9枚のシートができることを確認する
+  4. 「自動同期を有効にする（30分毎）」を実行する
+
+メニューが出ないときはスプレッドシートを開き直してください。
+MSG
+```
+
+- [ ] **Step 5: 構文を確認する**
+
+Run: `node --check gas/gas_menu.js && bash -n scripts/setup.sh && node -e "JSON.parse(require('fs').readFileSync('gas/appsscript.json','utf8')); JSON.parse(require('fs').readFileSync('gas/.clasp.json.example','utf8')); console.log('JSON OK')"`
+Expected: `JSON OK`
+
+- [ ] **Step 6: 全テストが通ることを確認する**
+
+Run: `npm test`
+Expected: PASS — 累計55件（純関数層は無傷）
+
+- [ ] **Step 7: コミット**
+
+```bash
+chmod +x scripts/setup.sh
+git add gas/gas_menu.js gas/appsscript.json gas/.clasp.json.example gas/.claspignore scripts/setup.sh
+git commit -m "feat: カスタムメニューとトリガー、別テナント向けセットアップを追加する"
 ```
 
 ---
@@ -1844,7 +1907,7 @@ Claude Code は、文章で指示すると作業してくれるツールです�
 - [ ] **Step 7: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計54件
+Expected: PASS — 累計55件
 
 - [ ] **Step 8: コミット**
 
@@ -1871,7 +1934,7 @@ npm test
 for f in gas/*.js; do node --check "$f" || echo "SYNTAX NG: $f"; done
 ```
 
-Expected: 54 tests PASS、`SYNTAX NG` の出力が無いこと
+Expected: 55 tests PASS、`SYNTAX NG` の出力が無いこと
 
 - [ ] **Step 2: 秘密情報が含まれていないことを確認する**
 
