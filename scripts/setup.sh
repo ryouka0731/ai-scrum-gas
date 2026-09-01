@@ -8,6 +8,11 @@
 #   - スプレッドシート（Google ドライブのマイドライブ直下）
 #   - それに紐づく Apps Script プロジェクト
 #   - gas/.clasp.json（テナント固有。git 管理しない）
+#
+# clasp は 3 系に固定して呼んでいる（メジャーバージョンが上がると
+# login/create/push のオプションが変わることがある実績あり）。
+# バージョンを上げるときは `login` `create` `push` の各オプションが
+# 変わっていないか `--help` で確認してから固定し直すこと。
 set -euo pipefail
 
 TITLE="${1:-AI Scrum Board}"
@@ -23,7 +28,7 @@ if [[ -f gas/.clasp.json ]]; then
   exit 1
 fi
 
-CLASP="npx --yes @google/clasp"
+CLASP="npx --yes @google/clasp@3"
 
 echo "==> Google アカウントにログインします（ブラウザが開きます）"
 $CLASP show-authorized-user >/dev/null 2>&1 || $CLASP login
