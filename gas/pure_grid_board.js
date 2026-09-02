@@ -8,7 +8,9 @@ if (typeof require !== 'undefined' && typeof filterRealRows === 'undefined') {
 
 const KANBAN_STATUSES = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 const ROADMAP_MARK = '■';
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// GAS は全ファイルを1つのグローバル字句スコープで評価するため、
+// トップレベルの const は他ファイルと衝突しない名前にする。
+const ROADMAP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** ステータスを既知の値に丸める。未知の値は New に寄せる。 */
 function normalizeStatus(status) {
@@ -35,8 +37,8 @@ function buildKanbanGrid(rows) {
 function realSprints(velocityRows) {
   return (velocityRows || []).filter(function (v) {
     return String(v.sprint || '').trim() !== '' &&
-      DATE_RE.test(String(v.sprint_start || '').trim()) &&
-      DATE_RE.test(String(v.sprint_end || '').trim());
+      ROADMAP_DATE_RE.test(String(v.sprint_start || '').trim()) &&
+      ROADMAP_DATE_RE.test(String(v.sprint_end || '').trim());
   });
 }
 

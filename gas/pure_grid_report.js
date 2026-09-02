@@ -16,14 +16,15 @@ const IMPEDIMENT_HEADERS = IMPEDIMENT_LABELS.concat(['メモ']);
 const IMPEDIMENT_KEY_COL = 0;
 const IMPEDIMENT_NOTE_COL = IMPEDIMENT_HEADERS.length - 1;
 const IMP_ID_RE = /^IMP-\d+$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// トップレベルの const は GAS 上で全ファイル共通のスコープに入るため、固有の名前にする。
+const VELOCITY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** ベロシティシート用の2次元配列を返す。期間が埋まった行だけを出す。 */
 function buildVelocityGrid(velocityRows) {
   const grid = [VELOCITY_HEADERS];
   (velocityRows || []).forEach(function (v) {
-    if (!DATE_RE.test(String(v.sprint_start || '').trim())) return;
-    if (!DATE_RE.test(String(v.sprint_end || '').trim())) return;
+    if (!VELOCITY_DATE_RE.test(String(v.sprint_start || '').trim())) return;
+    if (!VELOCITY_DATE_RE.test(String(v.sprint_end || '').trim())) return;
     grid.push([
       String(v.sprint || ''), String(v.planned_points || ''), String(v.completed_points || ''),
       String(v.carried_over_points || ''), String(v.sprint_start || ''),
@@ -117,9 +118,24 @@ function buildDashboardGrid(ctx) {
   });
 }
 
+/** 同期ログシート用の2次元配列を返す。 */
+function buildSyncLogGrid(syncedAt, readFiles, warnings) {
+  const files = readFiles || [];
+  const warns = warnings || [];
+  return [
+    ['同期時刻', '読み取ったファイル', '警告'],
+    [
+      String(syncedAt || ''),
+      files.length === 0 ? 'なし' : files.join('\n'),
+      warns.length === 0 ? 'なし' : warns.join('\n'),
+    ],
+  ];
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     VELOCITY_HEADERS, IMPEDIMENT_HEADERS, IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL,
     buildVelocityGrid, buildBurndownGrid, buildImpedimentGrid, buildDashboardGrid,
+    buildSyncLogGrid,
   };
 }
