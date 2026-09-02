@@ -23,7 +23,7 @@
 - **テナント固有の値をリポジトリにコミットしない。** スプレッドシート ID / スクリプト ID /
   Drive フォルダ ID / ドメイン名は、`gas/.clasp.json`（gitignore 済み）かスクリプトプロパティに置く。
   このリポジトリは複数の Google Workspace テナントで使い回すため、clone 直後の状態から
-  `scripts/setup.sh` だけで新しいテナントに再現できることを要件とする
+  `scripts/setup.js` だけで新しいテナントに再現できることを要件とする
 - `README.md` は **普段 Claude を使わない非エンジニア** を読者とする。専門用語を使うときは必ずその場で
   一言添え、コマンドは「どこに何を貼るか」まで書く。開発者向けの内容は `CLAUDE.md` と `docs/` に置き、
   README に混ぜない
@@ -1852,62 +1852,103 @@ tests/**
 このリポジトリは複数の Google Workspace テナントで使い回します。新しいテナントで
 スプレッドシートとスクリプトを手作業で作らずに済むよう、`clasp` で一括生成します。
 
-`scripts/setup.sh`（実行権限を付けること）:
+`scripts/setup.js`（Node.js 製。Windows でも `npx` が使えれば動く。`shell: true` は使わず、
+clasp の引数は `spawnSync` に配列で渡してコマンドインジェクションを避ける）:
 
-```bash
-#!/usr/bin/env bash
-# 新しい Google Workspace テナントに AI Scrum のダッシュボードを一から作る。
-#
-# 前提: 実行前に https://script.google.com/home/usersettings で「Apps Script API」を
-# オンにしておくこと（オフのままだと create が失敗する）。
-#
-# 使い方:
-#   scripts/setup.sh ["スプレッドシートの名前"]
-#
-# 作られるもの:
-#   - スプレッドシート（Google ドライブのマイドライブ直下。共有フォルダへの移動と
-#     チームへの共有は、作成後に手作業で行う必要がある）
-#   - それに紐づく Apps Script プロジェクト
-#   - gas/.clasp.json（テナント固有。git 管理しない）
-#
-# clasp は 3 系に固定して呼んでいる（メジャーバージョンが上がると
-# login/create/push のオプションが変わることがある実績あり）。
-# バージョンを上げるときは `login` `create` `push` の各オプションが
-# 変わっていないか `--help` で確認してから固定し直すこと。
-set -euo pipefail
+```js
+#!/usr/bin/env node
+'use strict';
 
-TITLE="${1:-AI Scrum Board}"
-cd "$(dirname "$0")/.."
+// 新しい Google Workspace テナントに AI Scrum のダッシュボードを一から作る。
+//
+// 前提: 実行前に https://script.google.com/home/usersettings で「Apps Script API」を
+// オンにしておくこと（オフのままだと create が失敗する）。
+//
+// 使い方:
+//   node scripts/setup.js ["スプレッドシートの名前"]
+//
+// 作られるもの:
+//   - スプレッドシート（Google ドライブのマイドライブ直下。共有フォルダへの移動と
+//     チームへの共有は、作成後に手作業で行う必要がある）
+//   - それに紐づく Apps Script プロジェクト
+//   - gas/.clasp.json（テナント固有。git 管理しない）
+//
+// clasp は 3 系に固定して呼んでいる（メジャーバージョンが上がると
+// login/create/push のオプションが変わることがある実績あり）。
+// バージョンを上げるときは `login` `create` `push` の各オプションが
+// 変わっていないか `--help` で確認してから固定し直すこと。
+//
+// Mac / Windows どちらでも動く（`npx` は Windows では `npx.cmd` になる）。
 
-if ! command -v npx >/dev/null 2>&1; then
-  echo "Node.js が見つかりません。先に Node.js を入れてください。" >&2
-  exit 1
-fi
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+const fs = require('node:fs');
 
-if [[ -f gas/.clasp.json ]]; then
-  echo "gas/.clasp.json が既にあります。別のテナントに作り直す場合は削除してから再実行してください。" >&2
-  exit 1
-fi
+const ROOT_DIR = path.join(__dirname, '..');
+const GAS_DIR = path.join(ROOT_DIR, 'gas');
+const CLASP_JSON_PATH = path.join(GAS_DIR, '.clasp.json');
 
-CLASP="npx --yes @google/clasp@3"
+const TITLE = process.argv[2] || 'AI Scrum Board';
+const NPX_BIN = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-echo "==> Google アカウントにログインします（ブラウザが開きます）"
-$CLASP show-authorized-user >/dev/null 2>&1 || $CLASP login
+// clasp をサブコマンドとその引数の配列で呼ぶ。shell を経由しないため、
+// TITLE にどんな文字列が入ってもコマンドインジェクションにはならない。
+function runClasp(args, { cwd = ROOT_DIR, allowFailure = false } = {}) {
+  const result = spawnSync(NPX_BIN, ['--yes', '@google/clasp@3', ...args], {
+    cwd,
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    if (result.error.code === 'ENOENT') {
+      console.error('npx が見つかりません。Node.js を入れてください。');
+    } else {
+      console.error(`npx の実行に失敗しました: ${result.error.message}`);
+    }
+    process.exit(1);
+  }
+  if (!allowFailure && result.status !== 0) {
+    process.exit(result.status === null ? 1 : result.status);
+  }
+  return result.status === 0;
+}
 
-echo "==> スプレッドシートと Apps Script プロジェクトを作ります: ${TITLE}"
-( cd gas && $CLASP create --type sheets --title "$TITLE" --rootDir . )
+if (spawnSync(NPX_BIN, ['--version'], { stdio: 'ignore' }).error) {
+  console.error('Node.js が見つかりません。先に Node.js を入れてください。');
+  process.exit(1);
+}
 
-# .claspignore が効かずに gas/tests/*.test.js まで push されると、GAS 側で
-# require('node:test') が評価されてプロジェクト全体が起動しなくなる。push 前に中身を見せる。
-echo "==> push されるファイルを確認します（tests/ が含まれていないこと）"
-( cd gas && $CLASP show-file-status ) \
-  || echo "（一覧を取得できませんでした。clasp のバージョンとコマンド名を確認してください）"
+if (fs.existsSync(CLASP_JSON_PATH)) {
+  console.error(
+    'gas/.clasp.json が既にあります。別のテナントに作り直す場合は削除してから再実行してください。'
+  );
+  process.exit(1);
+}
 
-echo "==> コードを配置します"
-( cd gas && $CLASP push -f )
+console.log('==> Google アカウントにログインします（ブラウザが開きます）');
+const alreadyLoggedIn = runClasp(['show-authorized-user'], {
+  allowFailure: true,
+});
+if (!alreadyLoggedIn) {
+  runClasp(['login']);
+}
 
-cat <<'MSG'
+console.log(`==> スプレッドシートと Apps Script プロジェクトを作ります: ${TITLE}`);
+runClasp(['create', '--type', 'sheets', '--title', TITLE, '--rootDir', '.'], {
+  cwd: GAS_DIR,
+});
 
+// .claspignore が効かずに gas/tests/*.test.js まで push されると、GAS 側で
+// require('node:test') が評価されてプロジェクト全体が起動しなくなる。push 前に中身を見せる。
+console.log('==> push されるファイルを確認します（tests/ が含まれていないこと）');
+const shown = runClasp(['show-file-status'], { cwd: GAS_DIR, allowFailure: true });
+if (!shown) {
+  console.log('（一覧を取得できませんでした。clasp のバージョンとコマンド名を確認してください）');
+}
+
+console.log('==> コードを配置します');
+runClasp(['push', '-f'], { cwd: GAS_DIR });
+
+console.log(`
 作成しました。続けて次を行ってください。
 
   1. 上に表示された Google スプレッドシートの URL を開く
@@ -1921,12 +1962,12 @@ cat <<'MSG'
   5. 「自動同期を有効にする（30分毎）」を実行する
 
 メニューが出ないときはスプレッドシートを開き直してください。
-MSG
+`);
 ```
 
 - [ ] **Step 5: 構文を確認する**
 
-Run: `node --check gas/gas_menu.js && bash -n scripts/setup.sh && node -e "JSON.parse(require('fs').readFileSync('gas/appsscript.json','utf8')); JSON.parse(require('fs').readFileSync('gas/.clasp.json.example','utf8')); console.log('JSON OK')"`
+Run: `node --check gas/gas_menu.js && node --check scripts/setup.js && node -e "JSON.parse(require('fs').readFileSync('gas/appsscript.json','utf8')); JSON.parse(require('fs').readFileSync('gas/.clasp.json.example','utf8')); console.log('JSON OK')"`
 Expected: `JSON OK`
 
 - [ ] **Step 6: 全テストが通ることを確認する**
@@ -1937,8 +1978,7 @@ Expected: PASS — 累計69件（純関数層は無傷）
 - [ ] **Step 7: コミット**
 
 ```bash
-chmod +x scripts/setup.sh
-git add gas/gas_menu.js gas/appsscript.json gas/.clasp.json.example gas/.claspignore scripts/setup.sh
+git add gas/gas_menu.js gas/appsscript.json gas/.clasp.json.example gas/.claspignore scripts/setup.js
 git commit -m "feat: カスタムメニューとトリガー、別テナント向けセットアップを追加する"
 ```
 
@@ -2047,7 +2087,8 @@ GAS は `gas/*.js` を1つのグローバルスコープで評価する。トッ
 このリポジトリは複数の Google Workspace テナントで使い回せます。テナント固有の値は
 リポジトリに含まれないため、clone した状態から次の手順で一から作れます。
 
-パソコンに Node.js がインストールされている必要があります（`scripts/setup.sh` の実行に使う）。
+パソコンに Node.js がインストールされている必要があります（`scripts/setup.js` の実行に使う）。
+`scripts/setup.js` は Node.js 製のため、Mac / Windows どちらの管理者でもそのまま動きます。
 
 1. [Apps Script の設定](https://script.google.com/home/usersettings) を開き、「Apps Script API」を
    オンにする。このテナントで初めて使うときに必須で、オフのままだと次の手順が
@@ -2056,13 +2097,13 @@ GAS は `gas/*.js` を1つのグローバルスコープで評価する。トッ
 3. スプレッドシートと Apps Script プロジェクトを作る
 
    ```bash
-   scripts/setup.sh "AI Scrum Board"
+   node scripts/setup.js "AI Scrum Board"
    ```
 
    ログインしていなければブラウザが開きます。完了すると
    スプレッドシートの URL が表示されます。
 
-4. **作成されたスプレッドシートをチームへ共有する**。`scripts/setup.sh` は
+4. **作成されたスプレッドシートをチームへ共有する**。`scripts/setup.js` は
    マイドライブ直下に作るため、この操作をしないとメンバーは開けない
    1. 表示された URL を開く
    2. Google ドライブでそのファイルを手順2の共有フォルダへ移動する
@@ -2079,7 +2120,7 @@ GAS は `gas/*.js` を1つのグローバルスコープで評価する。トッ
 
 ### 既にあるスプレッドシートに載せる場合
 
-`scripts/setup.sh` は新規作成専用です。既存のスプレッドシートを使うときは、
+`scripts/setup.js` は新規作成専用です。既存のスプレッドシートを使うときは、
 そのスクリプト ID を `gas/.clasp.json` に書いて `cd gas && npx @google/clasp@3 push` します。
 `gas/.clasp.json.example` を雛形として使ってください。このファイルは
 テナント固有の値を含むため git 管理しません。

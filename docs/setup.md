@@ -5,7 +5,8 @@
 このリポジトリは複数の Google Workspace テナントで使い回せます。テナント固有の値は
 リポジトリに含まれないため、clone した状態から次の手順で一から作れます。
 
-パソコンに Node.js がインストールされている必要があります（`scripts/setup.sh` の実行に使う）。
+パソコンに Node.js がインストールされている必要があります（`scripts/setup.js` の実行に使う）。
+`scripts/setup.js` は Node.js 製のため、Mac / Windows どちらの管理者でもそのまま動きます。
 
 1. [Apps Script の設定](https://script.google.com/home/usersettings) を開き、「Apps Script API」を
    オンにする。このテナントで初めて使うときに必須で、オフのままだと次の手順が
@@ -14,13 +15,13 @@
 3. スプレッドシートと Apps Script プロジェクトを作る
 
    ```bash
-   scripts/setup.sh "AI Scrum Board"
+   node scripts/setup.js "AI Scrum Board"
    ```
 
    ログインしていなければブラウザが開きます。完了すると
    スプレッドシートの URL が表示されます。
 
-4. **作成されたスプレッドシートをチームへ共有する**。`scripts/setup.sh` は
+4. **作成されたスプレッドシートをチームへ共有する**。`scripts/setup.js` は
    マイドライブ直下に作るため、この操作をしないとメンバーは開けない
    1. 表示された URL を開く
    2. Google ドライブでそのファイルを手順2の共有フォルダへ移動する
@@ -37,7 +38,7 @@
 
 ### 既にあるスプレッドシートに載せる場合
 
-`scripts/setup.sh` は新規作成専用です。既存のスプレッドシートを使うときは、
+`scripts/setup.js` は新規作成専用です。既存のスプレッドシートを使うときは、
 そのスクリプト ID を `gas/.clasp.json` に書いて `cd gas && npx @google/clasp@3 push` します。
 `gas/.clasp.json.example` を雛形として使ってください。このファイルは
 テナント固有の値を含むため git 管理しません。
