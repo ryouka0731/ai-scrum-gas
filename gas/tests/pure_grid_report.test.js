@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   buildVelocityGrid, buildBurndownGrid, buildImpedimentGrid,
   IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL, buildDashboardGrid, buildSyncLogGrid,
+  parsePublished,
 } = require('../pure_grid_report.js');
 
 const VELOCITY = [
@@ -76,6 +77,26 @@ test('警告があれば列挙する', () => {
   assert.match(g.map(function (r) { return r.join(' '); }).join('\n'), /velocity.csv が見つかりません/);
 });
 
+test('配布情報があれば配布日時とコミットを出す', () => {
+  const g = buildDashboardGrid({
+    syncedAt: 'x', sprintBacklogMd: '', backlogRows: [], warnings: [],
+    published: { publishedAt: '2026-09-02 10:30:00', commit: 'e1fa826', branch: 'main' },
+  });
+  const flat = g.map(function (r) { return r.join(' '); }).join('\n');
+  assert.match(flat, /配布日時 2026-09-02 10:30:00/);
+  assert.match(flat, /コミット e1fa826/);
+});
+
+test('配布情報が無ければ記録なしと出す', () => {
+  const g = buildDashboardGrid({ syncedAt: 'x', sprintBacklogMd: '', backlogRows: [], warnings: [], published: null });
+  assert.match(g.map(function (r) { return r.join(' '); }).join('\n'), /配布日時 （記録なし）/);
+});
+
+test('ctx.published が未指定でも落ちない', () => {
+  const g = buildDashboardGrid({ syncedAt: 'x', sprintBacklogMd: '', backlogRows: [], warnings: [] });
+  assert.match(g.map(function (r) { return r.join(' '); }).join('\n'), /配布日時 （記録なし）/);
+});
+
 test('同期ログは見出し行と1行の記録を返す', () => {
   const grid = buildSyncLogGrid('2026-09-02 10:00:00', ['velocity.csv', 'sprint001/sprint_backlog.md'], []);
   assert.deepEqual(grid[0], ['同期時刻', '読み取ったファイル', '警告']);
@@ -94,5 +115,35 @@ test('同期ログは警告を改行で連結する', () => {
 test('同期ログは引数が未指定でも落ちない', () => {
   const grid = buildSyncLogGrid(undefined, null, null);
   assert.deepEqual(grid[1], ['', 'なし', 'なし']);
+});
+
+test('parsePublished は正常な JSON を配布情報へ変換する', () => {
+  const text = JSON.stringify({ publishedAt: '2026-09-02 10:30:00', commit: 'e1fa826', branch: 'main' });
+  assert.deepEqual(parsePublished(text), { publishedAt: '2026-09-02 10:30:00', commit: 'e1fa826', branch: 'main' });
+});
+
+test('parsePublished は null / 空文字 / undefined で null を返す', () => {
+  assert.equal(parsePublished(null), null);
+  assert.equal(parsePublished(''), null);
+  assert.equal(parsePublished(undefined), null);
+});
+
+test('parsePublished は壊れた JSON で null を返す', () => {
+  assert.equal(parsePublished('{ 壊れた json'), null);
+});
+
+test('parsePublished は JSON でも配列やプリミティブなら null を返す', () => {
+  assert.equal(parsePublished('[1,2,3]'), null);
+  assert.equal(parsePublished('"文字列だけ"'), null);
+  assert.equal(parsePublished('123'), null);
+});
+
+test('parsePublished は publishedAt を欠くと null を返す', () => {
+  assert.equal(parsePublished(JSON.stringify({ commit: 'e1fa826', branch: 'main' })), null);
+});
+
+test('parsePublished は commit / branch を欠いても unknown で補う', () => {
+  const g = parsePublished(JSON.stringify({ publishedAt: '2026-09-02 10:30:00' }));
+  assert.deepEqual(g, { publishedAt: '2026-09-02 10:30:00', commit: 'unknown', branch: 'unknown' });
 });
 

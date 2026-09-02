@@ -52,6 +52,28 @@ function isImpedimentPlaceholder(row) {
   return false;
 }
 
+/**
+ * scrum/.published.json の内容を配布情報オブジェクトへ変換する。
+ * 読めない・壊れている・publishedAt を欠く場合は null（呼び出し側はそのまま「記録なし」として扱う）。
+ */
+function parsePublished(text) {
+  if (!text) return null;
+  let obj;
+  try {
+    obj = JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object') return null;
+  const publishedAt = String(obj.publishedAt || '').trim();
+  if (!publishedAt) return null;
+  return {
+    publishedAt: publishedAt,
+    commit: String(obj.commit || 'unknown').trim() || 'unknown',
+    branch: String(obj.branch || 'unknown').trim() || 'unknown',
+  };
+}
+
 /** 障害物シート用の2次元配列を返す。未解決を先に並べる。 */
 function buildImpedimentGrid(openRows, resolvedRows, notesByKey) {
   const notes = notesByKey || {};
@@ -91,12 +113,20 @@ function buildDashboardGrid(ctx) {
     ['AI Scrum ダッシュボード'],
     [''],
     ['最終同期', String(c.syncedAt || '')],
+  ];
+  if (c.published) {
+    grid.push(['配布日時', String(c.published.publishedAt || '')]);
+    grid.push(['コミット', String(c.published.commit || '')]);
+  } else {
+    grid.push(['配布日時', '（記録なし）']);
+  }
+  grid.push(
     [''],
     ['スプリントゴール'],
     [goal || '（未設定）'],
     [''],
     ['ステータス', '件数', 'ポイント'],
-  ];
+  );
   order.forEach(function (s) { grid.push([s, String(counts[s]), String(points[s])]); });
   grid.push(['合計', String(rows.length), String(order.reduce(function (a, s) { return a + points[s]; }, 0))]);
 
@@ -136,6 +166,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     VELOCITY_HEADERS, IMPEDIMENT_HEADERS, IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL,
     buildVelocityGrid, buildBurndownGrid, buildImpedimentGrid, buildDashboardGrid,
-    buildSyncLogGrid,
+    buildSyncLogGrid, parsePublished,
   };
 }

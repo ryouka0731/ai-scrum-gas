@@ -24,17 +24,22 @@
 | 同期の駆動 | GAS が Drive を直接読む（プル型） | メンバー側に認証設定を一切要求しない。現行で PAT に詰まった構図を繰り返さない |
 | スプレッドシート | チームで1つを共有 | チーム全体の単一ボードを保つ |
 | clasp の役割 | GAS コードのバージョン管理とデプロイ（管理者のみ） | メンバーは Sheets を開くだけでよい |
-| フォルダ配置 | プロジェクトフォルダごと Drive 共有フォルダに置く | `.claude/` と `scrum/` が全員に自動で行き渡る |
+| フォルダ配置 | リポジトリ（`.git` 含む）は Drive の外に置き、`scripts/publish.js` で `.claude/` `scrum/` `CLAUDE.md` `README.md` だけを Drive 共有フォルダへ配布する | `.git` を Drive が配ると競合コピーができリポジトリが壊れる。メンバーは GitHub を使えず `.git` を必要としない |
 
 ## アーキテクチャ
 
 ```
+[管理者のローカル PC（Drive の外）]
+  リポジトリ（.git 含む）
+        ↓ scripts/publish.js（.claude/ scrum/ CLAUDE.md README.md のみコピー）
+  [Google Drive 共有フォルダ]
+        ↓ Drive デスクトップ同期
 [各メンバーのローカル PC]
   Claude Code + 9エージェント / 20スキル
         ↓ 読み書き
-  <Drive 共有フォルダ>/ai-scrum-gas/scrum/*.csv, *.md
-        ↓ Drive デスクトップ同期
-  [Google Drive]
+  <Drive 共有フォルダ>/scrum/*.csv, *.md
+        ↑ Drive デスクトップ同期
+  [Google Drive 共有フォルダ]
         ↓ DriveApp で読む（読み取りのみ）
   [GAS: 共有スプレッドシートのバインドスクリプト]
         ↓ setValues
@@ -175,7 +180,8 @@ Drive 共有フォルダのフォルダ ID をスクリプトプロパティ `SC
 
 ### 管理者（1回のみ）
 
-1. Drive 共有フォルダを作り、`ai-scrum-gas` プロジェクトフォルダごと配置する
+1. Drive 共有フォルダを作り、`scripts/publish.js` で `.claude/` `scrum/` `CLAUDE.md` `README.md` を配布する
+   （リポジトリ自体は `.git` を含むため Drive の外に置いたままにする）
 2. 共有スプレッドシートを作成する
 3. `clasp login` の後、`gas/.clasp.json.example` を `gas/.clasp.json` にコピーし、スプレッドシートにバインドしたスクリプトの `scriptId` を書いて `clasp push` する
 4. メニュー「AI Scrum」→「設定」でフォルダ ID を登録する

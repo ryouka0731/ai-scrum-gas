@@ -161,11 +161,16 @@ function rebuildAllSheets() {
     warnings.push(SHEET_NAMES.burndown + ' の書き込みに失敗: ' + e.message);
   }
 
+  // --- 配布情報（.published.json） ---
+  // 管理者が scripts/publish.js で配布した記録。無い・壊れている場合は null になり、
+  // ダッシュボードには「配布日時: （記録なし）」と出る。これ自体が状態を示すため警告は積まない。
+  const published = parsePublished(readTextFile(scrum, '.published.json'));
+
   // --- ダッシュボードと同期ログ（他シートの結果をまとめるため最後に書く） ---
   try {
     writeGrid(ss, SHEET_NAMES.dashboard, buildDashboardGrid({
       syncedAt: syncedAt, sprintBacklogMd: sprintMd,
-      backlogRows: backlogRows || [], warnings: warnings,
+      backlogRows: backlogRows || [], warnings: warnings, published: published,
     }));
   } catch (e) {
     warnings.push(SHEET_NAMES.dashboard + ' の書き込みに失敗: ' + e.message);
