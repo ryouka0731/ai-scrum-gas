@@ -90,9 +90,9 @@ GAS は自動テストが難しい。テスト可能性を確保するため、�
 | バックログ | `product_backlog.csv` | 全列 + メモ列 |
 | 完了バックログ | `product_backlog_done.csv` | 全列 |
 | カンバン | バックログ | Status（New / Ready / In Progress / Review / Done）を列に展開 |
-| ロードマップ | `velocity.csv` の期間 × PBI の `sprint` | 日付軸に条件付き書式で帯を描く |
-| ベロシティ | `velocity.csv` | 表 + 折れ線グラフ（計画 / 完了 / 持ち越し） |
-| バーンダウン | `sprintXXX/sprint_backlog.md` の `## バーンダウン` 表 | 表 + 折れ線グラフ |
+| ロードマップ | `velocity.csv` の期間 × PBI の `sprint` | スプリントを列に展開し、担当スプリントのセルに `■` と背景色を置く |
+| ベロシティ | `velocity.csv` | 表（計画 / 完了 / 持ち越し / 期間 / 備考）。グラフは作らない |
+| バーンダウン | `sprintXXX/sprint_backlog.md` の `## バーンダウン` 表 | 表のみ。グラフは作らない |
 | 障害物 | `impediment_log.csv` + `impediment_log_resolved.csv` | 未解決を上に、解決済みを下に |
 | 同期ログ | 実行時 | 同期時刻、読んだファイル、スキップしたもの、警告 |
 
