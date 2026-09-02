@@ -21,9 +21,14 @@ function menuSyncNow() {
   const ui = SpreadsheetApp.getUi();
   try {
     const result = syncAll();
-    const message = result.warnings.length === 0
-      ? '同期しました（' + result.syncedAt + '）'
-      : '同期しました。警告 ' + result.warnings.length + ' 件は「同期ログ」を確認してください。';
+    let message;
+    if (result.skipped) {
+      message = '別の同期が実行中のため、今回は見送りました。少し待ってからもう一度お試しください。';
+    } else if (result.warnings.length === 0) {
+      message = '同期しました（' + result.syncedAt + '）';
+    } else {
+      message = '同期しました。警告 ' + result.warnings.length + ' 件は「同期ログ」を確認してください。';
+    }
     SpreadsheetApp.getActiveSpreadsheet().toast(message, 'AI Scrum', 10);
   } catch (e) {
     ui.alert('同期できませんでした', e.message, ui.ButtonSet.OK);
@@ -72,5 +77,11 @@ function menuRemoveTrigger() {
 
 /** トリガーから呼ばれる。UI を触らないため toast も alert も使わない。 */
 function scheduledSync() {
-  syncAll();
+  try {
+    syncAll();
+  } catch (e) {
+    // 例外をそのまま投げると30分毎に実行失敗メールが届く（フォルダ未設定なら鳴り止まない）。
+    // 原因は Apps Script の実行ログに残す。
+    console.error('自動同期に失敗しました: ' + e.message);
+  }
 }

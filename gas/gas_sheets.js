@@ -23,6 +23,18 @@ function readNotes(ss, sheetName, keyCol, noteCol) {
   return notes;
 }
 
+/**
+ * setValues が範囲外にならないよう、シートの行数・列数を必要分まで広げる。
+ * insertSheet の既定は 1000行 × 26列で、getRange は自動拡張しない。ロードマップの列数は
+ * 2 + スプリント数なので、スプリントが増えると既定の列数を超える。
+ */
+function ensureSheetSize(sheet, numRows, numCols) {
+  const maxRows = sheet.getMaxRows();
+  if (maxRows < numRows) sheet.insertRowsAfter(maxRows, numRows - maxRows);
+  const maxCols = sheet.getMaxColumns();
+  if (maxCols < numCols) sheet.insertColumnsAfter(maxCols, numCols - maxCols);
+}
+
 /** シートを作成またはクリアして2次元配列を書き込む。 */
 function writeGrid(ss, sheetName, grid) {
   let sheet = ss.getSheetByName(sheetName);
@@ -37,6 +49,7 @@ function writeGrid(ss, sheetName, grid) {
     while (copy.length < width) copy.push('');
     return copy;
   });
+  ensureSheetSize(sheet, normalized.length, width);
   sheet.getRange(1, 1, normalized.length, width).setValues(normalized);
   applyHeaderStyle(sheet, width);
   return sheet;
