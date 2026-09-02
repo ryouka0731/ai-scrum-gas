@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { isPlaceholderRow, normalizeSprint, filterRealRows } = require('../pure_filter.js');
+const {
+  isPlaceholderRow, normalizeSprint, filterRealRows, pickLatestSprintName,
+} = require('../pure_filter.js');
 
 const real = {
   id: 'PBI-001', title: 'タスクの登録', priority: 'Critical',
@@ -56,4 +58,34 @@ test('空文字は空文字のまま返す', () => {
 test('ひな形行を除外する', () => {
   const rows = [real, { ...real, id: 'PBI-002', title: '（PBIタイトル）' }];
   assert.deepEqual(filterRealRows(rows), [real]);
+});
+
+test('スプリントフォルダは連番の最大値で選ぶ', () => {
+  assert.equal(pickLatestSprintName(['sprint001', 'sprint002', 'sprint010']), 'sprint010');
+});
+
+test('ひな形の sprintSAMPLE は選ばない', () => {
+  assert.equal(
+    pickLatestSprintName(['sprint001', 'sprint002', 'sprint010', 'sprintSAMPLE']),
+    'sprint010');
+});
+
+test('桁数が不揃いでも数値として比較する', () => {
+  assert.equal(pickLatestSprintName(['sprint9', 'sprint10']), 'sprint10');
+  assert.equal(pickLatestSprintName(['sprint10', 'sprint9']), 'sprint10');
+});
+
+test('該当するフォルダが無ければ null', () => {
+  assert.equal(pickLatestSprintName(['sprintSAMPLE', 'scrum', 'sprint', 'sprint001a']), null);
+});
+
+test('空配列や未指定でも null を返す', () => {
+  assert.equal(pickLatestSprintName([]), null);
+  assert.equal(pickLatestSprintName(null), null);
+  assert.equal(pickLatestSprintName(undefined), null);
+});
+
+test('戻り値は引数に入っていた文字列そのもの（呼び出し側で対応づけられる）', () => {
+  const names = ['sprintSAMPLE', 'sprint007'];
+  assert.equal(pickLatestSprintName(names), names[1]);
 });

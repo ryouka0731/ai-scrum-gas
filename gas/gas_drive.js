@@ -29,7 +29,7 @@ function readTextFile(folder, name) {
   return it.next().getBlob().getDataAsString('UTF-8');
 }
 
-/** sprint で始まるフォルダのうち名前順で最後のものを返す。無ければ null。 */
+/** 最新のスプリントフォルダを返す。無ければ null。判定は pickLatestSprintName に委ねる。 */
 function findLatestSprintFolder(scrumFolder) {
   const names = [];
   const byName = {};
@@ -37,11 +37,9 @@ function findLatestSprintFolder(scrumFolder) {
   while (it.hasNext()) {
     const f = it.next();
     const n = f.getName();
-    if (n.indexOf('sprint') === 0) { names.push(n); byName[n] = f; }
+    names.push(n);
+    byName[n] = f;
   }
-  if (names.length === 0) return null;
-  // 文字列 sort。sprintXXX が3桁ゼロ埋めの間は正しく最新を選べるが、
-  // 桁数が不揃い（例: sprint9 と sprint10）になると誤判定するので注意。
-  names.sort();
-  return byName[names[names.length - 1]];
+  const latest = pickLatestSprintName(names);
+  return latest === null ? null : byName[latest];
 }
