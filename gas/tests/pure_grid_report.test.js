@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   buildVelocityGrid, buildBurndownGrid, buildImpedimentGrid,
-  IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL, buildDashboardGrid,
+  IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL, buildDashboardGrid, buildSyncLogGrid,
 } = require('../pure_grid_report.js');
 
 const VELOCITY = [
@@ -75,3 +75,24 @@ test('警告があれば列挙する', () => {
   const g = buildDashboardGrid({ syncedAt: 'x', sprintBacklogMd: '', backlogRows: [], warnings: ['velocity.csv が見つかりません'] });
   assert.match(g.map(function (r) { return r.join(' '); }).join('\n'), /velocity.csv が見つかりません/);
 });
+
+test('同期ログは見出し行と1行の記録を返す', () => {
+  const grid = buildSyncLogGrid('2026-09-02 10:00:00', ['velocity.csv', 'sprint001/sprint_backlog.md'], []);
+  assert.deepEqual(grid[0], ['同期時刻', '読み取ったファイル', '警告']);
+  assert.equal(grid.length, 2);
+  assert.equal(grid[1][0], '2026-09-02 10:00:00');
+  assert.equal(grid[1][1], 'velocity.csv\nsprint001/sprint_backlog.md');
+  assert.equal(grid[1][2], 'なし');
+});
+
+test('同期ログは警告を改行で連結する', () => {
+  const grid = buildSyncLogGrid('2026-09-02 10:00:00', [], ['A が見つかりません', 'B の書き込みに失敗']);
+  assert.equal(grid[1][1], 'なし');
+  assert.equal(grid[1][2], 'A が見つかりません\nB の書き込みに失敗');
+});
+
+test('同期ログは引数が未指定でも落ちない', () => {
+  const grid = buildSyncLogGrid(undefined, null, null);
+  assert.deepEqual(grid[1], ['', 'なし', 'なし']);
+});
+
