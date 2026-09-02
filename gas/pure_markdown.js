@@ -57,12 +57,22 @@ function extractMarkdownTable(text, heading) {
   return { headers: headers, rows: rows };
 }
 
-/** 指定見出し直下の本文（表を除く）を返す。無ければ空文字。 */
+/**
+ * 指定見出し直下の本文を返す。無ければ空文字。
+ * 表（`|` 始まり）と引用（`>` 始まり）は落とす。成果物のひな形はスプリントゴールの直下に
+ * スクラムガイドの引用を置いており、そのままだとダッシュボードのゴール欄に混入するため。
+ */
 function extractSection(text, heading) {
   const lines = linesUnderHeading(text, heading);
   if (!lines) return '';
   return lines
-    .filter(function (l) { return l.trim() !== '' && l.trim().indexOf('|') !== 0; })
+    .filter(function (l) {
+      const t = l.trim();
+      if (t === '') return false;
+      if (t.indexOf('|') === 0) return false;
+      if (t.indexOf('>') === 0) return false;
+      return true;
+    })
     .join('\n').trim();
 }
 
