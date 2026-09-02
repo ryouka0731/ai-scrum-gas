@@ -203,6 +203,7 @@ git commit -m "feat: CSV パーサを追加する"
   - `isPlaceholderRow(row: Object): boolean` — テンプレートのままの行を真と判定する
   - `normalizeSprint(name: string): string` — スプリント名を照合用に正規化する
   - `filterRealRows(rows: Object[]): Object[]` — ひな形行を除いた配列を返す
+  - `pickLatestSprintName(names: string[]): string | null` — `sprint` + 連番のフォルダ名のうち連番が最大のもの。ひな形の `sprintSAMPLE` は対象外
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -211,7 +212,9 @@ git commit -m "feat: CSV パーサを追加する"
 ```javascript
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { isPlaceholderRow, normalizeSprint, filterRealRows } = require('../pure_filter.js');
+const {
+  isPlaceholderRow, normalizeSprint, filterRealRows, pickLatestSprintName,
+} = require('../pure_filter.js');
 
 const real = {
   id: 'PBI-001', title: 'タスクの登録', priority: 'Critical',
@@ -268,6 +271,36 @@ test('ひな形行を除外する', () => {
   const rows = [real, { ...real, id: 'PBI-002', title: '（PBIタイトル）' }];
   assert.deepEqual(filterRealRows(rows), [real]);
 });
+
+test('スプリントフォルダは連番の最大値で選ぶ', () => {
+  assert.equal(pickLatestSprintName(['sprint001', 'sprint002', 'sprint010']), 'sprint010');
+});
+
+test('ひな形の sprintSAMPLE は選ばない', () => {
+  assert.equal(
+    pickLatestSprintName(['sprint001', 'sprint002', 'sprint010', 'sprintSAMPLE']),
+    'sprint010');
+});
+
+test('桁数が不揃いでも数値として比較する', () => {
+  assert.equal(pickLatestSprintName(['sprint9', 'sprint10']), 'sprint10');
+  assert.equal(pickLatestSprintName(['sprint10', 'sprint9']), 'sprint10');
+});
+
+test('該当するフォルダが無ければ null', () => {
+  assert.equal(pickLatestSprintName(['sprintSAMPLE', 'scrum', 'sprint', 'sprint001a']), null);
+});
+
+test('空配列や未指定でも null を返す', () => {
+  assert.equal(pickLatestSprintName([]), null);
+  assert.equal(pickLatestSprintName(null), null);
+  assert.equal(pickLatestSprintName(undefined), null);
+});
+
+test('戻り値は引数に入っていた文字列そのもの（呼び出し側で対応づけられる）', () => {
+  const names = ['sprintSAMPLE', 'sprint007'];
+  assert.equal(pickLatestSprintName(names), names[1]);
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認する**
@@ -286,6 +319,8 @@ Expected: FAIL — `Cannot find module '../pure_filter.js'`
  */
 
 const PBI_ID_RE = /^PBI-\d+$/;
+// scrum/ 直下のスプリントフォルダ。ひな形の sprintSAMPLE を除くため連番までを必須にする。
+const SPRINT_FOLDER_RE = /^sprint(\d+)$/;
 
 /** テンプレートのままの行かどうかを判定する。 */
 function isPlaceholderRow(row) {
@@ -318,13 +353,31 @@ function normalizeSprint(name) {
   return m[1] + padded;
 }
 
+/**
+ * フォルダ名の配列から最新のスプリントフォルダ名を返す。該当が無ければ null。
+ * - `sprintSAMPLE` のようなひな形フォルダは連番を持たないため対象外にする
+ * - 文字列比較では sprint9 が sprint10 より後ろに並ぶため、連番を数値として比較する
+ * 戻り値は引数に含まれていた文字列そのものなので、呼び出し側で元の要素と対応づけられる。
+ */
+function pickLatestSprintName(names) {
+  let latest = null;
+  let latestNumber = -1;
+  (names || []).forEach(function (name) {
+    const m = SPRINT_FOLDER_RE.exec(String(name === undefined || name === null ? '' : name));
+    if (!m) return;
+    const num = parseInt(m[1], 10);
+    if (num > latestNumber) { latestNumber = num; latest = name; }
+  });
+  return latest;
+}
+
 /** ひな形行を除いた配列を返す。 */
 function filterRealRows(rows) {
   return (rows || []).filter(function (r) { return !isPlaceholderRow(r); });
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { isPlaceholderRow, normalizeSprint, filterRealRows };
+  module.exports = { isPlaceholderRow, normalizeSprint, filterRealRows, pickLatestSprintName };
 }
 ```
 
@@ -352,7 +405,7 @@ git commit -m "feat: ひな形行判定とスプリント名正規化を追加�
 - Consumes: なし
 - Produces:
   - `extractMarkdownTable(text: string, heading: string): {headers: string[], rows: string[][]} | null` — 指定見出し直下の表を返す。無ければ `null`
-  - `extractSection(text: string, heading: string): string` — 指定見出しから次の見出しまでの本文を返す。無ければ空文字
+  - `extractSection(text: string, heading: string): string` — 指定見出しから次の見出しまでの本文を返す。表（`|` 始まり）と引用（`>` 始まり）は落とす。無ければ空文字
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -416,6 +469,38 @@ test('空文字を渡しても壊れない', () => {
   assert.equal(extractMarkdownTable('', 'x'), null);
   assert.equal(extractSection('', 'x'), '');
 });
+
+test('セル内のエスケープされたパイプ（\\|）を分割せず復元する', () => {
+  const md = [
+    '## 表',
+    '| a | b |',
+    '|---|---|',
+    '| x\\|y | z |',
+  ].join('\n');
+  const t = extractMarkdownTable(md, '表');
+  assert.deepEqual(t.rows, [['x|y', 'z']]);
+});
+
+test('スプリントゴールの直下にある引用（スクラムガイド）は落とす', () => {
+  const md = [
+    '# スプリントバックログ - Sprint 001',
+    '',
+    '## スプリントゴール',
+    'タスク登録を最短手数で終わらせる',
+    '',
+    '> スプリントゴールはスプリントの単一の目的である。',
+    '> — スクラムガイド 2020',
+    '',
+    '## スプリント情報',
+    '| 項目 | 内容 |',
+  ].join('\n');
+  assert.equal(extractSection(md, 'スプリントゴール'), 'タスク登録を最短手数で終わらせる');
+});
+
+test('引用が字下げされていても落とす', () => {
+  const md = '## ゴール\n本文\n  > 引用\n';
+  assert.equal(extractSection(md, 'ゴール'), '本文');
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認する**
@@ -439,10 +524,16 @@ function headingTextOf(line) {
   return m ? m[1] : null;
 }
 
-/** 表の1行を解析してセル配列にする。 */
+/** 表の1行を解析してセル配列にする。セル内の `\|` はエスケープされたパイプとして扱う。 */
 function splitTableRow(line) {
-  return line.replace(/^\s*\|/, '').replace(/\|\s*$/, '')
-    .split('|').map(function (c) { return c.trim(); });
+  // 半角スペース等は通常のセル内容（例: "Sprint 001"）で普通に使われるため、
+  // 退避先には表の内容として現れない制御文字を使う。
+  const PLACEHOLDER = '\u0000';
+  return String(line)
+    .replace(/\\\|/g, PLACEHOLDER)
+    .replace(/^\s*\|/, '').replace(/\|\s*$/, '')
+    .split('|')
+    .map(function (c) { return c.split(PLACEHOLDER).join('|').trim(); });
 }
 
 /** 区切り行（|---|---|）かどうか。 */
@@ -450,7 +541,7 @@ function isSeparatorRow(line) {
   return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.indexOf('-') !== -1;
 }
 
-/** 指定見出しから次の見出しまでの行を返す。 */
+/** 指定見出しから次の見出しまでの行を返す。同名の見出しが複数ある場合は最初の一致を採用する。 */
 function linesUnderHeading(text, heading) {
   const lines = String(text || '').split('\n');
   let start = -1;
@@ -466,7 +557,7 @@ function linesUnderHeading(text, heading) {
   return out;
 }
 
-/** 指定見出し直下の表を返す。無ければ null。 */
+/** 指定見出しのセクション内にある表を返す。無ければ null。 */
 function extractMarkdownTable(text, heading) {
   const lines = linesUnderHeading(text, heading);
   if (!lines) return null;
@@ -481,12 +572,22 @@ function extractMarkdownTable(text, heading) {
   return { headers: headers, rows: rows };
 }
 
-/** 指定見出し直下の本文（表を除く）を返す。無ければ空文字。 */
+/**
+ * 指定見出し直下の本文を返す。無ければ空文字。
+ * 表（`|` 始まり）と引用（`>` 始まり）は落とす。成果物のひな形はスプリントゴールの直下に
+ * スクラムガイドの引用を置いており、そのままだとダッシュボードのゴール欄に混入するため。
+ */
 function extractSection(text, heading) {
   const lines = linesUnderHeading(text, heading);
   if (!lines) return '';
   return lines
-    .filter(function (l) { return l.trim() !== '' && l.trim().indexOf('|') !== 0; })
+    .filter(function (l) {
+      const t = l.trim();
+      if (t === '') return false;
+      if (t.indexOf('|') === 0) return false;
+      if (t.indexOf('>') === 0) return false;
+      return true;
+    })
     .join('\n').trim();
 }
 
@@ -786,7 +887,9 @@ if (typeof require !== 'undefined' && typeof filterRealRows === 'undefined') {
 
 const KANBAN_STATUSES = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 const ROADMAP_MARK = '■';
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// GAS は全ファイルを1つのグローバル字句スコープで評価するため、
+// トップレベルの const は他ファイルと衝突しない名前にする。
+const ROADMAP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** ステータスを既知の値に丸める。未知の値は New に寄せる。 */
 function normalizeStatus(status) {
@@ -813,8 +916,8 @@ function buildKanbanGrid(rows) {
 function realSprints(velocityRows) {
   return (velocityRows || []).filter(function (v) {
     return String(v.sprint || '').trim() !== '' &&
-      DATE_RE.test(String(v.sprint_start || '').trim()) &&
-      DATE_RE.test(String(v.sprint_end || '').trim());
+      ROADMAP_DATE_RE.test(String(v.sprint_start || '').trim()) &&
+      ROADMAP_DATE_RE.test(String(v.sprint_end || '').trim());
   });
 }
 
@@ -871,6 +974,7 @@ git commit -m "feat: カンバンとロードマップのグリッド変換を�
   - `buildImpedimentGrid(openRows: Object[], resolvedRows: Object[], notesByKey: Object): string[][]`
   - `IMPEDIMENT_KEY_COL: number` / `IMPEDIMENT_NOTE_COL: number`
   - `buildDashboardGrid(ctx: Object): string[][]` — `ctx = {syncedAt, sprintBacklogMd, backlogRows, warnings}`
+  - `buildSyncLogGrid(syncedAt: string, readFiles: string[], warnings: string[]): string[][]`
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -881,7 +985,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   buildVelocityGrid, buildBurndownGrid, buildImpedimentGrid,
-  IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL, buildDashboardGrid,
+  IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL, buildDashboardGrid, buildSyncLogGrid,
 } = require('../pure_grid_report.js');
 
 const VELOCITY = [
@@ -954,6 +1058,26 @@ test('警告があれば列挙する', () => {
   const g = buildDashboardGrid({ syncedAt: 'x', sprintBacklogMd: '', backlogRows: [], warnings: ['velocity.csv が見つかりません'] });
   assert.match(g.map(function (r) { return r.join(' '); }).join('\n'), /velocity.csv が見つかりません/);
 });
+
+test('同期ログは見出し行と1行の記録を返す', () => {
+  const grid = buildSyncLogGrid('2026-09-02 10:00:00', ['velocity.csv', 'sprint001/sprint_backlog.md'], []);
+  assert.deepEqual(grid[0], ['同期時刻', '読み取ったファイル', '警告']);
+  assert.equal(grid.length, 2);
+  assert.equal(grid[1][0], '2026-09-02 10:00:00');
+  assert.equal(grid[1][1], 'velocity.csv\nsprint001/sprint_backlog.md');
+  assert.equal(grid[1][2], 'なし');
+});
+
+test('同期ログは警告を改行で連結する', () => {
+  const grid = buildSyncLogGrid('2026-09-02 10:00:00', [], ['A が見つかりません', 'B の書き込みに失敗']);
+  assert.equal(grid[1][1], 'なし');
+  assert.equal(grid[1][2], 'A が見つかりません\nB の書き込みに失敗');
+});
+
+test('同期ログは引数が未指定でも落ちない', () => {
+  const grid = buildSyncLogGrid(undefined, null, null);
+  assert.deepEqual(grid[1], ['', 'なし', 'なし']);
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認する**
@@ -971,6 +1095,7 @@ Expected: FAIL — `Cannot find module '../pure_grid_report.js'`
  * GAS API に依存しない純関数。
  */
 
+// GAS 上では pure_filter.js / pure_markdown.js が同じグローバルに読み込まれる。Node ではここで解決する。
 if (typeof require !== 'undefined' && typeof filterRealRows === 'undefined') {
   var { filterRealRows } = require('./pure_filter.js');
   var { extractMarkdownTable, extractSection } = require('./pure_markdown.js');
@@ -983,14 +1108,15 @@ const IMPEDIMENT_HEADERS = IMPEDIMENT_LABELS.concat(['メモ']);
 const IMPEDIMENT_KEY_COL = 0;
 const IMPEDIMENT_NOTE_COL = IMPEDIMENT_HEADERS.length - 1;
 const IMP_ID_RE = /^IMP-\d+$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// トップレベルの const は GAS 上で全ファイル共通のスコープに入るため、固有の名前にする。
+const VELOCITY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** ベロシティシート用の2次元配列を返す。期間が埋まった行だけを出す。 */
 function buildVelocityGrid(velocityRows) {
   const grid = [VELOCITY_HEADERS];
   (velocityRows || []).forEach(function (v) {
-    if (!DATE_RE.test(String(v.sprint_start || '').trim())) return;
-    if (!DATE_RE.test(String(v.sprint_end || '').trim())) return;
+    if (!VELOCITY_DATE_RE.test(String(v.sprint_start || '').trim())) return;
+    if (!VELOCITY_DATE_RE.test(String(v.sprint_end || '').trim())) return;
     grid.push([
       String(v.sprint || ''), String(v.planned_points || ''), String(v.completed_points || ''),
       String(v.carried_over_points || ''), String(v.sprint_start || ''),
@@ -1084,10 +1210,25 @@ function buildDashboardGrid(ctx) {
   });
 }
 
+/** 同期ログシート用の2次元配列を返す。 */
+function buildSyncLogGrid(syncedAt, readFiles, warnings) {
+  const files = readFiles || [];
+  const warns = warnings || [];
+  return [
+    ['同期時刻', '読み取ったファイル', '警告'],
+    [
+      String(syncedAt || ''),
+      files.length === 0 ? 'なし' : files.join('\n'),
+      warns.length === 0 ? 'なし' : warns.join('\n'),
+    ],
+  ];
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     VELOCITY_HEADERS, IMPEDIMENT_HEADERS, IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL,
     buildVelocityGrid, buildBurndownGrid, buildImpedimentGrid, buildDashboardGrid,
+    buildSyncLogGrid,
   };
 }
 ```
@@ -1095,7 +1236,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計55件
+Expected: PASS — 累計69件
 
 - [ ] **Step 5: コミット**
 
@@ -1121,7 +1262,7 @@ git commit -m "feat: ベロシティ・バーンダウン・障害物・ダッ�
   - `ConfigError` — 設定不備を表す例外に付ける名前（`Error` に `name` を設定して投げる）
   - `getScrumFolder(): Folder` — `<フォルダ>/scrum` を返す。未設定・不在なら例外
   - `readTextFile(folder: Folder, name: string): string | null` — 直下のファイル本文。無ければ `null`
-  - `findLatestSprintFolder(scrumFolder: Folder): Folder | null` — `sprint` で始まるフォルダのうち名前順で最後のもの
+  - `findLatestSprintFolder(scrumFolder: Folder): Folder | null` — 最新のスプリントフォルダ。判定は `pickLatestSprintName` (Task 2) に委ねる
 
 **このタスクにテストはない。** GAS API に依存するため `node --test` では検証できない。Task 12 の手動確認で担保する。
 
@@ -1188,7 +1329,7 @@ function readTextFile(folder, name) {
   return it.next().getBlob().getDataAsString('UTF-8');
 }
 
-/** sprint で始まるフォルダのうち名前順で最後のものを返す。無ければ null。 */
+/** 最新のスプリントフォルダを返す。無ければ null。判定は pickLatestSprintName に委ねる。 */
 function findLatestSprintFolder(scrumFolder) {
   const names = [];
   const byName = {};
@@ -1196,11 +1337,11 @@ function findLatestSprintFolder(scrumFolder) {
   while (it.hasNext()) {
     const f = it.next();
     const n = f.getName();
-    if (n.indexOf('sprint') === 0) { names.push(n); byName[n] = f; }
+    names.push(n);
+    byName[n] = f;
   }
-  if (names.length === 0) return null;
-  names.sort();
-  return byName[names[names.length - 1]];
+  const latest = pickLatestSprintName(names);
+  return latest === null ? null : byName[latest];
 }
 ```
 
@@ -1228,6 +1369,7 @@ git commit -m "feat: GAS の設定層と Drive 読み取り層を追加する"
 - Produces:
   - `readNotes(ss, sheetName: string, keyCol: number, noteCol: number): Object` — シートが無ければ `{}`
   - `writeGrid(ss, sheetName: string, grid: string[][]): Sheet` — シートを作成またはクリアして `setValues` する
+  - `ensureSheetSize(sheet, numRows: number, numCols: number): void` — 既定サイズ（1000行 × 26列）を超える grid のために行・列を広げる
   - `paintMarks(sheet, marks: Array<{row, col}>, color: string): void`
   - `applyHeaderStyle(sheet, width: number): void`
 
@@ -1251,7 +1393,7 @@ function readNotes(ss, sheetName, keyCol, noteCol) {
   if (!sheet) return notes;
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
-  if (lastRow < 2 || lastCol <= noteCol) return notes;
+  if (lastRow < 2 || lastCol <= noteCol || lastCol <= keyCol) return notes;
   const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
   values.forEach(function (row) {
     const key = String(row[keyCol] || '').trim();
@@ -1259,6 +1401,18 @@ function readNotes(ss, sheetName, keyCol, noteCol) {
     if (key && note) notes[key] = note;
   });
   return notes;
+}
+
+/**
+ * setValues が範囲外にならないよう、シートの行数・列数を必要分まで広げる。
+ * insertSheet の既定は 1000行 × 26列で、getRange は自動拡張しない。ロードマップの列数は
+ * 2 + スプリント数なので、スプリントが増えると既定の列数を超える。
+ */
+function ensureSheetSize(sheet, numRows, numCols) {
+  const maxRows = sheet.getMaxRows();
+  if (maxRows < numRows) sheet.insertRowsAfter(maxRows, numRows - maxRows);
+  const maxCols = sheet.getMaxColumns();
+  if (maxCols < numCols) sheet.insertColumnsAfter(maxCols, numCols - maxCols);
 }
 
 /** シートを作成またはクリアして2次元配列を書き込む。 */
@@ -1269,11 +1423,13 @@ function writeGrid(ss, sheetName, grid) {
   if (!grid || grid.length === 0) return sheet;
 
   const width = grid.reduce(function (max, r) { return Math.max(max, r.length); }, 0);
+  if (width < 1) return sheet;
   const normalized = grid.map(function (r) {
     const copy = r.slice();
     while (copy.length < width) copy.push('');
     return copy;
   });
+  ensureSheetSize(sheet, normalized.length, width);
   sheet.getRange(1, 1, normalized.length, width).setValues(normalized);
   applyHeaderStyle(sheet, width);
   return sheet;
@@ -1287,11 +1443,34 @@ function applyHeaderStyle(sheet, width) {
   sheet.setFrozenRows(1);
 }
 
-/** ロードマップの帯を塗る。marks は 0 起点の {row, col}。 */
+/**
+ * ロードマップの帯を塗る。marks は 0 起点の {row, col}。
+ * marks が外接する矩形を求め、setBackgrounds を1回だけ呼んで塗る（全体制約: セル単位の書き込み禁止）。
+ */
 function paintMarks(sheet, marks, color) {
-  (marks || []).forEach(function (m) {
-    sheet.getRange(m.row + 1, m.col + 1).setBackground(color || ROADMAP_BAND_COLOR);
+  if (!marks || marks.length === 0) return;
+  const fillColor = color || ROADMAP_BAND_COLOR;
+
+  let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
+  marks.forEach(function (m) {
+    if (m.row < minRow) minRow = m.row;
+    if (m.row > maxRow) maxRow = m.row;
+    if (m.col < minCol) minCol = m.col;
+    if (m.col > maxCol) maxCol = m.col;
   });
+
+  const numRows = maxRow - minRow + 1;
+  const numCols = maxCol - minCol + 1;
+  const matrix = [];
+  for (let r = 0; r < numRows; r++) {
+    matrix.push(new Array(numCols).fill(null));
+  }
+  marks.forEach(function (m) {
+    matrix[m.row - minRow][m.col - minCol] = fillColor;
+  });
+
+  // matrix は 0 起点の矩形内インデックス。getRange は 1 起点なので +1 する。
+  sheet.getRange(minRow + 1, minCol + 1, numRows, numCols).setBackgrounds(matrix);
 }
 ```
 
@@ -1318,7 +1497,9 @@ git commit -m "feat: GAS のシート書き込み層を追加する"
 - Consumes: Task 1〜8 の全て
 - Produces:
   - `SHEET_NAMES: Object` — シート名の定数
-  - `syncAll(): Object` — `{ syncedAt, warnings }` を返す。例外は投げず警告として記録する（設定不備を除く）
+  - `syncAll(): Object` — `{ syncedAt, warnings, skipped }` を返す。スクリプトロックで多重実行を防ぎ、
+    取れなければ `skipped: true` で何もせず戻る。シートごとの例外は投げず警告として記録する（設定不備を除く）
+  - `rebuildAllSheets(): Object` — ロックを取得した状態で実際に全シートを再構築する
 
 **このタスクにテストはない。** GAS API に依存する。Task 12 の手動確認で担保する。
 
@@ -1341,12 +1522,15 @@ const SHEET_NAMES = {
   log: '同期ログ',
 };
 
+// 手動同期と時間主導トリガーが重なったときに待つ上限。
+const SYNC_LOCK_WAIT_MS = 1000;
+
 /** 現在時刻を YYYY-MM-DD HH:mm:ss で返す。 */
 function nowText() {
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 }
 
-/** scrum 直下の CSV を読んでオブジェクト配列にする。読めなければ警告を積んで空配列。 */
+/** scrum 直下の CSV を読んでオブジェクト配列にする。読めなければ警告を積んで null。 */
 function readCsvRows(folder, name, warnings) {
   const text = readTextFile(folder, name);
   if (text === null) {
@@ -1361,86 +1545,148 @@ function readCsvRows(folder, name, warnings) {
   }
 }
 
-/** 全シートを再構築する。 */
+/**
+ * 全シートを再構築する。
+ * 30分トリガーと手動の「今すぐ同期」が重なると、メモの読み出しとシートのクリアが
+ * 交差してメモを失う恐れがあるため、スクリプトロックで多重実行を防ぐ。
+ */
 function syncAll() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(SYNC_LOCK_WAIT_MS)) {
+    return { syncedAt: '', warnings: [], skipped: true };
+  }
+  try {
+    return rebuildAllSheets();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * ロックを取得した状態で全シートを再構築する。
+ * シートごとに try/catch で囲み、1枚の失敗で残りが書けなくなることを避ける。
+ * 書き込めなかったシートは前回の内容が残るため、必ず警告として同期ログに残す。
+ */
+function rebuildAllSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const warnings = [];
   const readFiles = [];
   const scrum = getScrumFolder();   // 設定不備はここで例外を投げて中断する
   const syncedAt = nowText();
 
-  // --- バックログ ---
-  let backlogRows = [];
+  // --- バックログとカンバン ---
+  let backlogRows = null;
   const backlog = readCsvRows(scrum, 'product_backlog.csv', warnings);
   if (backlog !== null) {
     readFiles.push('product_backlog.csv');
     backlogRows = backlog;
-    const notes = readNotes(ss, SHEET_NAMES.backlog, BACKLOG_KEY_COL, BACKLOG_NOTE_COL);
-    writeGrid(ss, SHEET_NAMES.backlog, buildBacklogGrid(backlogRows, notes));
-    writeGrid(ss, SHEET_NAMES.kanban, buildKanbanGrid(backlogRows));
+    try {
+      const notes = readNotes(ss, SHEET_NAMES.backlog, BACKLOG_KEY_COL, BACKLOG_NOTE_COL);
+      writeGrid(ss, SHEET_NAMES.backlog, buildBacklogGrid(backlogRows, notes));
+      writeGrid(ss, SHEET_NAMES.kanban, buildKanbanGrid(backlogRows));
+    } catch (e) {
+      warnings.push(SHEET_NAMES.backlog + ' / ' + SHEET_NAMES.kanban + ' の書き込みに失敗: ' + e.message);
+    }
   }
 
   // --- 完了バックログ ---
   const done = readCsvRows(scrum, 'product_backlog_done.csv', warnings);
   if (done !== null) {
     readFiles.push('product_backlog_done.csv');
-    writeGrid(ss, SHEET_NAMES.done, buildDoneBacklogGrid(done));
+    try {
+      writeGrid(ss, SHEET_NAMES.done, buildDoneBacklogGrid(done));
+    } catch (e) {
+      warnings.push(SHEET_NAMES.done + ' の書き込みに失敗: ' + e.message);
+    }
   }
 
-  // --- ベロシティとロードマップ ---
-  let velocityRows = [];
+  // --- ベロシティ ---
+  let velocityRows = null;
   const velocity = readCsvRows(scrum, 'velocity.csv', warnings);
   if (velocity !== null) {
     readFiles.push('velocity.csv');
     velocityRows = velocity;
-    writeGrid(ss, SHEET_NAMES.velocity, buildVelocityGrid(velocityRows));
+    try {
+      writeGrid(ss, SHEET_NAMES.velocity, buildVelocityGrid(velocityRows));
+    } catch (e) {
+      warnings.push(SHEET_NAMES.velocity + ' の書き込みに失敗: ' + e.message);
+    }
   }
-  const roadmap = buildRoadmapGrid(backlogRows, velocityRows);
-  const roadmapSheet = writeGrid(ss, SHEET_NAMES.roadmap, roadmap.grid);
-  paintMarks(roadmapSheet, roadmap.marks, ROADMAP_BAND_COLOR);
 
-  // --- 障害物 ---
+  // --- ロードマップ（バックログとベロシティの両方が読めたときだけ再構築する） ---
+  // 片方でも欠けた状態で作り直すと、スプリント列や PBI 行が消えた表になってしまう。
+  if (backlogRows !== null && velocityRows !== null) {
+    try {
+      const roadmap = buildRoadmapGrid(backlogRows, velocityRows);
+      const roadmapSheet = writeGrid(ss, SHEET_NAMES.roadmap, roadmap.grid);
+      paintMarks(roadmapSheet, roadmap.marks, ROADMAP_BAND_COLOR);
+    } catch (e) {
+      warnings.push(SHEET_NAMES.roadmap + ' の書き込みに失敗: ' + e.message);
+    }
+  } else {
+    warnings.push('ロードマップは更新できませんでした。前回の内容が残っています。');
+  }
+
+  // --- 障害物（未解決と解決済みの両方が読めたときだけ再構築する） ---
+  // 片方だけで作り直すと、欠けた側の行とそのメモが恒久的に失われる。
   const impOpen = readCsvRows(scrum, 'impediment_log.csv', warnings);
   const impDone = readCsvRows(scrum, 'impediment_log_resolved.csv', warnings);
-  if (impOpen !== null || impDone !== null) {
-    if (impOpen !== null) readFiles.push('impediment_log.csv');
-    if (impDone !== null) readFiles.push('impediment_log_resolved.csv');
-    const notes = readNotes(ss, SHEET_NAMES.impediment, IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL);
-    writeGrid(ss, SHEET_NAMES.impediment, buildImpedimentGrid(impOpen || [], impDone || [], notes));
+  if (impOpen !== null && impDone !== null) {
+    readFiles.push('impediment_log.csv');
+    readFiles.push('impediment_log_resolved.csv');
+    try {
+      const notes = readNotes(ss, SHEET_NAMES.impediment, IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL);
+      writeGrid(ss, SHEET_NAMES.impediment, buildImpedimentGrid(impOpen, impDone, notes));
+    } catch (e) {
+      warnings.push(SHEET_NAMES.impediment + ' の書き込みに失敗: ' + e.message);
+    }
+  } else {
+    warnings.push(SHEET_NAMES.impediment + ' は更新できませんでした。前回の内容が残っています。');
   }
 
   // --- バーンダウン（最新スプリントの sprint_backlog.md から） ---
   let sprintMd = '';
-  const sprintFolder = findLatestSprintFolder(scrum);
-  if (!sprintFolder) {
-    warnings.push('sprint で始まるフォルダが見つかりません。バーンダウンはスキップしました。');
-  } else {
-    const md = readTextFile(sprintFolder, 'sprint_backlog.md');
-    if (md === null) {
-      warnings.push(sprintFolder.getName() + '/sprint_backlog.md が見つかりません。');
+  try {
+    const sprintFolder = findLatestSprintFolder(scrum);
+    if (!sprintFolder) {
+      warnings.push('sprint と連番のフォルダ（例: sprint001）が見つかりません。バーンダウンはスキップしました。');
     } else {
-      readFiles.push(sprintFolder.getName() + '/sprint_backlog.md');
-      sprintMd = md;
-      const burndown = buildBurndownGrid(md);
-      if (burndown === null) {
-        warnings.push('sprint_backlog.md に「## バーンダウン」の表がありません。');
+      const md = readTextFile(sprintFolder, 'sprint_backlog.md');
+      if (md === null) {
+        warnings.push(sprintFolder.getName() + '/sprint_backlog.md が見つかりません。');
       } else {
-        writeGrid(ss, SHEET_NAMES.burndown, burndown);
+        readFiles.push(sprintFolder.getName() + '/sprint_backlog.md');
+        sprintMd = md;
+        const burndown = buildBurndownGrid(md);
+        if (burndown === null) {
+          warnings.push('sprint_backlog.md に「## バーンダウン」の表がありません。');
+        } else {
+          writeGrid(ss, SHEET_NAMES.burndown, burndown);
+        }
       }
     }
+  } catch (e) {
+    warnings.push(SHEET_NAMES.burndown + ' の書き込みに失敗: ' + e.message);
   }
 
-  // --- ダッシュボードと同期ログ ---
-  writeGrid(ss, SHEET_NAMES.dashboard, buildDashboardGrid({
-    syncedAt: syncedAt, sprintBacklogMd: sprintMd,
-    backlogRows: backlogRows, warnings: warnings,
-  }));
+  // --- ダッシュボードと同期ログ（他シートの結果をまとめるため最後に書く） ---
+  try {
+    writeGrid(ss, SHEET_NAMES.dashboard, buildDashboardGrid({
+      syncedAt: syncedAt, sprintBacklogMd: sprintMd,
+      backlogRows: backlogRows || [], warnings: warnings,
+    }));
+  } catch (e) {
+    warnings.push(SHEET_NAMES.dashboard + ' の書き込みに失敗: ' + e.message);
+  }
 
-  const logGrid = [['同期時刻', '読み取ったファイル', '警告']];
-  logGrid.push([syncedAt, readFiles.join('\n'), warnings.length ? warnings.join('\n') : 'なし']);
-  writeGrid(ss, SHEET_NAMES.log, logGrid);
+  try {
+    writeGrid(ss, SHEET_NAMES.log, buildSyncLogGrid(syncedAt, readFiles, warnings));
+  } catch (e) {
+    // 同期ログにも書けないときは記録先が無いため、呼び出し元へ返す警告に積むだけにする
+    warnings.push(SHEET_NAMES.log + ' の書き込みに失敗: ' + e.message);
+  }
 
-  return { syncedAt: syncedAt, warnings: warnings };
+  return { syncedAt: syncedAt, warnings: warnings, skipped: false };
 }
 ```
 
@@ -1471,7 +1717,7 @@ git commit -m "feat: 同期オーケストレーションと同期ログを追�
 - Produces:
   - `onOpen()` — カスタムメニューを登録する
   - `menuSyncNow()` / `menuConfigure()` / `menuInstallTrigger()` / `menuRemoveTrigger()`
-  - `scheduledSync()` — トリガーから呼ばれるエントリポイント
+  - `scheduledSync()` — トリガーから呼ばれるエントリポイント。例外は握って実行ログに出す（実行失敗メールを止めるため）
 
 - [ ] **Step 1: gas_menu.js を書く**
 
@@ -1499,9 +1745,14 @@ function menuSyncNow() {
   const ui = SpreadsheetApp.getUi();
   try {
     const result = syncAll();
-    const message = result.warnings.length === 0
-      ? '同期しました（' + result.syncedAt + '）'
-      : '同期しました。警告 ' + result.warnings.length + ' 件は「同期ログ」を確認してください。';
+    let message;
+    if (result.skipped) {
+      message = '別の同期が実行中のため、今回は見送りました。少し待ってからもう一度お試しください。';
+    } else if (result.warnings.length === 0) {
+      message = '同期しました（' + result.syncedAt + '）';
+    } else {
+      message = '同期しました。警告 ' + result.warnings.length + ' 件は「同期ログ」を確認してください。';
+    }
     SpreadsheetApp.getActiveSpreadsheet().toast(message, 'AI Scrum', 10);
   } catch (e) {
     ui.alert('同期できませんでした', e.message, ui.ButtonSet.OK);
@@ -1550,7 +1801,13 @@ function menuRemoveTrigger() {
 
 /** トリガーから呼ばれる。UI を触らないため toast も alert も使わない。 */
 function scheduledSync() {
-  syncAll();
+  try {
+    syncAll();
+  } catch (e) {
+    // 例外をそのまま投げると30分毎に実行失敗メールが届く（フォルダ未設定なら鳴り止まない）。
+    // 原因は Apps Script の実行ログに残す。
+    console.error('自動同期に失敗しました: ' + e.message);
+  }
 }
 ```
 
@@ -1565,7 +1822,8 @@ function scheduledSync() {
   "oauthScopes": [
     "https://www.googleapis.com/auth/spreadsheets.currentonly",
     "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/script.scriptapp"
+    "https://www.googleapis.com/auth/script.scriptapp",
+    "https://www.googleapis.com/auth/script.container.ui"
   ]
 }
 ```
@@ -1600,13 +1858,22 @@ tests/**
 #!/usr/bin/env bash
 # 新しい Google Workspace テナントに AI Scrum のダッシュボードを一から作る。
 #
+# 前提: 実行前に https://script.google.com/home/usersettings で「Apps Script API」を
+# オンにしておくこと（オフのままだと create が失敗する）。
+#
 # 使い方:
 #   scripts/setup.sh ["スプレッドシートの名前"]
 #
 # 作られるもの:
-#   - スプレッドシート（Google ドライブのマイドライブ直下）
+#   - スプレッドシート（Google ドライブのマイドライブ直下。共有フォルダへの移動と
+#     チームへの共有は、作成後に手作業で行う必要がある）
 #   - それに紐づく Apps Script プロジェクト
 #   - gas/.clasp.json（テナント固有。git 管理しない）
+#
+# clasp は 3 系に固定して呼んでいる（メジャーバージョンが上がると
+# login/create/push のオプションが変わることがある実績あり）。
+# バージョンを上げるときは `login` `create` `push` の各オプションが
+# 変わっていないか `--help` で確認してから固定し直すこと。
 set -euo pipefail
 
 TITLE="${1:-AI Scrum Board}"
@@ -1622,13 +1889,19 @@ if [[ -f gas/.clasp.json ]]; then
   exit 1
 fi
 
-CLASP="npx --yes @google/clasp"
+CLASP="npx --yes @google/clasp@3"
 
 echo "==> Google アカウントにログインします（ブラウザが開きます）"
-$CLASP login --status >/dev/null 2>&1 || $CLASP login
+$CLASP show-authorized-user >/dev/null 2>&1 || $CLASP login
 
 echo "==> スプレッドシートと Apps Script プロジェクトを作ります: ${TITLE}"
 ( cd gas && $CLASP create --type sheets --title "$TITLE" --rootDir . )
+
+# .claspignore が効かずに gas/tests/*.test.js まで push されると、GAS 側で
+# require('node:test') が評価されてプロジェクト全体が起動しなくなる。push 前に中身を見せる。
+echo "==> push されるファイルを確認します（tests/ が含まれていないこと）"
+( cd gas && $CLASP show-file-status ) \
+  || echo "（一覧を取得できませんでした。clasp のバージョンとコマンド名を確認してください）"
 
 echo "==> コードを配置します"
 ( cd gas && $CLASP push -f )
@@ -1638,10 +1911,14 @@ cat <<'MSG'
 作成しました。続けて次を行ってください。
 
   1. 上に表示された Google スプレッドシートの URL を開く
-  2. メニュー「AI Scrum」→「設定（Drive フォルダ ID）」で、
+  2. このスプレッドシートは「マイドライブ」直下に作られ、まだ誰にも共有されていません。
+     Google ドライブでチームの共有フォルダへ移動し、「共有」からメンバーに
+     閲覧権限（メモ列を書いてもらう場合は編集権限）を付けてください
+  3. メニュー「AI Scrum」→「設定（Drive フォルダ ID）」で、
      scrum フォルダを含むプロジェクトフォルダの ID を登録する
-  3. 「今すぐ同期」を実行して9枚のシートができることを確認する
-  4. 「自動同期を有効にする（30分毎）」を実行する
+  4. 「今すぐ同期」を実行して9枚のシートができることを確認する
+     （初回は Drive の読み取りを求める承認ダイアログが出ます）
+  5. 「自動同期を有効にする（30分毎）」を実行する
 
 メニューが出ないときはスプレッドシートを開き直してください。
 MSG
@@ -1655,7 +1932,7 @@ Expected: `JSON OK`
 - [ ] **Step 6: 全テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計55件（純関数層は無傷）
+Expected: PASS — 累計69件（純関数層は無傷）
 
 - [ ] **Step 7: コミット**
 
@@ -1713,7 +1990,7 @@ grep -rln "GitHub\|gh pr\|Projects\|worktree" .claude/ scrum/ | sort
 
 - [ ] **Step 4: CLAUDE.md を書く**
 
-```markdown
+````markdown
 # AI Scrum GAS版 — Claude Code 運用ガイド
 
 本リポジトリは AIスクラムチームがスクラム開発を進めるテンプレートの **Google Workspace 版**です。
@@ -1741,23 +2018,28 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
 
 ## GAS 側の開発
 ```bash
-npm test                       # 純関数層のテスト
-cd gas && clasp push           # デプロイ（管理者のみ）
+npm test                              # 純関数層のテスト
+cd gas && npx @google/clasp@3 push    # デプロイ（管理者のみ）
 ```
 
 `pure_*.js` は GAS API に依存しない。ロジックはここに書き、`gas_*.js` は
 Drive の読み取りと Sheets の書き込みだけに留める。テストできる場所を増やすためである。
+
+GAS は `gas/*.js` を1つのグローバルスコープで評価する。トップレベルの `const` 名が
+他ファイルと衝突するとプロジェクト全体が起動しないため、`gas/tests/gas_load.test.js` で検査している。
+
+コードレビュープラグインは既定で無効。使う場合は各自の環境で有効化すること。
 
 ## 全体ルール
 - 全ての成果物は **日本語** で記述すること
 - CSVファイルの列構造を変更しないこと。文字コードはUTF-8
 - スクラムガイド2020に準拠して運用すること
 - 全てのドキュメントへの記載は、簡潔でわかりやすく可能な限り短く記載すること
-```
+````
 
 - [ ] **Step 5: docs/setup.md を書く**
 
-```markdown
+````markdown
 # セットアップ
 
 ## 管理者（テナントごとに1回）
@@ -1765,8 +2047,13 @@ Drive の読み取りと Sheets の書き込みだけに留める。テストで
 このリポジトリは複数の Google Workspace テナントで使い回せます。テナント固有の値は
 リポジトリに含まれないため、clone した状態から次の手順で一から作れます。
 
-1. Google Drive に共有フォルダを作り、このプロジェクトフォルダごと配置する
-2. スプレッドシートと Apps Script プロジェクトを作る
+パソコンに Node.js がインストールされている必要があります（`scripts/setup.sh` の実行に使う）。
+
+1. [Apps Script の設定](https://script.google.com/home/usersettings) を開き、「Apps Script API」を
+   オンにする。このテナントで初めて使うときに必須で、オフのままだと次の手順が
+   `User has not enabled the Apps Script API` で失敗する
+2. Google Drive に共有フォルダを作り、このプロジェクトフォルダごと配置する
+3. スプレッドシートと Apps Script プロジェクトを作る
 
    ```bash
    scripts/setup.sh "AI Scrum Board"
@@ -1775,10 +2062,18 @@ Drive の読み取りと Sheets の書き込みだけに留める。テストで
    ログインしていなければブラウザが開きます。完了すると
    スプレッドシートの URL が表示されます。
 
-3. 表示された URL を開き、メニュー「AI Scrum」→「設定（Drive フォルダ ID）」で
+4. **作成されたスプレッドシートをチームへ共有する**。`scripts/setup.sh` は
+   マイドライブ直下に作るため、この操作をしないとメンバーは開けない
+   1. 表示された URL を開く
+   2. Google ドライブでそのファイルを手順2の共有フォルダへ移動する
+      （ドライブの一覧で右クリック →「整理」→「移動」）
+   3. 「共有」からチームのメンバーに**閲覧者**（メモ列を書いてもらう場合は**編集者**）を付ける
+
+5. 表示された URL を開き、メニュー「AI Scrum」→「設定（Drive フォルダ ID）」で
    **プロジェクトフォルダ**の ID を登録する（`scrum` フォルダの ID ではない）
-4. 「今すぐ同期」を実行し、9枚のシートができることを確認する
-5. 「自動同期を有効にする（30分毎）」を実行する
+6. 「今すぐ同期」を実行し、9枚のシートができることを確認する。初回は Drive の
+   読み取りを求める承認ダイアログが出るので、内容を確認して許可する
+7. 「自動同期を有効にする（30分毎）」を実行する
 
 メニューが出ないときはスプレッドシートを開き直してください。
 
@@ -1788,6 +2083,11 @@ Drive の読み取りと Sheets の書き込みだけに留める。テストで
 そのスクリプト ID を `gas/.clasp.json` に書いて `cd gas && npx @google/clasp@3 push` します。
 `gas/.clasp.json.example` を雛形として使ってください。このファイルは
 テナント固有の値を含むため git 管理しません。
+
+### 日本以外のテナントで使う場合
+
+`gas/appsscript.json` の `timeZone` を、そのテナントのタイムゾーンに変更してから push する。
+同期時刻の表示に使われる。
 
 ### コードを更新したとき
 
@@ -1801,7 +2101,8 @@ cd gas && npx @google/clasp@3 push
 2. 同期されたフォルダで Claude Code を起動する
 3. ダッシュボードは共有スプレッドシートを開くだけで見られる
 
-セットアップは以上で、認証設定は不要である。
+見るだけならアカウント設定は不要である。ただし「今すぐ同期」を押した人には、
+初回だけ Drive の読み取りを求める承認ダイアログが出る。
 
 ## 制限
 
@@ -1809,8 +2110,14 @@ cd gas && npx @google/clasp@3 push
   次回同期で失われる。ただし「バックログ」と「障害物」の**メモ列**だけは ID をキーに引き継がれる
 - 反映までの時間は Drive デスクトップ同期のラグ + トリガー間隔（最大30分）になる。
   すぐ見たいときはメニューの「今すぐ同期」を使う
+- **メモ列が引き継がれるのは、その ID が一覧に残っている間だけ**である。項目が完了バックログへ
+  移るとメモ列自体が無くなり、元ファイルから行が消えた場合も引き継がれない。
+  残したい内容はファイル側へ書き移す
+- 「今すぐ同期」と自動同期は、**実行した人の Google ドライブ全体の読み取り権限**（`drive.readonly`）を
+  求める。初回実行時に承認ダイアログが出る。フォルダ ID 指定で読むには `drive.file` では足りないため、
+  スコープを絞ることはできない。書き込みは対象のスプレッドシートに限られる
 - PO への相談はバックログのメモ列に書き、ローカルの Claude Code で `/ask-to-po-shuri` を実行する
-```
+````
 
 - [ ] **Step 6: README.md を書く（非エンジニア向け）**
 
@@ -1847,15 +2154,15 @@ AI のチームメンバーと一緒にスクラム開発を進めるための�
 
 ## メンバーがやること
 
-### 1. フォルダを自分のパソコンに同期する
+### 1. フォルダを自分のパソコンに取り込む
 
-Google ドライブのデスクトップ アプリで、共有された `ai-scrum-gas` フォルダを同期します。
-これで、自分のパソコンからフォルダの中身が見えるようになります。
+Google ドライブのデスクトップ アプリで、共有された `ai-scrum-gas` フォルダを自分のパソコンに取り込みます。
+これで、自分のパソコンからフォルダの中身が見えるようになります（後述の「同期」とは別の操作です）。
 
 ### 2. スプレッドシートを開く
 
 チームで共有しているスプレッドシートを開きます。これだけで最新の状況が見られます。
-パスワードやアカウントの設定は必要ありません。
+見るだけなら、パスワードやアカウントの設定は必要ありません。
 
 ### 3. 最新にしたいとき
 
@@ -1864,10 +2171,19 @@ Google ドライブのデスクトップ アプリで、共有された `ai-scru
 
 放っておいても30分ごとに自動で更新されます。
 
+**はじめて「今すぐ同期」を押したときだけ、確認画面が出ます。**
+この仕組みが Google ドライブのファイルを読むための確認です。画面の案内に沿って、
+自分のアカウントを選び、内容を確かめて「許可」を押してください。壊れたわけではありません。
+2回目からは出ません。求められるのはドライブの**読み取り**だけで、書き換えはしません。
+
 ## スプレッドシートに書き込んでいいの？
 
 **「メモ」列だけ書き込めます。** バックログと障害物のシートにある一番右の列です。
-ここに書いたことは、次に更新されても消えません。
+ここに書いたことは、**その項目が一覧に残っている限り**、次の更新でも引き継がれます。
+
+ただし、項目が「完了バックログ」へ移るとメモ列が無くなるため、そのメモは残りません。
+元のファイル側から項目が消えた場合も同じです。長く残したい内容は、スクラムイベントで
+ファイル側に書き移してください。
 
 それ以外のセルに書いても、次の更新で消えてしまいます。内容を変えたいときは
 ファイル側を直す必要があるので、チームのスクラムイベントで相談してください。
@@ -1885,10 +2201,14 @@ Google ドライブのデスクトップ アプリで、共有された `ai-scru
 
 ## Claude Code の使いかた（はじめての人向け）
 
-Claude Code は、文章で指示すると作業してくれるツールです。
+先ほどの `/ask-to-po-shuri` のように、スクラムのイベントを自分で進めたいときは
+Claude Code というツールを使います。文章で指示すると作業してくれるツールです。
+パソコンにまだ入っていない場合は、チームの管理者にインストールを依頼してください。
 
 1. ターミナル（黒い画面のアプリ）を開きます
-2. 同期された `ai-scrum-gas` フォルダに移動します
+2. `cd` と入力してスペースを1つ入れます（Enter はまだ押しません）。続けて Finder で
+   取り込んだ `ai-scrum-gas` フォルダを探し、その場所からターミナルの画面へドラッグ＆ドロップします。
+   フォルダのパスが自動で入力されるので、そこで Enter を押します
 3. `claude` と入力して Enter を押します
 4. あとは日本語で話しかけるだけです
 
@@ -1924,7 +2244,7 @@ Claude Code は、文章で指示すると作業してくれるツールです�
 - [ ] **Step 7: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計55件
+Expected: PASS — 累計69件
 
 - [ ] **Step 8: コミット**
 
@@ -1951,7 +2271,7 @@ npm test
 for f in gas/*.js; do node --check "$f" || echo "SYNTAX NG: $f"; done
 ```
 
-Expected: 55 tests PASS、`SYNTAX NG` の出力が無いこと
+Expected: 69 tests PASS、`SYNTAX NG` の出力が無いこと
 
 - [ ] **Step 2: 秘密情報が含まれていないことを確認する**
 
