@@ -9,7 +9,7 @@
  * 2回書き込むと2回目の updated_at が1回目と同じ値になり得る。その場合、
  * 1回目の書き込み後に画面を開いた別の利用者が古い expectedUpdatedAt のまま
  * 2回目を通してしまい、1回目の変更が黙って消える。これを防ぐため、書き込む
- * updated_at が直前の値と同じになるときは必ず異なる値へ進める（単調性の担保）。
+ * updated_at は常に直前の値より大きくする（単調増加の担保）。
  */
 
 /**
@@ -30,20 +30,25 @@ function addOneSecondToTimeText_(text) {
 }
 
 /**
- * nowText が previousUpdatedAt と同じ値になる場合、必ず異なる値を返す。
+ * 直前の値より必ず大きい updated_at を返す。
  *
- * yyyy-MM-dd HH:mm:ss として解析できれば1秒進めた値を使う。解析できない場合
- * （このチームはローカルの AI と列を共同所有しており、日付のみの値
- * `YYYY-MM-DD` 等が実在する）は、時刻としての正確さより「必ず異なる値になる」
- * ことを優先し、末尾に区別用のマーカーを付けて返す。元の値をそのまま返すと
- * 単調性が壊れ、末尾に無条件で何かを足すと形式次第で衝突しうるため、
- * どちらでもなく「解析失敗時は安全側のマーカー付与」を選んだ。
+ * 「同じ値にならない」だけでは足りない。同じ秒に3回書き込むと
+ * `T → T+1秒 → T` と値が戻り、T を見て画面を開いた利用者の古い更新が
+ * 再び通ってしまう。そのため単調増加（strictly increasing）を保証する。
+ *
+ * この書式は文字列の辞書順と時刻順が一致するため、比較は文字列のままでよい。
+ * 解析できない値（このチームはローカルの AI と列を共同所有しており、
+ * 日付のみの `YYYY-MM-DD` 等が実在する）に対しては、時刻としての正確さより
+ * 「必ず前より大きい値になる」ことを優先し、末尾にマーカーを付ける。
  */
 function advanceUpdatedAt_(nowText, previousUpdatedAt) {
-  if (String(nowText) !== String(previousUpdatedAt)) return nowText;
-  const advanced = addOneSecondToTimeText_(nowText);
-  if (advanced !== null && advanced !== String(previousUpdatedAt)) return advanced;
-  return String(nowText) + '#1';
+  const prev = String(previousUpdatedAt || '');
+  const now = String(nowText);
+  if (now > prev) return now;
+  // now が prev 以下（＝同じ秒に複数回、または prev が未来日）のときは prev を進める。
+  const advanced = addOneSecondToTimeText_(prev);
+  if (advanced !== null && advanced > prev) return advanced;
+  return prev + '#1';
 }
 
 /**

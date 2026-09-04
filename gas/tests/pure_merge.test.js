@@ -121,3 +121,29 @@ test('空の id は中間の空行にマッチせず not_found を返す', () =>
   assert.equal(r.reason, 'not_found');
   assert.equal(r.current, null);
 });
+
+test('同じ秒に3回書き込んでも updated_at は単調増加する', () => {
+  // 「直前と異なる値」だけでは足りない。T → T+1秒 → T と戻ると、
+  // T を見て画面を開いた利用者の古い更新が再び通ってしまう。
+  const now = '2026-09-04 14:30:00';
+  let list = [{ id: 'PBI-001', status: 'New', updated_at: now }];
+  const seen = [];
+  for (let i = 0; i < 3; i++) {
+    const r = applyRowUpdate(list, 'PBI-001', { status: 'S' + i }, list[0].updated_at, now);
+    assert.equal(r.ok, true);
+    list = r.rows;
+    seen.push(list[0].updated_at);
+  }
+  assert.ok(seen[0] < seen[1] && seen[1] < seen[2], '単調増加していない: ' + seen.join(' → '));
+});
+
+test('過去に戻った値を古い期待値で更新しようとしても拒否される', () => {
+  const now = '2026-09-04 14:30:00';
+  let list = [{ id: 'PBI-001', status: 'New', updated_at: now }];
+  const stale = list[0].updated_at;               // 利用者 B が画面を開いた時点の値
+  list = applyRowUpdate(list, 'PBI-001', { status: 'A1' }, stale, now).rows;   // A の1回目
+  list = applyRowUpdate(list, 'PBI-001', { status: 'A2' }, list[0].updated_at, now).rows; // A の2回目
+  const r = applyRowUpdate(list, 'PBI-001', { status: 'B' }, stale, now);      // B の更新
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'conflict');
+});
