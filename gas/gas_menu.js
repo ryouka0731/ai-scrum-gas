@@ -20,7 +20,7 @@ function onOpen() {
 function menuSyncNow() {
   const ui = SpreadsheetApp.getUi();
   try {
-    const result = syncAll();
+    const result = syncAll_();
     let message;
     if (result.skipped) {
       message = '別の同期が実行中のため、今回は見送りました。少し待ってからもう一度お試しください。';
@@ -38,7 +38,7 @@ function menuSyncNow() {
 /** フォルダ ID を入力して保存する。 */
 function menuConfigure() {
   const ui = SpreadsheetApp.getUi();
-  const current = getFolderId();
+  const current = getFolderId_();
   const response = ui.prompt(
     'Drive フォルダ ID',
     'scrum フォルダを含む共有フォルダの ID を入力してください（scrum フォルダ自身の ID ではありません）。\n'
@@ -46,7 +46,7 @@ function menuConfigure() {
     ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() !== ui.Button.OK) return;
   try {
-    setFolderId(response.getResponseText());
+    setFolderId_(response.getResponseText());
     ui.alert('保存しました', 'メニューから「今すぐ同期」を実行してください。', ui.ButtonSet.OK);
   } catch (e) {
     ui.alert('保存できませんでした', e.message, ui.ButtonSet.OK);
@@ -54,7 +54,7 @@ function menuConfigure() {
 }
 
 /** 既存の同期トリガーを全て削除する。 */
-function removeSyncTriggers() {
+function removeSyncTriggers_() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === TRIGGER_HANDLER) ScriptApp.deleteTrigger(t);
   });
@@ -62,23 +62,23 @@ function removeSyncTriggers() {
 
 /** 30分毎のトリガーを作り直す。 */
 function menuInstallTrigger() {
-  removeSyncTriggers();
+  const ui = SpreadsheetApp.getUi();   // 副作用より前に置く（認可ゲート）
+  removeSyncTriggers_();
   ScriptApp.newTrigger(TRIGGER_HANDLER).timeBased().everyMinutes(TRIGGER_MINUTES).create();
-  SpreadsheetApp.getUi().alert(
-    '自動同期を有効にしました', TRIGGER_MINUTES + '分毎に同期します。', SpreadsheetApp.getUi().ButtonSet.OK);
+  ui.alert('自動同期を有効にしました', TRIGGER_MINUTES + '分毎に同期します。', ui.ButtonSet.OK);
 }
 
 /** トリガーを削除する。 */
 function menuRemoveTrigger() {
-  removeSyncTriggers();
-  SpreadsheetApp.getUi().alert(
-    '自動同期を止めました', 'メニューの「今すぐ同期」は引き続き使えます。', SpreadsheetApp.getUi().ButtonSet.OK);
+  const ui = SpreadsheetApp.getUi();   // 副作用より前に置く（認可ゲート）
+  removeSyncTriggers_();
+  ui.alert('自動同期を止めました', 'メニューの「今すぐ同期」は引き続き使えます。', ui.ButtonSet.OK);
 }
 
 /** トリガーから呼ばれる。UI を触らないため toast も alert も使わない。 */
 function scheduledSync() {
   try {
-    syncAll();
+    syncAll_();
   } catch (e) {
     // 例外をそのまま投げると30分毎に実行失敗メールが届く（フォルダ未設定なら鳴り止まない）。
     // 原因は Apps Script の実行ログに残す。

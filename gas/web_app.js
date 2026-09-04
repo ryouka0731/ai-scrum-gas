@@ -17,8 +17,8 @@ function doGet(e) {
 }
 
 /** scrum/product_backlog.csv の生テキストを返す。無ければ例外。 */
-function readBacklogText() {
-  const text = readTextFile(getScrumFolder(), BACKLOG_CSV_NAME);
+function readBacklogText_() {
+  const text = readTextFile_(getScrumFolder_(), BACKLOG_CSV_NAME);
   if (text === null) {
     throw new Error('scrum/' + BACKLOG_CSV_NAME + ' が見つかりません。配布が済んでいるか確認してください。');
   }
@@ -47,14 +47,14 @@ function assertBacklogHeaderMatches(text) {
 }
 
 /** scrum/product_backlog.csv を読んでオブジェクト配列にする。 */
-function readBacklogRows() {
-  return csvToObjects(readBacklogText());
+function readBacklogRows_() {
+  return csvToObjects(readBacklogText_());
 }
 
 /** カンバンの内容を返す。 */
 function apiGetBoard() {
   try {
-    return { ok: true, board: buildBoardData(readBacklogRows()) };
+    return { ok: true, board: buildBoardData(readBacklogRows_()) };
   } catch (e) {
     return { ok: false, message: e.message };
   }
@@ -76,12 +76,12 @@ function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
     }
     // 書き戻しの直前に必ず読み直す。Drive 同期のラグがあるため、
     // 画面を描いた時点のデータをそのまま信じない。
-    const text = readBacklogText();
+    const text = readBacklogText_();
     // 未知の列を持つ CSV へ書き戻すと列が消えるため、読み直した直後・
     // 書き戻しより前に必ずヘッダーを検査する。
     assertBacklogHeaderMatches(text);
     const rows = csvToObjects(text);
-    const result = applyRowUpdate(rows, id, { status: newStatus }, expectedUpdatedAt, nowText());
+    const result = applyRowUpdate(rows, id, { status: newStatus }, expectedUpdatedAt, nowText_());
 
     if (!result.ok) {
       const message = result.reason === 'conflict'
@@ -90,7 +90,7 @@ function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
       return { ok: false, reason: result.reason, message: message, board: buildBoardData(rows) };
     }
 
-    writeScrumFile(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
+    writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
     return { ok: true, board: buildBoardData(result.rows) };
   } catch (e) {
     return { ok: false, reason: 'error', message: e.message, board: null };

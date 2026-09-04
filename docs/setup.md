@@ -110,7 +110,7 @@ node scripts/publish.js "<共有フォルダのパス>"
 
 書き込みが際限なく広がらないよう、コード側で書き込み先を絞っている。
 `gas/pure_write_guard.js` の許可リスト（`WRITABLE_FILES`）に無いファイル名は
-`writeScrumFile()`（`gas/gas_drive_write.js`）が例外を投げて拒否する。現在許可しているのは
+`writeScrumFile_()`（`gas/gas_drive_write.js`）が例外を投げて拒否する。現在許可しているのは
 `scrum/product_backlog.csv` の1つだけである。
 
 **既に運用中のテナントをこのバージョンへ更新する場合、スコープが増えるため、

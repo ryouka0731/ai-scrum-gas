@@ -7,9 +7,9 @@
  */
 
 /** scrum/ 直下のファイルを上書きする。無ければ例外を投げる。 */
-function writeScrumFile(name, content) {
+function writeScrumFile_(name, content) {
   assertWritableFileName(name);
-  const scrum = getScrumFolder();
+  const scrum = getScrumFolder_();
   const it = scrum.getFilesByName(name);
   if (!it.hasNext()) {
     throw new Error('scrum/' + name + ' が見つかりません。配布が済んでいるか確認してください。');

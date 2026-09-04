@@ -7,7 +7,7 @@ const HEADER_FONT_COLOR = '#ffffff';
 const ROADMAP_BAND_COLOR = '#a8c7fa';
 
 /** 既存シートの「キー → メモ」を読み出す。シートが無ければ空の辞書。 */
-function readNotes(ss, sheetName, keyCol, noteCol) {
+function readNotes_(ss, sheetName, keyCol, noteCol) {
   const sheet = ss.getSheetByName(sheetName);
   const notes = {};
   if (!sheet) return notes;
@@ -28,7 +28,7 @@ function readNotes(ss, sheetName, keyCol, noteCol) {
  * insertSheet の既定は 1000行 × 26列で、getRange は自動拡張しない。ロードマップの列数は
  * 2 + スプリント数なので、スプリントが増えると既定の列数を超える。
  */
-function ensureSheetSize(sheet, numRows, numCols) {
+function ensureSheetSize_(sheet, numRows, numCols) {
   const maxRows = sheet.getMaxRows();
   if (maxRows < numRows) sheet.insertRowsAfter(maxRows, numRows - maxRows);
   const maxCols = sheet.getMaxColumns();
@@ -36,7 +36,7 @@ function ensureSheetSize(sheet, numRows, numCols) {
 }
 
 /** シートを作成またはクリアして2次元配列を書き込む。 */
-function writeGrid(ss, sheetName, grid) {
+function writeGrid_(ss, sheetName, grid) {
   let sheet = ss.getSheetByName(sheetName);
   if (!sheet) sheet = ss.insertSheet(sheetName);
   sheet.clear();
@@ -49,14 +49,14 @@ function writeGrid(ss, sheetName, grid) {
     while (copy.length < width) copy.push('');
     return copy;
   });
-  ensureSheetSize(sheet, normalized.length, width);
+  ensureSheetSize_(sheet, normalized.length, width);
   sheet.getRange(1, 1, normalized.length, width).setValues(normalized);
-  applyHeaderStyle(sheet, width);
+  applyHeaderStyle_(sheet, width);
   return sheet;
 }
 
 /** 1行目を見出しとして装飾し、固定する。 */
-function applyHeaderStyle(sheet, width) {
+function applyHeaderStyle_(sheet, width) {
   if (width < 1) return;
   const header = sheet.getRange(1, 1, 1, width);
   header.setBackground(HEADER_BACKGROUND).setFontColor(HEADER_FONT_COLOR).setFontWeight('bold');
@@ -67,7 +67,7 @@ function applyHeaderStyle(sheet, width) {
  * ロードマップの帯を塗る。marks は 0 起点の {row, col}。
  * marks が外接する矩形を求め、setBackgrounds を1回だけ呼んで塗る（全体制約: セル単位の書き込み禁止）。
  */
-function paintMarks(sheet, marks, color) {
+function paintMarks_(sheet, marks, color) {
   if (!marks || marks.length === 0) return;
   const fillColor = color || ROADMAP_BAND_COLOR;
 
