@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  :root {
+    --line: #dadce0; --ink: #202124; --ink-2: #5f6368;
+    --accent: #1a73e8; --bg: #f8f9fa; --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--ink);
+    font-family: "Helvetica Neue", Arial, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  button {
+    font: inherit; padding: 6px 12px; border: 1px solid var(--line);
+    background: var(--card); border-radius: 4px; cursor: pointer;
+  }
+  button:hover { background: var(--bg); }
+  #message { min-height: 20px; margin-bottom: 12px; font-size: 13px; }
+  #message.error { color: #c5221f; }
+  #message.info { color: var(--ink-2); }
+  #board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; }
+  .column {
+    flex: 1 0 200px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px; min-height: 120px;
+  }
+  .column.over { border-color: var(--accent); background: #e8f0fe; }
+  .column h2 { font-size: 13px; margin: 0 0 8px; color: var(--ink-2); }
+  .count { font-weight: normal; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px; margin-bottom: 8px; cursor: grab; font-size: 13px;
+  }
+  .card:active { cursor: grabbing; }
+  .card.dragging { opacity: 0.4; }
+  .card .id { color: var(--ink-2); font-size: 11px; }
+  .card .title { margin: 2px 0 4px; }
+  .card .meta { color: var(--ink-2); font-size: 11px; }
+  .empty { color: var(--ink-2); font-size: 12px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Scrum ボード</h1>
+  <button id="reload" type="button">最新にする</button>
+</header>
+<div id="message" class="info">読み込んでいます…</div>
+<div id="board"></div>
+
+<script>
+var dragging = null;
+
+function setMessage(text, kind) {
+  var el = document.getElementById('message');
+  el.textContent = text;
+  el.className = kind || 'info';
+}
+
+function render(board) {
+  var root = document.getElementById('board');
+  root.innerHTML = '';
+  board.columns.forEach(function (col) {
+    var div = document.createElement('div');
+    div.className = 'column';
+    div.dataset.status = col.status;
+
+    var h = document.createElement('h2');
+    h.textContent = col.status + ' ';
+    var c = document.createElement('span');
+    c.className = 'count';
+    c.textContent = '(' + col.cards.length + ')';
+    h.appendChild(c);
+    div.appendChild(h);
+
+    if (col.cards.length === 0) {
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'なし';
+      div.appendChild(e);
+    }
+
+    col.cards.forEach(function (card) { div.appendChild(renderCard(card)); });
+
+    div.addEventListener('dragover', function (ev) {
+      ev.preventDefault();
+      div.classList.add('over');
+    });
+    div.addEventListener('dragleave', function () { div.classList.remove('over'); });
+    div.addEventListener('drop', function (ev) {
+      ev.preventDefault();
+      div.classList.remove('over');
+      if (dragging && dragging.status !== col.status) {
+        move(dragging.id, col.status, dragging.updatedAt);
+      }
+    });
+
+    root.appendChild(div);
+  });
+}
+
+function renderCard(card) {
+  var el = document.createElement('div');
+  el.className = 'card';
+  el.draggable = true;
+
+  var id = document.createElement('div');
+  id.className = 'id';
+  id.textContent = card.id;
+  el.appendChild(id);
+
+  var t = document.createElement('div');
+  t.className = 'title';
+  t.textContent = card.title;
+  el.appendChild(t);
+
+  var m = document.createElement('div');
+  m.className = 'meta';
+  var parts = [];
+  if (card.priority) parts.push(card.priority);
+  if (card.size) parts.push(card.size + ' pt');
+  if (card.sprint) parts.push(card.sprint);
+  m.textContent = parts.join(' · ');
+  el.appendChild(m);
+
+  el.addEventListener('dragstart', function () {
+    dragging = {
+      id: card.id,
+      status: el.parentNode.dataset.status,
+      updatedAt: card.updated_at
+    };
+    el.classList.add('dragging');
+  });
+  el.addEventListener('dragend', function () {
+    dragging = null;
+    el.classList.remove('dragging');
+  });
+  return el;
+}
+
+function load() {
+  setMessage('読み込んでいます…', 'info');
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (res.ok) { render(res.board); setMessage('', 'info'); }
+      else { setMessage(res.message, 'error'); }
+    })
+    .withFailureHandler(function (err) { setMessage('読み込みに失敗しました: ' + err.message, 'error'); })
+    .apiGetBoard();
+}
+
+function move(id, newStatus, expectedUpdatedAt) {
+  setMessage(id + ' を ' + newStatus + ' に移しています…', 'info');
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (res.ok) {
+        render(res.board);
+        setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
+      } else {
+        if (res.board) { render(res.board); }
+        setMessage(res.message, 'error');
+      }
+    })
+    .withFailureHandler(function (err) { setMessage('更新に失敗しました: ' + err.message, 'error'); })
+    .apiUpdateStatus(id, newStatus, expectedUpdatedAt);
+}
+
+document.getElementById('reload').addEventListener('click', load);
+load();
+</script>
+</body>
+</html>
