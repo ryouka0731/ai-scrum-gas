@@ -6,11 +6,17 @@
  * 明示的にこの配列へ足すこと。
  */
 
-const WRITABLE_FILES = ['product_backlog.csv'];
+const WRITABLE_FILES = Object.freeze(['product_backlog.csv']);
 
 /** 書き込みを許さない名前なら例外を投げる。scrum/ 直下のファイル名のみ許す。 */
 function assertWritableFileName(name) {
-  const n = name === undefined || name === null ? '' : String(name);
+  // 文字列以外（toString() が呼び出しごとに異なる値を返せるオブジェクト、
+  // String オブジェクト、配列など）は TOCTOU の温床になるため、
+  // プリミティブな文字列以外は無条件に拒否する。
+  if (typeof name !== 'string') {
+    throw new Error('ファイル名は文字列である必要があります。');
+  }
+  const n = name;
   if (n !== n.trim() || n === '') {
     throw new Error('ファイル名が不正です: ' + JSON.stringify(name));
   }
