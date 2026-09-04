@@ -44,6 +44,7 @@ scrum/*.csv  ←────────────────────→ 
 | 人の作業面 | Web アプリのみ。生のシートは触らせない | 競合の発生源を1つに絞る。シートは DB として扱う |
 | 書き戻しの単位 | PBI 1件ごと（行単位） | ファイル全体を書き直すと、ローカルの並行編集を丸ごと潰す |
 | 競合の解決 | `updated_at` による後勝ち + 変更前の値の照合 | CSV に既にある列を使う。照合で「見ていない変更」を検出する |
+| Web アプリから `syncAll_()` を呼べるか | 呼べない（第3段階「コメントをシートに保存」に直撃する制約） | (1) `rebuildAllSheets_` の入口が `SpreadsheetApp.getActiveSpreadsheet()` で、Web アプリ実行にはアクティブなシートの束縛が無い。(2) 仮に動いても `syncAll_` は同じスクリプトロックを `tryLock(1000)` で取りに行き、LockService は再入不可なので `skipped:true` を返して黙って何もしない |
 | コメント・履歴の保存先 | スプレッドシート内のみ。ファイルに戻さない | CSV の列構造を変えない制約を守る。エージェントはコメントを読まない前提 |
 
 ## Drive への書き込み権限
@@ -147,7 +148,7 @@ New | Ready | In Progress | Review | Done
 
 Web アプリの公開範囲は **「同じ組織内のユーザー」** とする（`webapp.access` を `DOMAIN` に設定）。
 
-実行者は **アクセスしているユーザー自身**（`executeAs: USER_ACCESSING`）とする。これにより、誰が変更したかを `Session.getActiveUser()` で取れる。第4段階の変更履歴で使う。
+実行者は **アクセスしているユーザー自身**（`executeAs: USER_ACCESSING`）とする。`executeAs: USER_DEPLOYING` にすると、URL を開けるドメイン内の誰もが管理者の権限で CSV を書けてしまい、Drive 側の権限制御が一切効かなくなる。`USER_ACCESSING` なら書き込みは各自の Drive 権限で弾かれる（閲覧者は書けない）。
 
 個人の Google アカウントでは `DOMAIN` を選べないため、テナントに応じて `setup.js` が調整する。
 
