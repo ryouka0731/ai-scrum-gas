@@ -309,7 +309,7 @@ if (typeof module !== 'undefined') { module.exports = { applyRowUpdate }; }
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計102件
+Expected: PASS — 累計107件
 
 - [ ] **Step 5: コミット**
 
@@ -441,7 +441,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計110件
+Expected: PASS — 累計115件
 
 - [ ] **Step 5: コミット**
 
@@ -549,7 +549,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計117件
+Expected: PASS — 累計122件
 
 - [ ] **Step 5: コミット**
 
@@ -637,7 +637,7 @@ Expected: `JSON OK`
 - [ ] **Step 4: 定数名の衝突が無いことを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計117件（`gas_load.test.js` が単一グローバルスコープでの衝突を検査する）
+Expected: PASS — 累計122件（`gas_load.test.js` が単一グローバルスコープでの衝突を検査する）
 
 - [ ] **Step 5: コミット**
 
@@ -755,7 +755,7 @@ Expected: `確認完了` のみ（`未定義:` が出ないこと）
 - [ ] **Step 4: 定数名の衝突が無いことを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計117件
+Expected: PASS — 累計122件
 
 - [ ] **Step 5: コミット**
 
@@ -1046,7 +1046,7 @@ node --check scripts/setup.js
 npm test 2>&1 | grep -E "^# (tests|pass|fail)"
 grep -c "drive.readonly" docs/setup.md README.md 2>/dev/null || echo "旧スコープの記述なし"
 ```
-Expected: 構文 OK、117件 PASS、旧スコープの記述が残っていないこと
+Expected: 構文 OK、122件 PASS、旧スコープの記述が残っていないこと
 
 - [ ] **Step 6: コミット**
 
@@ -1072,7 +1072,7 @@ git commit -m "docs: Web アプリの導線と Drive 書き込み権限の変更
 npm test
 for f in gas/*.js scripts/*.js; do node --check "$f" || echo "NG: $f"; done
 ```
-Expected: 117件 PASS、`NG:` の出力なし
+Expected: 122件 PASS、`NG:` の出力なし
 
 - [ ] **Step 2: テナント固有の値が含まれていないことを確認する**
 
