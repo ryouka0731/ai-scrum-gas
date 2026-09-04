@@ -25,15 +25,15 @@ function readBacklogText_() {
   return text;
 }
 
-/** scrum/product_backlog.csv を読んでオブジェクト配列にする。 */
-function readBacklogRows_() {
-  return csvToObjects(readBacklogText_());
-}
-
 /** カンバンの内容を返す。 */
 function apiGetBoard() {
   try {
-    return { ok: true, board: buildBoardData(readBacklogRows_()) };
+    // 読み込み時点でヘッダーを検査する。ここで気づかないと、ヘッダーが
+    // BACKLOG_FIELDS と違っていても board は正常に描画され、ドラッグして
+    // 初めてエラーが出る（原因が分からないまま操作を繰り返させてしまう）。
+    const text = readBacklogText_();
+    assertHeaderMatches(text, BACKLOG_FIELDS);
+    return { ok: true, board: buildBoardData(csvToObjects(text)) };
   } catch (e) {
     return { ok: false, message: e.message };
   }
