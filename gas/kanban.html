@@ -37,6 +37,7 @@
   }
   .card:active { cursor: grabbing; }
   .card.dragging { opacity: 0.4; }
+  .card.pending { opacity: 0.6; cursor: default; }
   .card .id { color: var(--ink-2); font-size: 11px; }
   .card .title { margin: 2px 0 4px; }
   .card .meta { color: var(--ink-2); font-size: 11px; }
@@ -53,6 +54,10 @@
 
 <script>
 var dragging = null;
+// 現在描画している board。楽観的更新の基準（元の位置へ戻す先）として保持する。
+var board = null;
+// サーバへ送信中のカード id。応答が返るまで再ドラッグさせない。
+var pendingIds = {};
 
 function setMessage(text, kind) {
   var el = document.getElementById('message');
@@ -60,10 +65,11 @@ function setMessage(text, kind) {
   el.className = kind || 'info';
 }
 
-function render(board) {
+function render(b) {
+  board = b;
   var root = document.getElementById('board');
   root.innerHTML = '';
-  board.columns.forEach(function (col) {
+  b.columns.forEach(function (col) {
     var div = document.createElement('div');
     div.className = 'column';
     div.dataset.status = col.status;
@@ -93,8 +99,8 @@ function render(board) {
     div.addEventListener('drop', function (ev) {
       ev.preventDefault();
       div.classList.remove('over');
-      if (dragging && dragging.status !== col.status) {
-        move(dragging.id, col.status, dragging.updatedAt);
+      if (dragging && dragging.status !== col.status && !pendingIds[dragging.id]) {
+        move(dragging.id, col.status);
       }
     });
 
@@ -104,8 +110,8 @@ function render(board) {
 
 function renderCard(card) {
   var el = document.createElement('div');
-  el.className = 'card';
-  el.draggable = true;
+  el.className = 'card' + (pendingIds[card.id] ? ' pending' : '');
+  el.draggable = !pendingIds[card.id];
 
   var id = document.createElement('div');
   id.className = 'id';
@@ -127,6 +133,7 @@ function renderCard(card) {
   el.appendChild(m);
 
   el.addEventListener('dragstart', function (ev) {
+    if (pendingIds[card.id]) { ev.preventDefault(); return; }
     dragging = {
       id: card.id,
       status: el.parentNode.dataset.status,
@@ -145,6 +152,35 @@ function renderCard(card) {
   return el;
 }
 
+/** board の中から id のカードを探す。見つからなければ null。 */
+function findCard(b, id) {
+  for (var i = 0; i < b.columns.length; i++) {
+    var cards = b.columns[i].cards;
+    for (var j = 0; j < cards.length; j++) {
+      if (cards[j].id === id) return cards[j];
+    }
+  }
+  return null;
+}
+
+/** board を複製し、id のカードを newStatus の列へ移した新しい board を返す（元の board は変えない）。 */
+function boardWithCardMoved(b, id, newStatus) {
+  var next = { columns: b.columns.map(function (col) { return { status: col.status, cards: col.cards.slice() }; }) };
+  var moving = null;
+  for (var i = 0; i < next.columns.length; i++) {
+    var cards = next.columns[i].cards;
+    for (var j = 0; j < cards.length; j++) {
+      if (cards[j].id === id) { moving = cards[j]; cards.splice(j, 1); break; }
+    }
+    if (moving) break;
+  }
+  if (!moving) return next;
+  for (var k = 0; k < next.columns.length; k++) {
+    if (next.columns[k].status === newStatus) { next.columns[k].cards.push(moving); break; }
+  }
+  return next;
+}
+
 function load() {
   setMessage('読み込んでいます…', 'info');
   google.script.run
@@ -156,19 +192,40 @@ function load() {
     .apiGetBoard();
 }
 
-function move(id, newStatus, expectedUpdatedAt) {
+/**
+ * 楽観的更新: ドロップした瞬間にカードを新しい列へ動かして描き直し、
+ * サーバの応答を待たずに見た目を反映する。応答が来たら、
+ * 成功時はサーバが返した board、失敗時は元の位置（競合時はサーバが返す
+ * 最新の board）で描き直す。
+ */
+function move(id, newStatus) {
+  var card = findCard(board, id);
+  if (!card) return;
+  var expectedUpdatedAt = card.updated_at;
+  var boardBeforeDrag = board;
+
+  pendingIds[id] = true;
+  render(boardWithCardMoved(board, id, newStatus));
   setMessage(id + ' を ' + newStatus + ' に移しています…', 'info');
+
   google.script.run
     .withSuccessHandler(function (res) {
+      delete pendingIds[id];
       if (res.ok) {
         render(res.board);
         setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
       } else {
-        if (res.board) { render(res.board); }
+        // res.board があれば競合等でサーバが返した最新の内容、無ければ
+        // 元の位置（ドラッグ前の board）へ戻す。
+        render(res.board || boardBeforeDrag);
         setMessage(res.message, 'error');
       }
     })
-    .withFailureHandler(function (err) { setMessage('更新に失敗しました: ' + err.message, 'error'); })
+    .withFailureHandler(function (err) {
+      delete pendingIds[id];
+      render(boardBeforeDrag);
+      setMessage('更新に失敗しました: ' + err.message, 'error');
+    })
     .apiUpdateStatus(id, newStatus, expectedUpdatedAt);
 }
 
