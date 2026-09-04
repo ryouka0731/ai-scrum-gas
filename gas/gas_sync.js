@@ -164,7 +164,14 @@ function rebuildAllSheets() {
   // --- 配布情報（.published.json） ---
   // 管理者が scripts/publish.js で配布した記録。無い・壊れている場合は null になり、
   // ダッシュボードには「配布日時: （記録なし）」と出る。これ自体が状態を示すため警告は積まない。
-  const published = parsePublished(readTextFile(scrum, '.published.json'));
+  // 読み取り自体が例外を投げても（Drive API の一時エラー等）ダッシュボード・同期ログの
+  // 書き込みを止めないよう、他の読み取り箇所と同じく try/catch で吸収する。
+  let published = null;
+  try {
+    published = parsePublished(readTextFile(scrum, '.published.json'));
+  } catch (e) {
+    published = null;
+  }
 
   // --- ダッシュボードと同期ログ（他シートの結果をまとめるため最後に書く） ---
   try {

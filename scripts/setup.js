@@ -33,8 +33,13 @@ const CLASP_JSON_PATH = path.join(GAS_DIR, '.clasp.json');
 const TITLE = process.argv[2] || 'AI Scrum Board';
 const NPX_BIN = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-// clasp をサブコマンドとその引数の配列で呼ぶ。shell を経由しないため、
-// TITLE にどんな文字列が入ってもコマンドインジェクションにはならない。
+// clasp をサブコマンドとその引数の配列で呼ぶ。POSIX (mac/Linux) では npx を
+// shell を経由せず直接起動するため、TITLE にどんな文字列が入ってもコマンド
+// インジェクションにはならない。Windows では NPX_BIN が npx.cmd になり、
+// spawnSync が .cmd/.bat を実行する際は内部的に cmd.exe を経由する
+// （CVE-2024-27980 のパターン）。TITLE は管理者本人がローカルで渡す引数であり、
+// 現行の Node.js LTS ではこの CVE は修正済みのため実害はないが、Node.js は
+// 常に最新の LTS に保つこと。
 function runClasp(args, { cwd = ROOT_DIR, allowFailure = false } = {}) {
   const result = spawnSync(NPX_BIN, ['--yes', '@google/clasp@3', ...args], {
     cwd,
