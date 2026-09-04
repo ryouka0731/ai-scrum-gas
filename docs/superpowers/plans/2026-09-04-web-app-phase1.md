@@ -22,7 +22,7 @@
 - **Drive への書き込みは `SCRUM_FOLDER_ID` 配下の `scrum/` 直下に限定する。** コード上で親フォルダを検証する
 - テナント固有の値（スプレッドシート ID / スクリプト ID / Drive フォルダ ID / ドメイン名）をコミットしない
 - **Web アプリの公開範囲は組織内に限定する**（`webapp.access` を `DOMAIN`）。実行者はアクセスしているユーザー自身（`executeAs` を `USER_ACCESSING`）
-- 既存の79件のテストを壊さない
+- 既存の81件のテストを壊さない
 
 ## 既存の資産（再利用する）
 
@@ -152,7 +152,7 @@ if (typeof module !== 'undefined') { module.exports = { escapeCsvCell, toCsv }; 
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 既存79件 + 今回11件 = 90件
+Expected: PASS — 既存81件 + 今回11件 = 92件
 
 - [ ] **Step 5: コミット**
 
@@ -309,7 +309,7 @@ if (typeof module !== 'undefined') { module.exports = { applyRowUpdate }; }
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計100件
+Expected: PASS — 累計102件
 
 - [ ] **Step 5: コミット**
 
@@ -441,7 +441,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計108件
+Expected: PASS — 累計110件
 
 - [ ] **Step 5: コミット**
 
@@ -549,7 +549,7 @@ if (typeof module !== 'undefined') {
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計115件
+Expected: PASS — 累計117件
 
 - [ ] **Step 5: コミット**
 
@@ -637,7 +637,7 @@ Expected: `JSON OK`
 - [ ] **Step 4: 定数名の衝突が無いことを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計115件（`gas_load.test.js` が単一グローバルスコープでの衝突を検査する）
+Expected: PASS — 累計117件（`gas_load.test.js` が単一グローバルスコープでの衝突を検査する）
 
 - [ ] **Step 5: コミット**
 
@@ -755,7 +755,7 @@ Expected: `確認完了` のみ（`未定義:` が出ないこと）
 - [ ] **Step 4: 定数名の衝突が無いことを確認する**
 
 Run: `npm test`
-Expected: PASS — 累計115件
+Expected: PASS — 累計117件
 
 - [ ] **Step 5: コミット**
 
@@ -1046,7 +1046,7 @@ node --check scripts/setup.js
 npm test 2>&1 | grep -E "^# (tests|pass|fail)"
 grep -c "drive.readonly" docs/setup.md README.md 2>/dev/null || echo "旧スコープの記述なし"
 ```
-Expected: 構文 OK、115件 PASS、旧スコープの記述が残っていないこと
+Expected: 構文 OK、117件 PASS、旧スコープの記述が残っていないこと
 
 - [ ] **Step 6: コミット**
 
@@ -1072,7 +1072,7 @@ git commit -m "docs: Web アプリの導線と Drive 書き込み権限の変更
 npm test
 for f in gas/*.js scripts/*.js; do node --check "$f" || echo "NG: $f"; done
 ```
-Expected: 115件 PASS、`NG:` の出力なし
+Expected: 117件 PASS、`NG:` の出力なし
 
 - [ ] **Step 2: テナント固有の値が含まれていないことを確認する**
 
