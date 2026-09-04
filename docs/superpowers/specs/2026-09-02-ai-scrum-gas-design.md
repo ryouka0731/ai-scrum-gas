@@ -73,6 +73,9 @@ ai-scrum-gas/
 │   ├── gas_*.js               # DriveApp / SpreadsheetApp 依存の薄い層
 │   └── tests/*.test.js
 ├── scrum/                     # 成果物テンプレート（現行から移植）
+├── scripts/
+│   ├── setup.js              # 管理者用: スプレッドシートと Apps Script プロジェクトを新規作成
+│   └── publish.js            # 管理者用: .claude/ scrum/ CLAUDE.md README.md を Drive 共有フォルダへ配布
 └── docs/
     ├── setup.md               # 管理者向けセットアップ / メンバー向け手順
     └── superpowers/specs/     # 本設計書
@@ -91,7 +94,7 @@ GAS は自動テストが難しい。テスト可能性を確保するため、�
 
 | タブ | データ源 | 内容 |
 |---|---|---|
-| ダッシュボード | 各シートの集約 | 現スプリント、スプリントゴール、PBI 進捗サマリ、最終同期時刻 |
+| ダッシュボード | 各シートの集約 | 現スプリント、スプリントゴール、PBI 進捗サマリ、最終同期時刻、配布日時とコミット（`scrum/.published.json` 由来） |
 | バックログ | `product_backlog.csv` | 全列 + メモ列 |
 | 完了バックログ | `product_backlog_done.csv` | 全列 |
 | カンバン | バックログ | Status（New / Ready / In Progress / Review / Done）を列に展開 |
@@ -180,12 +183,18 @@ Drive 共有フォルダのフォルダ ID をスクリプトプロパティ `SC
 
 ### 管理者（1回のみ）
 
-1. Drive 共有フォルダを作り、`scripts/publish.js` で `.claude/` `scrum/` `CLAUDE.md` `README.md` を配布する
+詳細手順は `docs/setup.md` を正とする。要点のみ示す。
+
+1. Drive 共有フォルダを作り、`node scripts/publish.js "<共有フォルダのパス>"` で
+   `.claude/` `scrum/` `CLAUDE.md` `README.md` を配布する
    （リポジトリ自体は `.git` を含むため Drive の外に置いたままにする）
-2. 共有スプレッドシートを作成する
-3. `clasp login` の後、`gas/.clasp.json.example` を `gas/.clasp.json` にコピーし、スプレッドシートにバインドしたスクリプトの `scriptId` を書いて `clasp push` する
-4. メニュー「AI Scrum」→「設定」でフォルダ ID を登録する
-5. メニュー「AI Scrum」→「トリガーを設定」で30分毎のトリガーを作る
+2. `node scripts/setup.js "AI Scrum Board"` を実行する。未ログインならブラウザでのログイン、
+   スプレッドシートと Apps Script プロジェクトの作成、コードの push までを一括で行う
+3. 作成されたスプレッドシートを手順1の共有フォルダへ移動し、チームへ共有する
+   （マイドライブ直下に作られ、初期状態では未共有のため）
+4. メニュー「AI Scrum」→「設定（Drive フォルダ ID）」で、手順1の共有フォルダの ID を登録する
+   （`scrum` フォルダ自身の ID ではない）
+5. 「自動同期を有効にする（30分毎）」を実行する
 
 ### メンバー
 

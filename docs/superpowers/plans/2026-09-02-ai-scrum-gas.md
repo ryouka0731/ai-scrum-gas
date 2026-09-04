@@ -1302,7 +1302,7 @@ function setFolderId(id) {
  * Drive からスクラム成果物を読む。読み取りのみを行う薄い層。
  */
 
-/** プロジェクトフォルダ配下の scrum フォルダを返す。 */
+/** 共有フォルダ配下の scrum フォルダを返す。 */
 function getScrumFolder() {
   const id = getFolderId();
   if (!id) {
@@ -1765,7 +1765,7 @@ function menuConfigure() {
   const current = getFolderId();
   const response = ui.prompt(
     'Drive フォルダ ID',
-    'scrum フォルダを含むプロジェクトフォルダの ID を入力してください。\n'
+    'scrum フォルダを含む共有フォルダの ID を入力してください（scrum フォルダ自身の ID ではありません）。\n'
       + '現在の設定: ' + (current || '(未設定)'),
     ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() !== ui.Button.OK) return;
@@ -1956,7 +1956,8 @@ console.log(`
      Google ドライブでチームの共有フォルダへ移動し、「共有」からメンバーに
      閲覧権限（メモ列を書いてもらう場合は編集権限）を付けてください
   3. メニュー「AI Scrum」→「設定（Drive フォルダ ID）」で、
-     scrum フォルダを含むプロジェクトフォルダの ID を登録する
+     scrum フォルダを含む共有フォルダの ID を登録する
+     （scrum フォルダ自身の ID ではありません）
   4. 「今すぐ同期」を実行して9枚のシートができることを確認する
      （初回は Drive の読み取りを求める承認ダイアログが出ます）
   5. 「自動同期を有効にする（30分毎）」を実行する

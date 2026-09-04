@@ -41,7 +41,7 @@ function menuConfigure() {
   const current = getFolderId();
   const response = ui.prompt(
     'Drive フォルダ ID',
-    'scrum フォルダを含むプロジェクトフォルダの ID を入力してください。\n'
+    'scrum フォルダを含む共有フォルダの ID を入力してください（scrum フォルダ自身の ID ではありません）。\n'
       + '現在の設定: ' + (current || '(未設定)'),
     ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() !== ui.Button.OK) return;

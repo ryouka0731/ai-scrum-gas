@@ -2,7 +2,7 @@
  * Drive からスクラム成果物を読む。読み取りのみを行う薄い層。
  */
 
-/** プロジェクトフォルダ配下の scrum フォルダを返す。 */
+/** 共有フォルダ配下の scrum フォルダを返す。 */
 function getScrumFolder() {
   const id = getFolderId();
   if (!id) {
