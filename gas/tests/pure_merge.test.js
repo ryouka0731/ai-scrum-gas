@@ -68,3 +68,15 @@ test('changes に updated_at があっても nowText で上書きする', () => 
   const r = applyRowUpdate(rows(), 'PBI-001', { status: 'Ready', updated_at: '1999-01-01' }, '2026-09-01', '2026-09-04');
   assert.equal(r.rows[0].updated_at, '2026-09-04');
 });
+
+test('空の id は中間の空行にマッチせず not_found を返す', () => {
+  const withBlankRow = [
+    { id: 'PBI-001', title: 'A', status: 'New', updated_at: '2026-09-01' },
+    { id: '', title: '', status: '', updated_at: '' },
+    { id: 'PBI-002', title: 'B', status: 'Ready', updated_at: '2026-09-02' },
+  ];
+  const r = applyRowUpdate(withBlankRow, '', { status: 'Done' }, '', '2026-09-04');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not_found');
+  assert.equal(r.current, null);
+});

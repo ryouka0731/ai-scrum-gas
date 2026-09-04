@@ -12,6 +12,8 @@
  * 失敗: { ok: false, reason: 'not_found' | 'conflict', current }
  */
 function applyRowUpdate(rows, id, changes, expectedUpdatedAt, nowText) {
+  if (!String(id || '').trim()) return { ok: false, reason: 'not_found', current: null };
+
   const list = rows || [];
   let index = -1;
   for (let i = 0; i < list.length; i++) {
