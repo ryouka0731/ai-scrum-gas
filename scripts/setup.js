@@ -29,6 +29,7 @@ const fs = require('node:fs');
 const ROOT_DIR = path.join(__dirname, '..');
 const GAS_DIR = path.join(ROOT_DIR, 'gas');
 const CLASP_JSON_PATH = path.join(GAS_DIR, '.clasp.json');
+const APPSSCRIPT_JSON_PATH = path.join(GAS_DIR, 'appsscript.json');
 
 const TITLE = process.argv[2] || 'AI Scrum Board';
 const NPX_BIN = process.platform === 'win32' ? 'npx.cmd' : 'npx';
@@ -80,9 +81,17 @@ if (!alreadyLoggedIn) {
 }
 
 console.log(`==> スプレッドシートと Apps Script プロジェクトを作ります: ${TITLE}`);
+// clasp create はリモート側の（空の）マニフェストでローカルの gas/appsscript.json を
+// 上書きする（clasp の仕様）。timeZone がテナントのデフォルト（Asia/Tokyo とは限らない）
+// に変わり、oauthScopes は丸ごと消える。スコープが無いと push 後に SpreadsheetApp.getUi()
+// や DriveApp が使えずメニュー・同期が動かなくなるため、create の直前に内容を退避しておき、
+// 直後に書き戻す。
+const appsscriptJsonBackup = fs.readFileSync(APPSSCRIPT_JSON_PATH, 'utf8');
 runClasp(['create', '--type', 'sheets', '--title', TITLE, '--rootDir', '.'], {
   cwd: GAS_DIR,
 });
+console.log('==> clasp create が書き換えたマニフェストを復元します');
+fs.writeFileSync(APPSSCRIPT_JSON_PATH, appsscriptJsonBackup);
 
 // .claspignore が効かずに gas/tests/*.test.js まで push されると、GAS 側で
 // require('node:test') が評価されてプロジェクト全体が起動しなくなる。push 前に中身を見せる。
