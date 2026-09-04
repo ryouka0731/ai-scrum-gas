@@ -654,7 +654,7 @@ git commit -m "feat: Drive への書き込み層と Web アプリのマニフェ
 - Create: `gas/web_app.js`
 
 **Interfaces:**
-- Consumes: `getScrumFolder()` / `readTextFile()` (`gas/gas_drive.js`)、`writeScrumFile()` (`gas/gas_drive_write.js`)、`csvToObjects()` (`gas/pure_csv.js`)、`toCsv()` (`gas/pure_csv_write.js`)、`applyRowUpdate()` (`gas/pure_merge.js`)、`buildBoardData()` (`gas/pure_board_view.js`)、`BACKLOG_FIELDS` (`gas/pure_grid_backlog.js`)、`nowText()` (`gas/gas_sync.js`)、`syncAll()` (`gas/gas_sync.js`)
+- Consumes: `getScrumFolder()` / `readTextFile()` (`gas/gas_drive.js`)、`writeScrumFile()` (`gas/gas_drive_write.js`)、`csvToObjects()` (`gas/pure_csv.js`)、`toCsv()` (`gas/pure_csv_write.js`)、`applyRowUpdate()` (`gas/pure_merge.js`)、`buildBoardData()` (`gas/pure_board_view.js`)、`BACKLOG_FIELDS` (`gas/pure_grid_backlog.js`)、`nowText()` (`gas/gas_sync.js`)
 - Produces:
   - `doGet(e): HtmlOutput` — Web アプリの入口
   - `apiGetBoard(): Object` — `{ ok: true, board }` または `{ ok: false, message }`
