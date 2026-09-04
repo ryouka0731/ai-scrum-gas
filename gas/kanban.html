@@ -163,6 +163,17 @@ function findCard(b, id) {
   return null;
 }
 
+/** id のカードが今どの列にいるかを返す。見つからなければ null。 */
+function columnStatusOf(b, id) {
+  for (var i = 0; i < b.columns.length; i++) {
+    var cards = b.columns[i].cards;
+    for (var j = 0; j < cards.length; j++) {
+      if (cards[j].id === id) return b.columns[i].status;
+    }
+  }
+  return null;
+}
+
 /** board を複製し、id のカードを newStatus の列へ移した新しい board を返す（元の board は変えない）。 */
 function boardWithCardMoved(b, id, newStatus) {
   var next = { columns: b.columns.map(function (col) { return { status: col.status, cards: col.cards.slice() }; }) };
@@ -202,7 +213,10 @@ function move(id, newStatus) {
   var card = findCard(board, id);
   if (!card) return;
   var expectedUpdatedAt = card.updated_at;
-  var boardBeforeDrag = board;
+  // 戻すときはドラッグ時点の board 全体ではなく「このカードを元の列へ返す」操作にする。
+  // 全体を復元すると、並行して送信中の別カードの移動まで巻き戻したり、
+  // 取り消したはずの移動を復活させたりする。
+  var originalStatus = columnStatusOf(board, id);
 
   pendingIds[id] = true;
   render(boardWithCardMoved(board, id, newStatus));
@@ -216,14 +230,14 @@ function move(id, newStatus) {
         setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
       } else {
         // res.board があれば競合等でサーバが返した最新の内容、無ければ
-        // 元の位置（ドラッグ前の board）へ戻す。
-        render(res.board || boardBeforeDrag);
+        // 今の画面からこのカードだけを元の列へ戻す。
+        render(res.board || boardWithCardMoved(board, id, originalStatus));
         setMessage(res.message, 'error');
       }
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
-      render(boardBeforeDrag);
+      render(boardWithCardMoved(board, id, originalStatus));
       setMessage('更新に失敗しました: ' + err.message, 'error');
     })
     .apiUpdateStatus(id, newStatus, expectedUpdatedAt);
