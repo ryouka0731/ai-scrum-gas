@@ -56,3 +56,20 @@ test('行が無ければ空の列を5つ返す', () => {
 test('null を渡しても壊れない', () => {
   assert.equal(buildBoardData(null).columns.length, 5);
 });
+
+test('カードの値が入力どおりに転写される', () => {
+  const d = buildBoardData([pbi('PBI-001', 'A', 'Ready')]);
+  const card = d.columns.filter(function (c) { return c.status === 'Ready'; })[0].cards[0];
+  assert.deepEqual(card, {
+    id: 'PBI-001', title: 'A', priority: 'High', size: '3',
+    sprint: 'Sprint 001', updated_at: '2026-09-01',
+  });
+});
+
+test('updated_at が null のとき空文字にする', () => {
+  const row = pbi('PBI-001', 'A', 'Ready');
+  row.updated_at = null;
+  const d = buildBoardData([row]);
+  const card = d.columns.filter(function (c) { return c.status === 'Ready'; })[0].cards[0];
+  assert.equal(card.updated_at, '');
+});

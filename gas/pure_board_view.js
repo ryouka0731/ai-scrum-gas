@@ -29,7 +29,10 @@ function buildBoardData(rows) {
     const s = String(row.status || '').trim();
     const idx = statuses.indexOf(s) === -1 ? 0 : statuses.indexOf(s);
     const card = {};
-    BOARD_CARD_FIELDS.forEach(function (f) { card[f] = String(row[f] === undefined ? '' : row[f]); });
+    BOARD_CARD_FIELDS.forEach(function (f) {
+      const v = row[f];
+      card[f] = (v === undefined || v === null) ? '' : String(v);
+    });
     columns[idx].cards.push(card);
   });
   return { columns: columns };
