@@ -126,12 +126,16 @@ function renderCard(card) {
   m.textContent = parts.join(' · ');
   el.appendChild(m);
 
-  el.addEventListener('dragstart', function () {
+  el.addEventListener('dragstart', function (ev) {
     dragging = {
       id: card.id,
       status: el.parentNode.dataset.status,
       updatedAt: card.updated_at
     };
+    // Firefox は dragstart で dataTransfer にデータをセットしないと
+    // ドラッグ操作自体を開始しない（Chrome / Edge / Safari は不要でも動く）。
+    // 実際の値は dragging（クロージャ）で保持するため、ここでは形式的にセットするだけでよい。
+    ev.dataTransfer.setData('text/plain', card.id);
     el.classList.add('dragging');
   });
   el.addEventListener('dragend', function () {

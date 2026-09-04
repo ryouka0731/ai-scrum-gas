@@ -16,13 +16,39 @@ function doGet(e) {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-/** scrum/product_backlog.csv を読んでオブジェクト配列にする。 */
-function readBacklogRows() {
+/** scrum/product_backlog.csv の生テキストを返す。無ければ例外。 */
+function readBacklogText() {
   const text = readTextFile(getScrumFolder(), BACKLOG_CSV_NAME);
   if (text === null) {
     throw new Error('scrum/' + BACKLOG_CSV_NAME + ' が見つかりません。配布が済んでいるか確認してください。');
   }
-  return csvToObjects(text);
+  return text;
+}
+
+/**
+ * CSV のヘッダーが BACKLOG_FIELDS と一致するかを検査する。書き戻しの直前に必ず呼ぶこと。
+ *
+ * toCsv(rows, BACKLOG_FIELDS) は BACKLOG_FIELDS の列だけを固定の順序で書き出す。
+ * ヘッダーがそれと食い違ったまま書き戻すと、CSV 側にしかない列（この CSV は
+ * ローカルの Claude Code と共同所有のため、将来列が増える可能性がある）が
+ * 気づかないまま消える。列の集合が一致していても順序がずれていれば
+ * toCsv の出力は既存ファイルと食い違うため、順序まで含めた完全一致を要求する。
+ */
+function assertBacklogHeaderMatches(text) {
+  const header = parseCsv(text)[0] || [];
+  const matches = header.length === BACKLOG_FIELDS.length &&
+    header.every(function (name, i) { return name === BACKLOG_FIELDS[i]; });
+  if (!matches) {
+    throw new Error(
+      'CSV の列構成が想定と異なります。管理者に連絡してください。' +
+      '（想定: ' + BACKLOG_FIELDS.join(',') + ' / 実際: ' + header.join(',') + '）'
+    );
+  }
+}
+
+/** scrum/product_backlog.csv を読んでオブジェクト配列にする。 */
+function readBacklogRows() {
+  return csvToObjects(readBacklogText());
 }
 
 /** カンバンの内容を返す。 */
@@ -50,7 +76,11 @@ function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
     }
     // 書き戻しの直前に必ず読み直す。Drive 同期のラグがあるため、
     // 画面を描いた時点のデータをそのまま信じない。
-    const rows = readBacklogRows();
+    const text = readBacklogText();
+    // 未知の列を持つ CSV へ書き戻すと列が消えるため、読み直した直後・
+    // 書き戻しより前に必ずヘッダーを検査する。
+    assertBacklogHeaderMatches(text);
+    const rows = csvToObjects(text);
     const result = applyRowUpdate(rows, id, { status: newStatus }, expectedUpdatedAt, nowText());
 
     if (!result.ok) {
