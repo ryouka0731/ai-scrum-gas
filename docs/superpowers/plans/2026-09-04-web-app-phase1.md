@@ -1,5 +1,14 @@
 # AI Scrum Web アプリ 第1段階 実装計画
 
+> **実行済みの記録:** この計画は実行済みであり、当時の計画内容の記録として残している。
+> 実行後のレビューで、GAS 層の関数19個に `_` サフィックスを付けた
+> （`google.script.run` が全グローバル関数を公開するため）。本文中の
+> `readTextFile` / `getScrumFolder` / `writeScrumFile` / `nowText` などのコード例は
+> 現在のコードでは `_` 付きの名前である。Task 1 の `escapeCsvCell` も、レビューで
+> CRLF 正規化を追加した（`parseCsv` が読み取り時に正規化するため、対称にしないと
+> 往復で値が変わる）。**下のコードブロックは計画当時のまま更新していない。**
+> 現行仕様の真実の源泉は `docs/superpowers/specs/`（この計画ではない）。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 人が GAS の Web アプリからカンバンをドラッグして PBI の状態を変え、その結果を Drive の `product_backlog.csv` へ書き戻せるようにする。
