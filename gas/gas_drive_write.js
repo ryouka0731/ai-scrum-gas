@@ -18,5 +18,12 @@ function writeScrumFile_(name, content) {
   if (it.hasNext()) {
     throw new Error('scrum/' + name + ' が複数あります。Drive の競合コピーを解消してください。');
   }
-  file.setContent(content);
+  try {
+    file.setContent(content);
+  } catch (e) {
+    // 閲覧者権限しか無いとここで DriveApp の英語エラーになる。原因調査に使うため
+    // 元のメッセージは残し、対処を添える。権限エラーが出るのはこの1行だけなので、
+    // 呼び出し側の catch でまとめて案内を付けると他のエラーまで誤誘導する。
+    throw new Error(e.message + '（共有フォルダの編集権限が必要です。管理者に連絡してください）');
+  }
 }

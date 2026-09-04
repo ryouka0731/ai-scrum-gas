@@ -72,10 +72,9 @@ function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
     return { ok: true, board: buildBoardData(result.rows) };
   } catch (e) {
-    // 閲覧者権限しか無い利用者が DriveApp の権限エラーを踏むと英語のまま画面に出るため、
-    // 案内を併記する（原因調査に使うため元のメッセージは消さない）。
-    const message = e.message + ' この操作には共有フォルダの編集権限が必要です。管理者に連絡してください。';
-    return { ok: false, reason: 'error', message: message, board: null };
+    // 権限エラーの案内は writeScrumFile_ が付ける。ここで一律に付けると、
+    // ヘッダー不一致やファイル未検出まで「権限が原因」と誤誘導してしまう。
+    return { ok: false, reason: 'error', message: e.message, board: null };
   } finally {
     lock.releaseLock();
   }
