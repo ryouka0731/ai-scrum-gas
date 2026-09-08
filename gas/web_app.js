@@ -60,7 +60,13 @@ function withBacklogWrite_(mutate) {
 
     const result = mutate(rows);
     if (!result.ok) {
-      return { ok: false, reason: result.reason, message: result.message, board: buildBoardData(rows) };
+      return {
+        ok: false,
+        reason: result.reason,
+        message: result.message,
+        // mutate が board を明示したときはそれに従う（bad_status は null を返す）。
+        board: Object.prototype.hasOwnProperty.call(result, 'board') ? result.board : buildBoardData(rows)
+      };
     }
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
     return { ok: true, board: buildBoardData(result.rows), id: result.id || null };
@@ -95,7 +101,7 @@ function pickEditableFields_(fields) {
 function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
   return withBacklogWrite_(function (rows) {
     if (KANBAN_STATUSES.indexOf(newStatus) === -1) {
-      return { ok: false, reason: 'bad_status', message: '不明なステータスです: ' + newStatus };
+      return { ok: false, reason: 'bad_status', message: '不明なステータスです: ' + newStatus, board: null };
     }
     const r = applyRowUpdate(rows, id, { status: newStatus }, expectedUpdatedAt, nowText_());
     if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
