@@ -145,6 +145,33 @@ function deleteRow(rows, id, expectedUpdatedAt) {
   return { ok: true, rows: next };
 }
 
+/**
+ * 削除した行を元の id / created_at のまま戻す。
+ *
+ * 取り消しで新規作成を使うと ID が変わり、ローカルの Claude Code が残した参照が
+ * 切れる。updated_at だけは戻した時刻にする（戻したことも変更であり、他の人の
+ * 画面から見れば「見ていない変更」になる必要があるため）。
+ */
+function restoreRow(rows, row, allFields, nowText) {
+  const list = rows || [];
+  const src = row || {};
+  const key = String(src.id || '').trim();
+  if (!key) return { ok: false, reason: 'duplicate_id', current: null };
+  for (let i = 0; i < list.length; i++) {
+    if (String(list[i].id || '').trim() === key) {
+      return { ok: false, reason: 'duplicate_id', current: list[i] };
+    }
+  }
+  const back = {};
+  (allFields || []).forEach(function (f) { back[f] = ''; });
+  Object.keys(src).forEach(function (k) {
+    if (Object.prototype.hasOwnProperty.call(back, k)) back[k] = src[k];
+  });
+  back.id = key;
+  back.updated_at = nowText;
+  return { ok: true, rows: list.map(copyRow_).concat([back]) };
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { applyRowUpdate, appendRow, deleteRow, advanceUpdatedAt_, addOneSecondToTimeText_ };
+  module.exports = { applyRowUpdate, appendRow, deleteRow, restoreRow, advanceUpdatedAt_, addOneSecondToTimeText_ };
 }

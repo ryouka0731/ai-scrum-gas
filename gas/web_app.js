@@ -42,7 +42,7 @@ function apiGetBoard() {
 /**
  * 書き戻しを伴う API の共通手順。
  *
- * mutate(rows) は { ok:true, rows, id? } か { ok:false, reason, message } を返すこと。
+ * mutate(rows) は { ok:true, rows, id?, removed? } か { ok:false, reason, message } を返すこと。
  * ロックを取ってから読み直すのは、画面を描いた時点のデータを信じないため
  * （Drive 同期には数秒から数分のラグがある）。
  */
@@ -69,7 +69,12 @@ function withBacklogWrite_(mutate) {
       };
     }
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
-    return { ok: true, board: buildBoardData(result.rows), id: result.id || null };
+    return {
+      ok: true,
+      board: buildBoardData(result.rows),
+      id: result.id || null,
+      removed: result.removed || null
+    };
   } catch (e) {
     return { ok: false, reason: 'error', message: e.message, board: null };
   } finally {
@@ -145,13 +150,33 @@ function apiUpdatePbi(id, fields, expectedUpdatedAt) {
 }
 
 /**
- * PBI を消す。取り消せないため、クライアント側で確認を挟むこと。
- * 「完了」は Done 列への移動で表すので、これは「間違って作った」場合の操作である。
+ * PBI を消す。確認ダイアログは置かず、実行後に取り消せる通知で受ける
+ * （apiRestorePbi）。「完了」は Done 列への移動で表すので、これは
+ * 「間違って作った」場合の操作である。
  */
 function apiDeletePbi(id, expectedUpdatedAt) {
   return withBacklogWrite_(function (rows) {
     const r = deleteRow(rows, id, expectedUpdatedAt);
     if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
+    // 取り消しに使うため、消した行そのものを返す。
+    let removed = null;
+    rows.forEach(function (row) {
+      if (String(row.id || '').trim() === String(id || '').trim()) removed = row;
+    });
+    return { ok: true, rows: r.rows, removed: removed };
+  });
+}
+
+/**
+ * 削除した PBI を戻す。通知の「取り消す」から呼ばれる。
+ * apiCreatePbi ではなくこちらを使うのは、元の id と created_at を保つため。
+ */
+function apiRestorePbi(row) {
+  return withBacklogWrite_(function (rows) {
+    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_());
+    if (!r.ok) {
+      return { ok: false, reason: r.reason, message: 'この PBI は既に存在します。取り消しは要りません。' };
+    }
     return { ok: true, rows: r.rows };
   });
 }
