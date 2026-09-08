@@ -359,6 +359,13 @@ function createHarness(initialColumns) {
     /** 描画済みカードの click を起こす。 */
     openCard: function (id) { fire(cardElement(id), 'click', {}); },
 
+    /** 描画済みカードのタイトルを DOM から読む（内部変数ではなく画面を見るため）。 */
+    cardTitleOf: function (id) {
+      const hit = collect(cardElement(id), function (e) { return e.classList.contains('title'); });
+      if (hit.length !== 1) throw new Error('カード ' + id + ' のタイトルが ' + hit.length + ' 件見つかりました');
+      return hit[0].textContent;
+    },
+
     /** 溜まっている setTimeout をすべて発火させる（時間経過を進める）。 */
     flushTimers: function () {
       const ids = Object.keys(timers).map(Number).sort(function (a, b) { return a - b; });

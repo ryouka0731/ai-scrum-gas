@@ -863,3 +863,104 @@ test('3操作を commit順6 × 到達順6 で回しても、画面がサーバ�
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 競合したあとにパネルから抜け出せること（expectedUpdatedAt の更新）
+// ---------------------------------------------------------------------------
+
+// web_app.js の conflictMessage_ がパネル向けに返す文面。
+const PANEL_SAVE_CONFLICT_MSG = '他の変更が先に入っています。内容を確認し、もう一度保存すると上書きします。';
+const PANEL_DELETE_CONFLICT_MSG =
+  '他の変更が先に入っています。内容を確認し、もう一度削除すると更新後の内容ごと消します。';
+
+/** PBI-001 だけがサーバ側で T2 まで進んだ board。 */
+const SERVER_AHEAD = cols({
+  New: [{ id: 'PBI-001', title: 'A（サーバ側）', updated_at: 'T2' }, CARD_B]
+});
+
+test('編集が競合したあと、もう一度保存すると通る', () => {
+  // panelState.expectedUpdatedAt は openPanel でしか更新されない。競合応答で
+  // 描き直した board へ合わせないと、同じ古い値を送り続けて必ず conflict になる。
+  const h = ready();
+  h.openCard('PBI-001');
+  h.setValue('f-title', 'A かいへん');
+  h.click('panel-save');
+
+  const first = h.calls[h.calls.length - 1];
+  assert.equal(first.method, 'apiUpdatePbi');
+  assert.equal(first.args[2], 'T1', '前提: 開いた時点の updated_at を送っている');
+
+  first.handlers.success({
+    ok: false, reason: 'conflict', message: PANEL_SAVE_CONFLICT_MSG, board: h.boardOf(SERVER_AHEAD)
+  });
+
+  assert.equal(h.hiddenOf('panel'), false, '競合でパネルが閉じた（書きかけが消える）');
+  assert.equal(h.valueOf('f-title'), 'A かいへん', '書きかけの入力が消えた');
+  assert.equal(h.cardTitleOf('PBI-001'), 'A（サーバ側）', '画面が最新の内容になっていない');
+  assert.equal(h.disabledOf('panel-save'), false, '保存ボタンが押せないままになっている');
+
+  h.click('panel-save');
+  const second = h.calls[h.calls.length - 1];
+  assert.equal(second.method, 'apiUpdatePbi');
+  assert.equal(second.args[2], 'T2',
+    '競合のあとも古い updated_at を送っている（何度押しても conflict になり抜け出せない）');
+});
+
+test('削除が競合したあと、もう一度削除すると通る', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.click('panel-delete');
+
+  const first = h.calls[h.calls.length - 1];
+  assert.equal(first.method, 'apiDeletePbi');
+  assert.equal(first.args[1], 'T1');
+
+  first.handlers.success({
+    ok: false, reason: 'conflict', message: PANEL_DELETE_CONFLICT_MSG, board: h.boardOf(SERVER_AHEAD)
+  });
+
+  assert.equal(h.hiddenOf('panel'), false, '競合でパネルが閉じた');
+  assert.equal(h.cardTitleOf('PBI-001'), 'A（サーバ側）', '画面が最新の内容になっていない');
+
+  h.click('panel-delete');
+  const second = h.calls[h.calls.length - 1];
+  assert.equal(second.method, 'apiDeletePbi');
+  assert.equal(second.args[1], 'T2', '競合のあとも古い updated_at を送っている（二度と削除できない）');
+});
+
+test('検証エラーでは競合検出の基準を進めない', () => {
+  // invalid でもサーバは「その時点の board」を返す。ここで基準を進めると、
+  // 他の人の変更を一度も見せないまま次の保存が黙って上書きしてしまう。
+  const h = ready();
+  h.openCard('PBI-001');
+  h.setValue('f-title', '');
+  h.click('panel-save');
+
+  h.calls[h.calls.length - 1].handlers.success({
+    ok: false, reason: 'invalid', message: 'タイトルを入力してください。', board: h.boardOf(SERVER_AHEAD)
+  });
+
+  h.setValue('f-title', 'なおした');
+  h.click('panel-save');
+  assert.equal(h.calls[h.calls.length - 1].args[2], 'T1',
+    '検証エラーで基準が進み、他の変更を一度も見せずに上書きしてしまう');
+});
+
+test('別のパネルへ切り替えたあとの競合応答は、そのパネルの基準を書き換えない', () => {
+  // panelSeq が進んでいれば panelState は別のカードのもの。触ると
+  // 開いているパネルが、送っていないカードの updated_at を送るようになる。
+  const h = ready();
+  h.openCard('PBI-001');
+  h.click('panel-save');
+  const save = h.calls[h.calls.length - 1];
+
+  h.openCard('PBI-002');                 // 応答を待つ間に別のパネルへ切り替える
+  save.handlers.success({
+    ok: false, reason: 'conflict', message: PANEL_SAVE_CONFLICT_MSG, board: h.boardOf(SERVER_AHEAD)
+  });
+
+  h.click('panel-save');
+  const second = h.calls[h.calls.length - 1];
+  assert.equal(second.args[0], 'PBI-002');
+  assert.equal(second.args[2], 'T1', '別のカードの updated_at が混ざった');
+});

@@ -82,9 +82,18 @@ function withBacklogWrite_(mutate) {
   }
 }
 
-/** 競合・不在の定型文。文面を1か所に集める。 */
-function conflictMessage_(reason) {
-  if (reason === 'conflict') return '他の変更が先に入っています。最新の内容に更新しました。';
+/**
+ * 競合・不在の定型文。文面を1か所に集める。
+ *
+ * 競合のあと何をすれば通るかは操作ごとに違うため、retryHint で出し分ける。
+ * ドラッグは操作をやり直せば通る（move() が毎回その時点の updated_at を読み直す）。
+ * パネルは書きかけの内容を保ったまま、もう一度押すと上書きになる。
+ * 「やり直してください」とだけ書くと、実際には効かない手順を案内することになる。
+ */
+function conflictMessage_(reason, retryHint) {
+  if (reason === 'conflict') {
+    return '他の変更が先に入っています。' + (retryHint || '最新の内容に更新しました。');
+  }
   return 'この PBI が見つかりません。最新の内容に更新しました。';
 }
 
@@ -144,7 +153,12 @@ function apiUpdatePbi(id, fields, expectedUpdatedAt) {
     if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
 
     const r = applyRowUpdate(rows, id, picked, expectedUpdatedAt, nowText_());
-    if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
+    if (!r.ok) {
+      return {
+        ok: false, reason: r.reason,
+        message: conflictMessage_(r.reason, '内容を確認し、もう一度保存すると上書きします。')
+      };
+    }
     return { ok: true, rows: r.rows };
   });
 }
@@ -157,7 +171,12 @@ function apiUpdatePbi(id, fields, expectedUpdatedAt) {
 function apiDeletePbi(id, expectedUpdatedAt) {
   return withBacklogWrite_(function (rows) {
     const r = deleteRow(rows, id, expectedUpdatedAt);
-    if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
+    if (!r.ok) {
+      return {
+        ok: false, reason: r.reason,
+        message: conflictMessage_(r.reason, '内容を確認し、もう一度削除すると更新後の内容ごと消します。')
+      };
+    }
     // 取り消しに使うため、消した行そのものを返す。
     let removed = null;
     rows.forEach(function (row) {

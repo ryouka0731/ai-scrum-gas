@@ -596,6 +596,19 @@ function setPanelBusy(busy) {
   document.getElementById('panel-delete').disabled = busy;
 }
 
+/**
+ * 競合のあと、パネルが次に送る updated_at を描き直した board へ合わせる。
+ *
+ * panelState.expectedUpdatedAt は openPanel でしか更新されないため、これが無いと
+ * 同じ古い値を送り続け、何度押しても conflict になってパネルから抜け出せない
+ * （脱出路は「閉じて開き直す」＝書きかけが消える、だけになる）。ドラッグは
+ * move() が毎回その時点の updated_at を読み直すので、この罠はパネルだけにある。
+ */
+function syncPanelExpectedUpdatedAt(id) {
+  var latest = findCard(board, id);
+  if (latest) panelState.expectedUpdatedAt = latest.updated_at;
+}
+
 /** 保存する。panelState.id が null なら新規作成。 */
 function savePanel() {
   var id = panelState.id;
@@ -636,6 +649,9 @@ function savePanel() {
           // ときは board に触らない（他の送信中の反映を巻き戻さないため）。
           else if (trustWholeBoard) render(res.board);
         }
+        // 競合だけは基準を進める。検証エラー等で進めると、次の保存が他の人の
+        // 変更を一度も見せないまま黙って上書きしてしまう。
+        if (mine && id && res.reason === 'conflict') syncPanelExpectedUpdatedAt(id);
         // 別のパネルを開いていると、パネルに出しても本人には届かない。
         if (mine) setPanelMessage(res.message, 'error');
         else setMessage((id || '新規作成') + ': ' + res.message, 'error');
@@ -728,6 +744,8 @@ function deletePbi() {
         // 存在しないカードを元に戻そうとして例外にしない。
         else if (originalCard) render(boardWithCardUpserted(board, originalCard, originalStatus));
         else render(board);
+        // 保存と同じく、競合のあとは基準を進めないと二度と削除できない。
+        if (mine && res.reason === 'conflict') syncPanelExpectedUpdatedAt(id);
         // 別のパネルを開いていると、パネルに出しても本人には届かない。
         if (mine) setPanelMessage(res.message, 'error');
         else setMessage(id + ': ' + res.message, 'error');
