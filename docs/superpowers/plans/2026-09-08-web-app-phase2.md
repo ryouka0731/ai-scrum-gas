@@ -5,8 +5,14 @@
 **Goal:** 人がスプレッドシートを開かずに、Web アプリだけで PBI を作成・編集・削除できるようにする。
 
 **Architecture:** 判断ロジックは `pure_*.js`（GAS API 非依存・node でテスト可能）に置き、`web_app.js` は
-ロック取得・読み直し・ヘッダー検査・書き戻しの薄い層に留める。UI はボードと右スライドの詳細パネルの
-2層構成で、作成と編集は同じパネルを使い回す。
+ロック取得・読み直し・ヘッダー検査・書き戻しの薄い層に留める。UI はボードと詳細パネルの2ペインで、
+**パネルはオーバーレイを持たずモードレス**。作成と編集は同じパネルを使い回す。
+応答の反映は、ドラッグ・作成・編集・削除・取り消しのすべてを
+**「そのカード1枚だけを今の画面に反映する」**に統一する。
+
+**設計の拠りどころ:** UI の判断は社内の登壇資料「SCM 店舗在庫管理領域 UI 改善 設計意図説明資料」の
+設計論に従う。オブジェクト指向 UI（名詞優先）、モードレス、フェイルセーフ（実行確認ではなく
+実行後に取り消せる）、横スクロールを避ける、無関係操作のリスク無化。
 
 **Tech Stack:** Google Apps Script (V8), HTML Service, 素の JavaScript（ES5 相当の書き方）, `node --test`
 
@@ -23,8 +29,10 @@
 - **`google.script.run` はプロジェクト内の全グローバル関数をブラウザへ公開する。** 末尾 `_` の関数だけが
   呼べない。新しく足す GAS 層の内部関数には必ず `_` を付ける。公開してよいのは
   `doGet` / `apiGetBoard` / `apiUpdateStatus` / `apiCreatePbi` / `apiUpdatePbi` / `apiDeletePbi` /
-  `onOpen` / `menuSyncNow` / `menuConfigure` / `menuInstallTrigger` / `menuRemoveTrigger` /
-  `scheduledSync` のみ。純関数層（副作用なし）は対象外。
+  `apiRestorePbi` / `onOpen` / `menuSyncNow` / `menuConfigure` / `menuInstallTrigger` /
+  `menuRemoveTrigger` / `scheduledSync` のみ。純関数層（副作用なし）は対象外。
+- **モーダルを使わない。** 確認ダイアログではなく、実行後に取り消せる通知で受ける。
+- **利用者の操作を止めて競合を避けない。** 競合は「1枚だけ反映する」で技術的に解く。
 - **`function f(){}` を `const f = function(){}` に書き換えない。** トップレベル `const` はグローバル
   解決に乗らず、名前で呼ばれる関数（`doGet` / `api*` / `menu*` / `scheduledSync`）が動かなくなる。
 - **書き戻しの直前に必ず読み直し、`assertHeaderMatches(text, BACKLOG_FIELDS)` を通す。**
@@ -42,13 +50,15 @@
 |---|---|
 | `gas/pure_pbi_id.js`（新規） | 既存の行から次の PBI ID を決める |
 | `gas/pure_pbi_validate.js`（新規） | 入力項目の検証。優先度の語彙を持つ |
-| `gas/pure_merge.js`（変更） | 行集合への追加・削除を足す（既存の更新・競合判定に隣接するため同居させる） |
-| `gas/web_app.js`（変更） | 作成・編集・削除の API。ロック内の共通手順を1つにまとめる |
-| `gas/kanban.html`（変更） | デザイントークン、アイコン、詳細パネル、フォーム |
+| `gas/pure_merge.js`（変更） | 行集合への追加・削除・復元を足す（既存の更新・競合判定に隣接するため同居させる） |
+| `gas/pure_board_view.js`（変更） | カードが説明と受入基準も運ぶようにする |
+| `gas/web_app.js`（変更） | 作成・編集・削除・復元の API。ロック内の共通手順を1つにまとめる |
+| `gas/kanban.html`（変更） | デザイントークン、アイコン、モードレスな詳細パネル、列の追加ボタン、取り消せる通知 |
 | `gas/tests/pure_pbi_id.test.js`（新規） | ID 採番 |
 | `gas/tests/pure_pbi_validate.test.js`（新規） | 入力検証 |
-| `gas/tests/pure_merge.test.js`（変更） | 追加・削除 |
-| `gas/tests/kanban_flow.test.js`（新規） | DOM シムで応答の到達順を検査 |
+| `gas/tests/pure_merge.test.js`（変更） | 追加・削除・復元 |
+| `gas/tests/kanban_harness.js`（新規） | DOM シム本体 |
+| `gas/tests/kanban_flow.test.js`（新規） | 応答の到達順を検査 |
 
 ---
 
@@ -665,15 +675,207 @@ git commit -m "feat: PBI の作成・編集・削除の API を足す"
 
 ---
 
-### Task 5: デザイントークンとカードの刷新
+### Task 4b: 削除の取り消しを支える純関数と API
 
 **Files:**
-- Modify: `gas/kanban.html`（`<style>` と `renderCard` / `render`）
+- Modify: `gas/pure_merge.js`（`deleteRow` の直後）
+- Modify: `gas/web_app.js`（`apiDeletePbi` の直後）
+- Test: `gas/tests/pure_merge.test.js`（末尾に追加）
 
 **Interfaces:**
-- Consumes: 既存の `render(b)` / `renderCard(card)` / `board` / `pendingIds`
-- Produces: `makeIcon(name)` → `SVGElement`（Task 6-8 がボタンで使う）、
-  `ICON_PATHS` に `plus` / `save` / `trash` / `close` / `reload` を持つ
+- Consumes: `copyRow_(row)`（Task 3 で新設済み）, `appendRow` と同じ考え方
+- Produces:
+  - `restoreRow(rows, row, allFields, nowText)` → `{ok:true, rows}` | `{ok:false, reason:'duplicate_id'}`
+  - `apiDeletePbi` の成功応答に `removed`（消した行そのもの）を足す
+  - `apiRestorePbi(row)` → `{ok:true, board}` | `{ok:false, reason, message, board}`
+
+**なぜ要るか:** 削除に確認ダイアログを置かず、実行後に取り消せる通知を出す方針にした
+（モーダルは操作を制限し順序を固定するため避ける）。取り消しで `apiCreatePbi` を使うと
+**ID が変わり**、ローカルの Claude Code が残した参照が切れる。元の `id` と `created_at` を
+保ったまま戻す経路が要る。
+
+- [ ] **Step 1: 失敗するテストを書く**
+
+`gas/tests/pure_merge.test.js` の末尾に追加（先頭の require に `restoreRow` を足すこと）:
+
+```javascript
+test('restoreRow は id と created_at を元のまま戻す', () => {
+  // apiCreatePbi で作り直すと ID が変わり、ローカルの Claude Code が残した参照が切れる。
+  const removed = {
+    id: 'PBI-007', title: 'もどす', description: 'せつめい', priority: 'High',
+    size: '3', status: 'Ready', created_at: '2026-09-01 09:00:00', updated_at: '2026-09-05 10:00:00',
+  };
+  const r = restoreRow([{ id: 'PBI-001', updated_at: 'T1' }], removed, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.ok, true);
+  const back = r.rows[r.rows.length - 1];
+  assert.equal(back.id, 'PBI-007');
+  assert.equal(back.created_at, '2026-09-01 09:00:00', 'created_at が書き換わった');
+  assert.equal(back.title, 'もどす');
+  assert.equal(back.description, 'せつめい');
+});
+
+test('restoreRow は updated_at を戻した時刻にする', () => {
+  // 戻したことも変更なので、他の人の画面から見て「見ていない変更」になる必要がある。
+  const removed = { id: 'PBI-007', title: 'a', created_at: '2026-09-01', updated_at: '2026-09-05' };
+  const r = restoreRow([], removed, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.rows[0].updated_at, '2026-09-08 12:00:00');
+});
+
+test('restoreRow は全ての列を埋め、未知のキーを捨てる', () => {
+  const removed = { id: 'PBI-007', title: 'a', 勝手な列: 'x' };
+  const r = restoreRow([], removed, FIELDS, '2026-09-08 12:00:00');
+  assert.deepEqual(Object.keys(r.rows[0]).sort(), FIELDS.slice().sort());
+  assert.equal(r.rows[0]['勝手な列'], undefined);
+});
+
+test('restoreRow は既に同じ id があれば拒否する', () => {
+  // 通知を2回押した、他の人が同じ ID を起票した、などで二重に増やさない。
+  const list = [{ id: 'PBI-007', updated_at: 'T1' }];
+  const r = restoreRow(list, { id: 'PBI-007', title: 'a' }, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'duplicate_id');
+});
+
+test('restoreRow は元の配列を書き換えない', () => {
+  const list = [{ id: 'PBI-001', updated_at: 'T1' }];
+  restoreRow(list, { id: 'PBI-007', title: 'a' }, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(list.length, 1);
+});
+
+test('restoreRow は id が空なら拒否する', () => {
+  const r = restoreRow([], { title: 'a' }, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'duplicate_id');
+});
+```
+
+- [ ] **Step 2: 失敗を確認する**
+
+Run: `node --test "gas/tests/pure_merge.test.js"`
+Expected: FAIL（`restoreRow is not a function`）
+
+- [ ] **Step 3: 実装する**
+
+`gas/pure_merge.js` の `deleteRow` の直後に追加:
+
+```javascript
+/**
+ * 削除した行を元の id / created_at のまま戻す。
+ *
+ * 取り消しで新規作成を使うと ID が変わり、ローカルの Claude Code が残した参照が
+ * 切れる。updated_at だけは戻した時刻にする（戻したことも変更であり、他の人の
+ * 画面から見れば「見ていない変更」になる必要があるため）。
+ */
+function restoreRow(rows, row, allFields, nowText) {
+  const list = rows || [];
+  const src = row || {};
+  const key = String(src.id || '').trim();
+  if (!key) return { ok: false, reason: 'duplicate_id', current: null };
+  for (let i = 0; i < list.length; i++) {
+    if (String(list[i].id || '').trim() === key) {
+      return { ok: false, reason: 'duplicate_id', current: list[i] };
+    }
+  }
+  const back = {};
+  (allFields || []).forEach(function (f) { back[f] = ''; });
+  Object.keys(src).forEach(function (k) {
+    if (Object.prototype.hasOwnProperty.call(back, k)) back[k] = src[k];
+  });
+  back.id = key;
+  back.updated_at = nowText;
+  return { ok: true, rows: list.map(copyRow_).concat([back]) };
+}
+```
+
+`module.exports` に `restoreRow` を足すこと。
+
+- [ ] **Step 4: `apiDeletePbi` が消した行を返すようにする**
+
+`gas/web_app.js` の `apiDeletePbi` を次に置き換える。`withBacklogWrite_` は
+`result.id` を拾って応答に載せるので、消した行を運ぶには**その仕組みを一般化する**。
+`withBacklogWrite_` の成功時の返り値を次に変える:
+
+```javascript
+    writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
+    return {
+      ok: true,
+      board: buildBoardData(result.rows),
+      id: result.id || null,
+      removed: result.removed || null
+    };
+```
+
+`apiDeletePbi`:
+
+```javascript
+function apiDeletePbi(id, expectedUpdatedAt) {
+  return withBacklogWrite_(function (rows) {
+    const target = null;
+    const r = deleteRow(rows, id, expectedUpdatedAt);
+    if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
+    // 取り消しに使うため、消した行そのものを返す。
+    let removed = null;
+    rows.forEach(function (row) {
+      if (String(row.id || '').trim() === String(id || '').trim()) removed = row;
+    });
+    return { ok: true, rows: r.rows, removed: removed };
+  });
+}
+```
+
+**注意:** 上の `const target = null;` は書かないこと（使わない変数を残さない）。
+`removed` は `deleteRow` を呼ぶ**前**の `rows` から取ること（`r.rows` には既に無い）。
+
+- [ ] **Step 5: `apiRestorePbi` を足す**
+
+`apiDeletePbi` の直後に追加:
+
+```javascript
+/**
+ * 削除した PBI を戻す。通知の「取り消す」から呼ばれる。
+ * apiCreatePbi ではなくこちらを使うのは、元の id と created_at を保つため。
+ */
+function apiRestorePbi(row) {
+  return withBacklogWrite_(function (rows) {
+    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_());
+    if (!r.ok) {
+      return { ok: false, reason: r.reason, message: 'この PBI は既に存在します。取り消しは要りません。' };
+    }
+    return { ok: true, rows: r.rows };
+  });
+}
+```
+
+- [ ] **Step 6: 公開範囲を確認する**
+
+Run: `grep -n '^function ' gas/web_app.js`
+Expected: `_` が付かないのは `doGet` / `apiGetBoard` / `apiUpdateStatus` / `apiCreatePbi` /
+`apiUpdatePbi` / `apiDeletePbi` / `apiRestorePbi` の**7つだけ**。
+
+Run: `node --test "gas/tests/*.test.js"`
+Expected: PASS（167 + 6 = 173 件）
+
+- [ ] **Step 7: コミット**
+
+```bash
+git add gas/pure_merge.js gas/web_app.js gas/tests/pure_merge.test.js
+git commit -m "feat: 削除した PBI を元の ID のまま戻せるようにする"
+```
+
+---
+
+### Task 5: デザイントークン、アイコン、レイアウト
+
+**Files:**
+- Modify: `gas/kanban.html`（`<style>`、`<header>`、`render` / `renderCard`）
+
+**Interfaces:**
+- Consumes: 既存の `render(b)` / `renderCard(card)` / `board` / `pendingIds` / `columnStatusOf(b, id)`
+- Produces: `makeIcon(name)` → `SVGElement`、`fillButton(btn, iconName, label)`、
+  `ICON_PATHS` に `plus` / `save` / `trash` / `close` / `reload` / `undo` を持つ
+
+**設計の拠りどころ:** 横スクロールは一覧性を下げ、操作ステップを増やし、タッチ端末で
+扱いにくい。**幅 900px 未満では列を縦に積む。** 列見出しは残すのでステータスは失われない。
 
 - [ ] **Step 1: トークンを差し替える**
 
@@ -707,7 +909,7 @@ git commit -m "feat: PBI の作成・編集・削除の API を足す"
 
 - [ ] **Step 2: 本文と部品の規則を差し替える**
 
-`body` 以下を次に置き換える。和文は英字前提の行間だと詰まって読みづらいため、
+`body` 以下を次に置き換える。和文は英字前提の行間だと詰まって読みづらいため
 `line-height` を 1.7 にし、わずかに字間を空ける。
 
 ```css
@@ -733,17 +935,23 @@ git commit -m "feat: PBI の作成・編集・削除の API を足す"
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   button.primary:hover { filter: brightness(1.08); }
   button.danger { color: var(--danger); }
-  button.icon-only {
-    padding: var(--sp-1); border-color: transparent; background: transparent;
+  button.icon-only { padding: var(--sp-1); border-color: transparent; background: transparent; }
+  button.add {
+    width: 100%; justify-content: center; color: var(--ink-2);
+    border-style: dashed; background: transparent;
   }
+  button.add:hover { color: var(--accent); border-color: var(--accent); }
+
   #message { min-height: 22px; margin-bottom: var(--sp-3); font-size: 13px; white-space: pre-line; }
   #message.error { color: var(--danger); }
   #message.info { color: var(--ink-2); }
 
-  #board { display: flex; gap: var(--sp-4); align-items: flex-start; overflow-x: auto; padding-bottom: var(--sp-3); }
-  .column { flex: 1 0 240px; min-width: 240px; }
+  /* 盤面とパネルを横に並べる。パネルは覆いかぶさらない（モードレス） */
+  #main { display: flex; gap: var(--sp-4); align-items: flex-start; }
+  #board { display: flex; gap: var(--sp-4); align-items: flex-start; flex: 1; min-width: 0; }
+  .column { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
   .column > h2 {
-    font-size: 12px; margin: 0 0 var(--sp-3); color: var(--ink-2);
+    font-size: 12px; margin: 0; color: var(--ink-2);
     letter-spacing: .06em; display: flex; align-items: center; gap: var(--sp-2);
   }
   .count {
@@ -751,8 +959,8 @@ git commit -m "feat: PBI の作成・編集・削除の API を足す"
     border: 1px solid var(--line); border-radius: 999px; padding: 0 var(--sp-2); font-size: 11px;
   }
   .dropzone {
-    background: transparent; border: 1px dashed transparent; border-radius: var(--radius);
-    padding: var(--sp-1); min-height: 96px;
+    border: 1px dashed transparent; border-radius: var(--radius);
+    padding: var(--sp-1); min-height: 72px;
   }
   .dropzone.over { border-color: var(--accent); background: var(--card-2); }
 
@@ -766,7 +974,8 @@ git commit -m "feat: PBI の作成・編集・削除の API を足す"
   .card:active { cursor: grabbing; }
   .card.dragging { opacity: .4; }
   .card.pending { opacity: .55; cursor: default; }
-  .card .prio { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: 11px; color: var(--ink-2); }
+  .card.selected { border-color: var(--accent); box-shadow: var(--shadow-2); }
+  .card .prio { display: flex; align-items: center; gap: var(--sp-2); font-size: 11px; color: var(--ink-2); }
   .card .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
   .card .title { margin: var(--sp-2) 0 var(--sp-3); color: var(--ink); }
   .card .meta {
@@ -774,13 +983,21 @@ git commit -m "feat: PBI の作成・編集・削除の API を足す"
     border-top: 1px solid var(--line); padding-top: var(--sp-2);
   }
   .empty { color: var(--ink-3); font-size: 12px; padding: var(--sp-3) var(--sp-2); }
+
+  /* 狭い画面では列を縦に積む。横スクロールは一覧性を下げ、タッチで扱いにくい */
+  @media (max-width: 900px) {
+    body { padding: var(--sp-3); }
+    #main { flex-direction: column; }
+    #board { flex-direction: column; width: 100%; }
+    .column { width: 100%; }
+  }
 ```
 
 - [ ] **Step 3: アイコンを足す**
 
-`<script>` の先頭（`var dragging = null;` の直前）に追加。
-`innerHTML` を使わず `createElementNS` で組み立てる。ユーザー由来の文字列を
-`innerHTML` に入れない方針を、アイコンでも崩さないため。
+`<script>` の先頭（`var dragging = null;` の直前）に追加。`innerHTML` を使わず
+`createElementNS` で組み立てる（ユーザー由来の文字列を `innerHTML` に入れない方針を
+アイコンでも崩さないため）。
 
 ```javascript
 var SVG_NS = 'http://www.w3.org/2000/svg';
@@ -790,7 +1007,8 @@ var ICON_PATHS = {
            'M5.5 3v3.2h4.2V3', 'M5.5 13V9.6h5V13'],
   trash:  ['M2.8 4.4h10.4', 'M6.4 4.4V2.9h3.2v1.5', 'M4.2 4.4 4.8 13.2h6.4l.6-8.8'],
   close:  ['M4 4l8 8', 'M12 4l-8 8'],
-  reload: ['M13 8a5 5 0 1 1-1.7-3.75', 'M13.2 2v3.1h-3.1']
+  reload: ['M13 8a5 5 0 1 1-1.7-3.75', 'M13.2 2v3.1h-3.1'],
+  undo:   ['M3.2 7.2h7a3 3 0 0 1 0 6H7', 'M6 4.4 3.2 7.2 6 10']
 };
 
 /** 16px のインライン SVG アイコンを作る。色は文字色に追従する。 */
@@ -823,25 +1041,82 @@ function fillButton(btn, iconName, label) {
 }
 ```
 
-- [ ] **Step 4: ヘッダーとカードの組み立てを差し替える**
+- [ ] **Step 4: 骨組みを差し替える**
 
-`<body>` の `<header>` を次に置き換える:
+`<body>` の `<header>` と `<div id="board"></div>` を次に置き換える。
+**ヘッダーに「＋新規」は置かない**（作成は列から生む）。
 
 ```html
 <header>
   <h1>AI Scrum ボード</h1>
   <span class="spacer"></span>
-  <button id="create" class="primary" type="button"></button>
   <button id="reload" type="button"></button>
 </header>
+<div id="message" class="info">読み込んでいます…</div>
+<div id="main">
+  <div id="board"></div>
+</div>
 ```
 
-`<script>` の末尾（`document.getElementById('reload').addEventListener(...)` の付近）に:
+（既存の `<div id="message">` が `<header>` の直後にある場合は、上の並びに合わせること。）
+
+`<script>` の末尾に:
 
 ```javascript
 fillButton(document.getElementById('reload'), 'reload', '最新にする');
-fillButton(document.getElementById('create'), 'plus', '新規');
 ```
+
+- [ ] **Step 5: 列とカードの組み立てを差し替える**
+
+`render(b)` の列を組み立てる部分を次の形にする。**各列の下端に「＋」を置く**
+（`onAddClick` は Task 7 で実装する。ここでは何もしない関数を置く）。
+
+```javascript
+function renderColumn(col) {
+  var div = document.createElement('div');
+  div.className = 'column';
+  div.dataset.status = col.status;
+
+  var h = document.createElement('h2');
+  var name = document.createElement('span');
+  name.textContent = col.status;
+  h.appendChild(name);
+  var count = document.createElement('span');
+  count.className = 'count';
+  count.textContent = String(col.cards.length);
+  h.appendChild(count);
+  div.appendChild(h);
+
+  var zone = document.createElement('div');
+  zone.className = 'dropzone';
+  zone.dataset.status = col.status;
+  if (col.cards.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'なし';
+    zone.appendChild(empty);
+  }
+  col.cards.forEach(function (card) { zone.appendChild(renderCard(card)); });
+  // ドロップ枠の付け外しはこの要素で行う（列見出しにはかけない）
+  wireDropzone(zone, col.status);
+  div.appendChild(zone);
+
+  var add = document.createElement('button');
+  add.className = 'add';
+  add.type = 'button';
+  fillButton(add, 'plus', '追加');
+  add.addEventListener('click', function () { onAddClick(col.status); });
+  div.appendChild(add);
+  return div;
+}
+
+/** Task 7 で中身を入れる。 */
+function onAddClick(status) {}
+```
+
+`wireDropzone(zone, status)` は、現行の `render` にある `dragover` / `dragleave` / `drop` の
+処理をそのまま移したもの。**現行の実装を正とし、意味を変えないこと**
+（第1段階で応答の到達順の不具合を直した際の作りが入っている）。
 
 `renderCard(card)` を次に置き換える。優先度は色だけに意味を持たせず、必ず文字を併記する
 （色覚特性により色の差が読み取れない場合がある）:
@@ -866,7 +1141,6 @@ function renderCard(card) {
   idText.style.marginLeft = 'auto';
   idText.textContent = card.id;
   prio.appendChild(idText);
-  prio.style.display = 'flex';
   el.appendChild(prio);
 
   var title = document.createElement('div');
@@ -899,66 +1173,48 @@ function renderCard(card) {
 }
 ```
 
-**注意:** 既存の `renderCard` の `dragstart` / `dragend` の中身と、`dragging` に入れる形を
-今のコードから正確に引き継ぐこと。上は現行と同じ意味になるよう書いてあるが、
-差異があれば**現行の実装を正とする**（第1段階で応答の到達順の不具合を直した際の作りが入っている）。
+**注意:** `dragstart` / `dragend` の中身と `dragging` に入れる形は、**現行の実装から
+正確に引き継ぐこと**。上は現行と同じ意味になるよう書いてあるが、差異があれば現行を正とする。
 
-`render(b)` の列の組み立てで、カードを入れる箇所を `.dropzone` の `div` で包み、
-`over` クラスの付け外しをその要素に移すこと（列の見出しにドロップ枠がかからないようにする）。
-
-- [ ] **Step 5: 見た目と回帰を確認する**
+- [ ] **Step 6: 確認してコミット**
 
 Run: `node --test "gas/tests/*.test.js"`
-Expected: PASS（167 件）
+Expected: PASS（173 件）
 
-Run:
-```bash
-grep -c 'innerHTML' gas/kanban.html
-```
+Run: `grep -c 'innerHTML' gas/kanban.html`
 Expected: `1`（`root.innerHTML = ''` のクリアのみ）
-
-- [ ] **Step 6: コミット**
 
 ```bash
 git add gas/kanban.html
-git commit -m "feat: デザイントークンとアイコンを入れ、カードを作り直す"
+git commit -m "feat: デザイントークンとアイコンを入れ、狭い画面で列を畳む"
 ```
 
 ---
 
-### Task 6: 詳細パネル（表示と編集）
+### Task 6: 詳細パネル（モードレス）と1枚単位の反映
 
 **Files:**
-- Modify: `gas/kanban.html`
+- Modify: `gas/pure_board_view.js`, `gas/tests/pure_board_view.test.js`, `gas/kanban.html`
 
 **Interfaces:**
-- Consumes: `makeIcon(name)`, `fillButton(btn, iconName, label)`, `board`, `pendingIds`,
-  `columnStatusOf(b, id)`, `findCard(b, id)`, `render(b)`, `setMessage(text, kind)`
-- Produces: `openPanel(id)` / `closePanel()` / `panelState`（`{ id, expectedUpdatedAt }`。
-  `id` が `null` なら新規作成モード。Task 7 が使う）
+- Consumes: `makeIcon` / `fillButton` / `board` / `pendingIds` / `columnStatusOf(b, id)` /
+  `findCard(b, id)` / `render(b)` / `setMessage(text, kind)` / 既存の `settleOverlap()` /
+  `boardWithCardMoved(b, id, newStatus)` / `boardWithCardRemoved(b, id)`
+- Produces:
+  - `openPanel(id, presetStatus)` / `closePanel()` / `panelState`（`{ id, expectedUpdatedAt, status }`。
+    `id` が `null` なら新規作成モード）
+  - `mergeOneCard(current, serverBoard, id)` → 新しい board（Task 7・8 が使う）
+  - `boardWithCardUpserted(b, card, status)` → 新しい board
 
-**設計上の要点（ここを外すと第1段階で直した不具合が再発する）:**
+**設計の拠りどころ（ここを外すと第1段階で直した不具合が再発する）:**
 
-パネルの保存・作成・削除は、応答が返ったら `render(res.board)` でサーバの board を
-そのまま描く。**これはドラッグの送信中だと壊れる。** 応答が運ぶ board はサーバが
-その要求を処理した時点のもので、後から確定したドラッグの移動を含まないためである。
+当初、パネルの操作は「1枚のカードの位置」では表せないと考え、オーバーレイを敷いて
+送信中はパネルを開かせない設計にしていた。**これは誤りだった。** 作成・編集・削除は
+いずれも**ちょうど1枚のカードだけ**を変える。応答の board に写る他のカードは、
+サーバがその要求を処理した時点の古い文脈であり、無視してよい。
 
-第1段階では、送信が重なった batch で board 全体を信じない仕組み
-（`settleOverlap` / `applyServerBoard`）を入れてこれを塞いだ。しかしパネルの操作は
-1枚のカードの位置だけでは表せない（作成は行が増え、削除は行が減り、編集はタイトル等も変わる）
-ため、同じ仕組みには載らない。
-
-**そこで、送信中の要求が1つでもあればパネルを開かせない。** ドラッグ中はオーバーレイが
-無いので、ドラッグの応答を待っている間に「＋新規」やカードのクリックが起こりうる。
-逆にパネルが開いている間はオーバーレイが盤面を覆うので、新しいドラッグは始められない。
-この2つが揃うと、**パネルの操作とドラッグは決して重ならない**ため、`render(res.board)`
-をそのまま使ってよくなる。待ち時間は1秒前後で、利用者への影響は小さい。
-
-**注意:** カードの `card` オブジェクトは `BOARD_CARD_FIELDS`（`id` / `title` / `priority` /
-`size` / `sprint` / `updated_at`）しか持たない。**説明と受入基準は board に入っていない。**
-パネルで編集するにはこの2項目が要るので、`gas/pure_board_view.js` の `BOARD_CARD_FIELDS` に
-`description` と `acceptance_criteria` を足すこと。あわせて
-`gas/tests/pure_board_view.test.js` の期待値を更新する。
+**すべての操作を「そのカードだけを今の画面に反映する」に統一する。** これにより
+オーバーレイも開閉の制限も要らなくなり、モードレスにできる。
 
 - [ ] **Step 1: board が説明と受入基準を運ぶようにする（失敗するテストから）**
 
@@ -988,21 +1244,51 @@ const BOARD_CARD_FIELDS = [
 ];
 ```
 
-Run: `node --test "gas/tests/*.test.js"` → PASS（168 件）
+Run: `node --test "gas/tests/*.test.js"` → PASS（174 件）
 
-- [ ] **Step 2: パネルの CSS を足す**
+- [ ] **Step 2: 1枚単位の反映を実装する**
 
-`<style>` の末尾に追加:
+`gas/kanban.html` の `boardWithCardRemoved` の直後に追加:
+
+```javascript
+/** board を複製し、card を status の列に置いた新しい board を返す（同じ id が居れば置き換える）。 */
+function boardWithCardUpserted(b, card, status) {
+  var removed = boardWithCardRemoved(b, card.id);
+  var next = { columns: removed.columns.map(function (col) {
+    return { status: col.status, cards: col.cards.slice() };
+  }) };
+  for (var i = 0; i < next.columns.length; i++) {
+    if (next.columns[i].status === status) { next.columns[i].cards.push(card); return next; }
+  }
+  // 行き先の列が無い（未知のステータス）ときは、消したままにせず元に戻す。
+  return b;
+}
+
+/**
+ * 応答が運ぶ board から、そのカード1枚だけを今の画面へ反映する。
+ *
+ * 応答の board は「サーバがその要求を処理した時点」のもので、後から確定した
+ * 別カードの移動を含まない。到達順は保証されないため、全体を信じると
+ * 取り消したはずの移動が復活する。変わったのは常にこの1枚だけである。
+ */
+function mergeOneCard(current, serverBoard, id) {
+  var to = columnStatusOf(serverBoard, id);
+  var card = findCard(serverBoard, id);
+  if (to === null || !card) return boardWithCardRemoved(current, id);
+  return boardWithCardUpserted(current, card, to);
+}
+```
+
+- [ ] **Step 3: パネルの CSS を足す**
+
+`<style>` の末尾に追加。**オーバーレイは作らない。**
 
 ```css
-  #overlay {
-    position: fixed; inset: 0; background: rgba(16,24,40,.35);
-  }
   #panel {
-    position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw);
-    background: var(--card); border-left: 1px solid var(--line);
-    box-shadow: var(--shadow-2); padding: var(--sp-5);
-    overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-4);
+    flex: 0 0 380px; align-self: stretch;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow-1); padding: var(--sp-4);
+    display: flex; flex-direction: column; gap: var(--sp-3);
   }
   #panel h2 { font-size: 15px; margin: 0; }
   .panel-head { display: flex; align-items: center; gap: var(--sp-3); }
@@ -1015,71 +1301,73 @@ Run: `node --test "gas/tests/*.test.js"` → PASS（168 件）
   .field input:focus, .field textarea:focus, .field select:focus {
     outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent;
   }
-  .field textarea { min-height: 80px; resize: vertical; }
+  .field textarea { min-height: 76px; resize: vertical; }
   .field .hint { font-size: 11px; color: var(--ink-3); }
   .row { display: flex; gap: var(--sp-3); }
-  .row > .field { flex: 1; }
-  .panel-foot { display: flex; gap: var(--sp-3); align-items: center; margin-top: auto; padding-top: var(--sp-4); }
+  .row > .field { flex: 1; min-width: 0; }
+  .panel-foot { display: flex; gap: var(--sp-3); align-items: center; margin-top: auto; padding-top: var(--sp-3); }
   .panel-foot .spacer { flex: 1; }
   #panel-message { font-size: 12px; min-height: 18px; white-space: pre-line; }
   #panel-message.error { color: var(--danger); }
+  @media (max-width: 900px) {
+    #panel { flex: 1 1 auto; width: 100%; }
+  }
 ```
 
-- [ ] **Step 3: パネルの骨組みを足す**
+- [ ] **Step 4: パネルの骨組みを足す**
 
-`<body>` の `<div id="board"></div>` の直後に追加。`hidden` で隠しておく:
+`<div id="main">` の中、`<div id="board"></div>` の**直後**に置く:
 
 ```html
-<div id="overlay" hidden></div>
-<aside id="panel" hidden aria-label="PBI の詳細">
-  <div class="panel-head">
-    <h2 id="panel-title">PBI</h2>
-    <span class="spacer"></span>
-    <button id="panel-close" class="icon-only" type="button" aria-label="閉じる"></button>
-  </div>
-  <div class="field">
-    <label for="f-title">タイトル</label>
-    <input id="f-title" type="text">
-  </div>
-  <div class="field">
-    <label for="f-description">説明</label>
-    <textarea id="f-description"></textarea>
-  </div>
-  <div class="field">
-    <label for="f-acceptance">受入基準</label>
-    <textarea id="f-acceptance"></textarea>
-    <span class="hint">セミコロン（;）で区切ります</span>
-  </div>
-  <div class="row">
-    <div class="field">
-      <label for="f-status">ステータス</label>
-      <select id="f-status"></select>
+  <aside id="panel" hidden aria-label="PBI の詳細">
+    <div class="panel-head">
+      <h2 id="panel-title">PBI</h2>
+      <span class="spacer"></span>
+      <button id="panel-close" class="icon-only" type="button" aria-label="閉じる"></button>
     </div>
     <div class="field">
-      <label for="f-priority">優先度</label>
-      <select id="f-priority"></select>
-    </div>
-  </div>
-  <div class="row">
-    <div class="field">
-      <label for="f-size">サイズ</label>
-      <input id="f-size" type="text" inputmode="numeric">
+      <label for="f-title">タイトル</label>
+      <input id="f-title" type="text">
     </div>
     <div class="field">
-      <label for="f-sprint">スプリント</label>
-      <input id="f-sprint" type="text">
+      <label for="f-description">説明</label>
+      <textarea id="f-description"></textarea>
     </div>
-  </div>
-  <div id="panel-message" class="info"></div>
-  <div class="panel-foot">
-    <button id="panel-save" class="primary" type="button"></button>
-    <span class="spacer"></span>
-    <button id="panel-delete" class="danger" type="button"></button>
-  </div>
-</aside>
+    <div class="field">
+      <label for="f-acceptance">受入基準</label>
+      <textarea id="f-acceptance"></textarea>
+      <span class="hint">セミコロン（;）で区切ります</span>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-status">ステータス</label>
+        <select id="f-status"></select>
+      </div>
+      <div class="field">
+        <label for="f-priority">優先度</label>
+        <select id="f-priority"></select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-size">サイズ</label>
+        <input id="f-size" type="text" inputmode="numeric">
+      </div>
+      <div class="field">
+        <label for="f-sprint">スプリント</label>
+        <input id="f-sprint" type="text">
+      </div>
+    </div>
+    <div id="panel-message" class="info"></div>
+    <div class="panel-foot">
+      <button id="panel-save" class="primary" type="button"></button>
+      <span class="spacer"></span>
+      <button id="panel-delete" class="danger" type="button"></button>
+    </div>
+  </aside>
 ```
 
-- [ ] **Step 4: パネルの開閉と保存を実装する**
+- [ ] **Step 5: パネルの開閉と保存を実装する**
 
 `<script>` の `load()` の直前に追加:
 
@@ -1087,12 +1375,11 @@ Run: `node --test "gas/tests/*.test.js"` → PASS（168 件）
 var STATUS_OPTIONS = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 var PRIORITY_OPTIONS = ['Critical', 'High', 'Medium', 'Low'];
 
-// id が null なら新規作成モード。
-var panelState = { id: null, expectedUpdatedAt: '' };
+// id が null なら新規作成モード。status は新規作成時の初期ステータス。
+var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0] };
 
-function fillSelect(el, values, includeBlank) {
+function fillSelect(el, values) {
   el.innerHTML = '';
-  if (includeBlank) el.appendChild(document.createElement('option'));
   values.forEach(function (v) {
     var o = document.createElement('option');
     o.value = v;
@@ -1129,29 +1416,25 @@ function writeForm(card, status) {
   document.getElementById('f-sprint').value = (card && card.sprint) || '';
 }
 
-function openPanel(id) {
-  // 送信中のドラッグがあるうちは開かせない。パネルの応答は board 全体を
-  // 差し替えるため、後から返るドラッグの結果と食い違う。
-  if (Object.keys(pendingIds).length > 0) {
-    setMessage('カードの移動を反映しています。少し待ってからもう一度お試しください。', 'info');
-    return;
-  }
+/** id が null なら新規作成。presetStatus は新規作成時の初期ステータス。 */
+function openPanel(id, presetStatus) {
   var card = id ? findCard(board, id) : null;
   if (id && !card) return;
-  panelState = { id: id, expectedUpdatedAt: card ? card.updated_at : '' };
+  var status = id ? columnStatusOf(board, id) : (presetStatus || STATUS_OPTIONS[0]);
+  panelState = { id: id, expectedUpdatedAt: card ? card.updated_at : '', status: status };
   document.getElementById('panel-title').textContent = id ? id : '新しい PBI';
   document.getElementById('panel-delete').hidden = !id;
-  writeForm(card, id ? columnStatusOf(board, id) : STATUS_OPTIONS[0]);
+  writeForm(card, status);
   setPanelMessage('', 'info');
-  document.getElementById('overlay').hidden = false;
   document.getElementById('panel').hidden = false;
+  render(board);   // 選択中のカードに印を付ける
   document.getElementById('f-title').focus();
 }
 
 function closePanel() {
   document.getElementById('panel').hidden = true;
-  document.getElementById('overlay').hidden = true;
-  panelState = { id: null, expectedUpdatedAt: '' };
+  panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0] };
+  render(board);
 }
 
 function setPanelBusy(busy) {
@@ -1159,85 +1442,115 @@ function setPanelBusy(busy) {
   document.getElementById('panel-delete').disabled = busy;
 }
 
-/** 保存する。新規作成は Task 7 で足す。 */
+/** 保存する。新規作成の分岐は Task 7 で足す。 */
 function savePanel() {
   var id = panelState.id;
   if (!id) return;
   setPanelBusy(true);
   setPanelMessage('保存しています…', 'info');
+  var trustWholeBoard = null;
+  pendingIds[id] = true;
+  if (Object.keys(pendingIds).length > 1) overlapped = true;
+
   google.script.run
     .withSuccessHandler(function (res) {
       setPanelBusy(false);
+      delete pendingIds[id];
+      trustWholeBoard = settleOverlap();
       if (res.ok) {
-        render(res.board);
+        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         closePanel();
         setMessage(id + ' を保存しました。', 'info');
       } else {
-        if (res.board) render(res.board);
+        // 検証エラーではパネルを閉じない。閉じると入力が消える。
+        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        else render(board);
         setPanelMessage(res.message, 'error');
       }
     })
     .withFailureHandler(function (err) {
       setPanelBusy(false);
+      delete pendingIds[id];
+      settleOverlap();
+      render(board);
       setPanelMessage('保存に失敗しました: ' + err.message, 'error');
     })
     .apiUpdatePbi(id, readForm(), panelState.expectedUpdatedAt);
 }
 ```
 
-**注意:** `fillSelect` は `el.innerHTML = ''` を使う（クリアのみ）。選択肢は
-`createElement('option')` と `textContent` で作ること。
-
-- [ ] **Step 5: 配線する**
-
-`<script>` の末尾（`fillButton(...)` の付近）に追加:
+`renderCard` に、開いているカードへ印を付ける行を足す（`el.className` の組み立て）:
 
 ```javascript
-fillSelect(document.getElementById('f-status'), STATUS_OPTIONS, false);
-fillSelect(document.getElementById('f-priority'), PRIORITY_OPTIONS, false);
+  el.className = 'card' + (pendingIds[card.id] ? ' pending' : '')
+    + (panelState.id === card.id ? ' selected' : '');
+```
+
+- [ ] **Step 6: 配線する**
+
+`<script>` の末尾に追加:
+
+```javascript
+fillSelect(document.getElementById('f-status'), STATUS_OPTIONS);
+fillSelect(document.getElementById('f-priority'), PRIORITY_OPTIONS);
 document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
 document.getElementById('panel-close').addEventListener('click', closePanel);
-document.getElementById('overlay').addEventListener('click', closePanel);
 document.getElementById('panel-save').addEventListener('click', savePanel);
 document.addEventListener('keydown', function (ev) {
   if (ev.key === 'Escape' && !document.getElementById('panel').hidden) closePanel();
 });
 ```
 
-`renderCard` の末尾（`return el;` の直前）にカードのクリックを足す:
+`renderCard` の `return el;` の直前にカードのクリックを足す:
 
 ```javascript
   el.addEventListener('click', function () {
     if (pendingIds[card.id]) return;
-    openPanel(card.id);
+    openPanel(card.id, null);
   });
 ```
 
-- [ ] **Step 6: 確認してコミット**
+- [ ] **Step 7: 確認してコミット**
 
 Run: `node --test "gas/tests/*.test.js"`
-Expected: PASS（168 件）
+Expected: PASS（174 件）
+
+Run: `grep -c 'innerHTML' gas/kanban.html`
+Expected: `2`（`root.innerHTML = ''` と `fillSelect` のクリアのみ）
 
 ```bash
 git add gas/kanban.html gas/pure_board_view.js gas/tests/pure_board_view.test.js
-git commit -m "feat: 詳細パネルで PBI を編集できるようにする"
+git commit -m "feat: モードレスな詳細パネルで PBI を編集できるようにする"
 ```
 
 ---
 
-### Task 7: 新規作成
+### Task 7: 列から新規作成する
 
 **Files:**
 - Modify: `gas/kanban.html`
 
 **Interfaces:**
-- Consumes: `openPanel(id)`（`null` で新規モード）, `readForm()`, `setPanelBusy(busy)`,
-  `setPanelMessage(text, kind)`, `closePanel()`, `render(b)`, `setMessage(text, kind)`
+- Consumes: `openPanel(id, presetStatus)` / `readForm()` / `panelState` / `setPanelBusy` /
+  `setPanelMessage` / `closePanel` / `render` / `setMessage` / `mergeOneCard` / `settleOverlap`
 - Produces: なし
 
-- [ ] **Step 1: 保存を作成にも対応させる**
+**設計の拠りどころ:** 作成の起点をヘッダーに置くと動詞が起点になり、作ってから
+ステータスを選ばせることになる。**列から生めばステータスが最初から決まり、操作が1つ減る。**
+
+- [ ] **Step 1: 列の「＋」を実装する**
+
+Task 5 で置いた空の `onAddClick` を次に置き換える:
+
+```javascript
+function onAddClick(status) {
+  openPanel(null, status);
+}
+```
+
+- [ ] **Step 2: 保存を作成にも対応させる**
 
 `savePanel()` を次に置き換える:
 
@@ -1249,21 +1562,31 @@ function savePanel() {
   setPanelBusy(true);
   setPanelMessage(id ? '保存しています…' : '作成しています…', 'info');
 
+  // 作成はまだ id が無いので、重なりの判定だけ先に立てる。
+  if (Object.keys(pendingIds).length > 0) overlapped = true;
+  if (id) pendingIds[id] = true;
+
   var runner = google.script.run
     .withSuccessHandler(function (res) {
       setPanelBusy(false);
+      if (id) delete pendingIds[id];
+      var trustWholeBoard = settleOverlap();
+      var newId = id || res.id;
       if (res.ok) {
-        render(res.board);
+        render(trustWholeBoard || !newId ? res.board : mergeOneCard(board, res.board, newId));
         closePanel();
-        setMessage(id ? id + ' を保存しました。' : res.id + ' を作成しました。', 'info');
+        setMessage((id ? id + ' を保存しました。' : res.id + ' を作成しました。'), 'info');
       } else {
-        // 検証エラーはパネルに出す。画面を閉じると入力が消えてしまう。
-        if (res.board) render(res.board);
+        // 検証エラーではパネルを閉じない。閉じると入力が消える。
+        if (res.board) render(trustWholeBoard ? res.board : board);
         setPanelMessage(res.message, 'error');
       }
     })
     .withFailureHandler(function (err) {
       setPanelBusy(false);
+      if (id) delete pendingIds[id];
+      settleOverlap();
+      render(board);
       setPanelMessage((id ? '保存' : '作成') + 'に失敗しました: ' + err.message, 'error');
     });
 
@@ -1272,194 +1595,215 @@ function savePanel() {
 }
 ```
 
-- [ ] **Step 2: 新規ボタンを配線する**
+- [ ] **Step 3: 確認してコミット**
 
-`<script>` の末尾に追加:
-
-```javascript
-document.getElementById('create').addEventListener('click', function () { openPanel(null); });
-```
-
-- [ ] **Step 3: 検証エラーの見え方を確認する**
-
-タイトルを空にして保存すると、パネルが閉じずに
-`タイトルを入力してください。` が赤字で出ること。**入力が消えないこと。**
+タイトルを空にして保存すると、パネルが閉じずに `タイトルを入力してください。` が
+赤字で出て、**入力が消えないこと**。
 
 Run: `node --test "gas/tests/*.test.js"`
-Expected: PASS（168 件）
-
-- [ ] **Step 4: コミット**
+Expected: PASS（174 件）
 
 ```bash
 git add gas/kanban.html
-git commit -m "feat: アプリから PBI を新規作成できるようにする"
+git commit -m "feat: 列の追加ボタンから PBI を新規作成できるようにする"
 ```
 
 ---
 
-### Task 8: 削除と確認
+### Task 8: 削除と、取り消せる通知
 
 **Files:**
 - Modify: `gas/kanban.html`
 
 **Interfaces:**
-- Consumes: `panelState`, `setPanelBusy(busy)`, `setPanelMessage(text, kind)`, `closePanel()`,
-  `render(b)`, `setMessage(text, kind)`, `makeIcon(name)`, `fillButton(btn, iconName, label)`
+- Consumes: `panelState` / `setPanelBusy` / `setPanelMessage` / `closePanel` / `render` /
+  `setMessage` / `makeIcon` / `fillButton` / `mergeOneCard` / `settleOverlap` /
+  `boardWithCardRemoved`
 - Produces: なし
 
-- [ ] **Step 1: 確認ダイアログの CSS と骨組みを足す**
+**設計の拠りどころ:** モーダルの確認ダイアログは操作を制限し順序を固定する。
+**確認を挟まず即実行し、取り消せる通知を出す**（フェイルセーフ）。
+取り消しは `apiRestorePbi` を使う。`apiCreatePbi` で作り直すと ID が変わり、
+ローカルの Claude Code が残した参照が切れる。
+
+- [ ] **Step 1: 通知の CSS を足す**
 
 `<style>` の末尾に追加:
 
 ```css
-  #confirm {
-    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: min(400px, 92vw); background: var(--card); border: 1px solid var(--line);
-    border-radius: var(--radius); box-shadow: var(--shadow-2); padding: var(--sp-5);
-    display: flex; flex-direction: column; gap: var(--sp-3);
+  #toast {
+    position: fixed; left: 50%; bottom: var(--sp-5); transform: translateX(-50%);
+    display: flex; align-items: center; gap: var(--sp-4);
+    background: var(--ink); color: var(--bg);
+    border-radius: var(--radius); box-shadow: var(--shadow-2);
+    padding: var(--sp-3) var(--sp-4); font-size: 13px; max-width: min(560px, 92vw);
   }
-  #confirm h2 { font-size: 15px; margin: 0; }
-  #confirm .body { font-size: 13px; color: var(--ink-2); }
-  #confirm .foot { display: flex; gap: var(--sp-3); justify-content: flex-end; margin-top: var(--sp-2); }
-  #confirm button.primary { background: var(--danger); border-color: transparent; color: #fff; }
+  #toast button {
+    background: transparent; border-color: transparent; color: var(--bg);
+    text-decoration: underline; padding: var(--sp-1) var(--sp-2);
+  }
+  #toast button:hover { background: rgba(255,255,255,.12); }
 ```
 
-`<body>` の `</aside>` の直後に追加:
+`<body>` の `</div>`（`#main` の閉じ）の直後に追加:
 
 ```html
-<div id="confirm-overlay" hidden></div>
-<div id="confirm" hidden role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-  <h2 id="confirm-title">PBI を削除しますか？</h2>
-  <div class="body" id="confirm-body"></div>
-  <div class="foot">
-    <button id="confirm-cancel" type="button">やめる</button>
-    <button id="confirm-ok" class="primary" type="button"></button>
-  </div>
+<div id="toast" hidden role="status">
+  <span id="toast-text"></span>
+  <span class="spacer"></span>
+  <button id="toast-undo" type="button"></button>
 </div>
 ```
 
-`#confirm-overlay` は `#overlay` と同じ見た目にするため、`<style>` の
-`#overlay` のセレクタを `#overlay, #confirm-overlay` に変えること。
-
-- [ ] **Step 2: 削除を実装する**
+- [ ] **Step 2: 通知を実装する**
 
 `<script>` の `savePanel()` の直後に追加:
 
 ```javascript
-function openConfirm(id, title) {
-  document.getElementById('confirm-body').textContent =
-    id + '「' + title + '」を削除します。元に戻せません。\n' +
-    '終わった PBI は削除ではなく Done へ移してください。';
-  document.getElementById('confirm-overlay').hidden = false;
-  document.getElementById('confirm').hidden = false;
-  document.getElementById('confirm-cancel').focus();
+var toastTimer = null;
+var UNDO_SECONDS = 10;
+
+/** 取り消せる通知を出す。時間が過ぎたら消える。 */
+function showUndoToast(text, onUndo) {
+  var el = document.getElementById('toast');
+  document.getElementById('toast-text').textContent = text;
+  var btn = document.getElementById('toast-undo');
+  btn.onclick = function () { hideToast(); onUndo(); };
+  el.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, UNDO_SECONDS * 1000);
 }
 
-function closeConfirm() {
-  document.getElementById('confirm').hidden = true;
-  document.getElementById('confirm-overlay').hidden = true;
+function hideToast() {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  document.getElementById('toast').hidden = true;
 }
+```
 
+- [ ] **Step 3: 削除と取り消しを実装する**
+
+```javascript
+/**
+ * 削除する。確認は挟まず、取り消せる通知を出す（モーダルは操作を制限するため使わない）。
+ * 押した瞬間にカードを消し、失敗したら戻す。
+ */
 function deletePbi() {
   var id = panelState.id;
   if (!id) return;
-  closeConfirm();
+  var title = document.getElementById('f-title').value;
+  var before = board;
+
   setPanelBusy(true);
-  setPanelMessage('削除しています…', 'info');
-  // 削除は楽観的更新をしない。消えたものを戻す見せ方が分かりにくいため、
-  // 送信中はカードを薄くするだけにして、応答が返ってから消す。
+  if (Object.keys(pendingIds).length > 0) overlapped = true;
   pendingIds[id] = true;
-  render(board);
+  render(boardWithCardRemoved(board, id));   // 楽観的に消す
+
   google.script.run
     .withSuccessHandler(function (res) {
       setPanelBusy(false);
       delete pendingIds[id];
+      var trustWholeBoard = settleOverlap();
       if (res.ok) {
-        render(res.board);
+        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         closePanel();
-        setMessage(id + ' を削除しました。', 'info');
+        showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
       } else {
-        if (res.board) render(res.board); else render(board);
+        render(trustWholeBoard && res.board ? res.board : before);
         setPanelMessage(res.message, 'error');
       }
     })
     .withFailureHandler(function (err) {
       setPanelBusy(false);
       delete pendingIds[id];
-      render(board);
+      settleOverlap();
+      render(before);
       setPanelMessage('削除に失敗しました: ' + err.message, 'error');
     })
     .apiDeletePbi(id, panelState.expectedUpdatedAt);
 }
+
+/** 削除を取り消す。元の ID と作成日を保ったまま戻す。 */
+function restorePbi(row) {
+  if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  setMessage(row.id + ' を戻しています…', 'info');
+  if (Object.keys(pendingIds).length > 0) overlapped = true;
+
+  google.script.run
+    .withSuccessHandler(function (res) {
+      var trustWholeBoard = settleOverlap();
+      if (res.ok) {
+        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
+        setMessage(row.id + ' を戻しました。', 'info');
+      } else {
+        if (res.board) render(res.board);
+        setMessage(res.message, 'error');
+      }
+    })
+    .withFailureHandler(function (err) {
+      settleOverlap();
+      setMessage('取り消せませんでした: ' + err.message, 'error');
+    })
+    .apiRestorePbi(row);
+}
 ```
 
-- [ ] **Step 3: 配線する**
+- [ ] **Step 4: 配線する**
 
 `<script>` の末尾に追加:
 
 ```javascript
-fillButton(document.getElementById('confirm-ok'), 'trash', '削除する');
-document.getElementById('panel-delete').addEventListener('click', function () {
-  if (!panelState.id) return;
-  openConfirm(panelState.id, document.getElementById('f-title').value);
-});
-document.getElementById('confirm-cancel').addEventListener('click', closeConfirm);
-document.getElementById('confirm-overlay').addEventListener('click', closeConfirm);
-document.getElementById('confirm-ok').addEventListener('click', deletePbi);
+fillButton(document.getElementById('toast-undo'), 'undo', '取り消す');
+document.getElementById('panel-delete').addEventListener('click', deletePbi);
 ```
 
-Task 6 で足した `keydown` の処理に、確認ダイアログを先に閉じる分岐を足す:
+Task 6 で足した `keydown` に、通知を先に閉じる分岐を足す:
 
 ```javascript
 document.addEventListener('keydown', function (ev) {
   if (ev.key !== 'Escape') return;
-  if (!document.getElementById('confirm').hidden) { closeConfirm(); return; }
+  if (!document.getElementById('toast').hidden) { hideToast(); return; }
   if (!document.getElementById('panel').hidden) closePanel();
 });
 ```
 
-- [ ] **Step 4: 確認してコミット**
+- [ ] **Step 5: 確認してコミット**
 
 Run: `node --test "gas/tests/*.test.js"`
-Expected: PASS（168 件）
+Expected: PASS（174 件）
 
-Run:
-```bash
-grep -c 'innerHTML' gas/kanban.html
-```
-Expected: `2`（`root.innerHTML = ''` と `fillSelect` のクリアのみ）
+Run: `grep -c 'innerHTML' gas/kanban.html`
+Expected: `2`
 
 ```bash
 git add gas/kanban.html
-git commit -m "feat: PBI を削除できるようにする（確認つき）"
+git commit -m "feat: PBI を削除し、通知から取り消せるようにする"
 ```
 
 ---
-
 ### Task 9: DOM シムで応答の到達順を検査する
 
 **Files:**
-- Create: `gas/tests/kanban_flow.test.js`
+- Create: `gas/tests/kanban_harness.js`, `gas/tests/kanban_flow.test.js`
 
 **Interfaces:**
 - Consumes: `gas/kanban.html` の `<script>`
 - Produces: なし
 
 第1段階で、応答の到達順により画面がサーバと食い違う不具合が見つかった。
-**コードを読むだけでは見えず、実行して初めて分かった。** 作成・編集・削除でも同じ検査を行う。
+**コードを読むだけでは見えず、実行して初めて分かった。** 作成・編集・削除・取り消しでも
+同じ検査を行う。
 
 - [ ] **Step 1: シムを、次の契約ちょうどに作る**
 
-`gas/tests/kanban_flow.test.js` の中で、`kanban.html` の `<script>` を取り出し、
-最小の DOM シムを載せた `vm` コンテキストで走らせる。**判定は内部変数ではなく、
-描画された DOM から読む。**
+`gas/tests/kanban_harness.js` に、`kanban.html` の `<script>` を取り出して最小の DOM シムを
+載せた `vm` コンテキストで走らせる仕組みを作る。**判定は内部変数ではなく、描画された DOM から読む。**
 
 シムが備える DOM: `document.getElementById` / `createElement` / `createElementNS` /
 `addEventListener`、要素の `appendChild` / `textContent` / `className` / `classList` /
-`dataset` / `hidden` / `disabled` / `value` / `focus` / `style` / `draggable`、
-`innerHTML = ''`（空文字の代入のみ許し、非空文字が来たら例外を投げること)。
+`dataset` / `hidden` / `disabled` / `value` / `focus` / `style` / `draggable` / `onclick`、
+`setTimeout` / `clearTimeout`、`innerHTML = ''`（**空文字の代入のみ許し、非空文字が来たら例外を投げること**）。
 
-`createHarness()` が返すものの契約:
+`createHarness(initialColumns)` が返すものの契約:
 
 | 名前 | 意味 |
 |---|---|
@@ -1467,12 +1811,13 @@ git commit -m "feat: PBI を削除できるようにする（確認つき）"
 | `screen()` | 描画済み DOM から `[{status, cards:[id]}]` を読む |
 | `drag(id, toStatus)` | 実ハンドラ経由で `dragstart` → `drop` を起こす |
 | `click(elementId)` | 要素の `click` ハンドラを呼ぶ |
-| `setValue(fieldId, value)` | `input` / `textarea` / `select` に値を入れる |
-| `valueOf(fieldId)` | その値を読む |
-| `hiddenOf(elementId)` | `hidden` 属性 |
-| `disabledOf(elementId)` | `disabled` 属性 |
-| `textOf(elementId)` | `textContent` |
+| `clickAdd(status)` | その列の「追加」ボタンを押す |
+| `openCard(id)` | 描画済みカードの `click` を起こす |
+| `setValue(fieldId, value)` / `valueOf(fieldId)` | 入力欄の読み書き |
+| `hiddenOf(id)` / `disabledOf(id)` / `textOf(id)` | 属性とテキスト |
 | `calls` | 未応答の呼び出し `[{method, args, handlers}]`。テスト側が任意の順で `handlers.success(res)` を呼ぶ |
+| `boardOf(cols)` | `[{status, cards:[{id,...}]}]` から `{columns:[...]}` を作る |
+| `columnsOf(cols)` | 同じものを `[{status, cards:[id]}]` に潰す |
 
 `google.script.run` は呼び出しをキューに積むだけにする。**サーバでの処理順とブラウザへの
 到達順を別々に制御できることが要点**で、これが無いと今回の検査は成立しない。
@@ -1482,159 +1827,184 @@ git commit -m "feat: PBI を削除できるようにする（確認つき）"
 
 - [ ] **Step 2: 検査を書く**
 
+`gas/tests/kanban_flow.test.js`:
+
 ```javascript
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createHarness } = require('./kanban_harness.js');
 
 const INITIAL = [
-  { status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' }] },
-  { status: 'Ready', cards: [] },
-  { status: 'In Progress', cards: [] },
-  { status: 'Review', cards: [] },
-  { status: 'Done', cards: [] },
+  { status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' },
+                           { id: 'PBI-002', title: 'B', updated_at: 'T1' }] },
+  { status: 'Ready', cards: [] }, { status: 'In Progress', cards: [] },
+  { status: 'Review', cards: [] }, { status: 'Done', cards: [] },
 ];
 const fmt = (cols) => cols.map(c => c.status + ':' + c.cards.join(',')).join(' | ');
 
-test('ドラッグの送信中はパネルを開かせない', () => {
-  // パネルの応答は board 全体を差し替えるため、後から返るドラッグの結果と食い違う。
+/** 初期読み込みを済ませたハーネスを返す。 */
+function ready() {
   const h = createHarness(INITIAL);
   h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.serverBoard() });
-  h.drag('PBI-001', 'Ready');
-  assert.equal(h.calls.length, 1, 'ドラッグが送信されていない');
+  h.calls[0].handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  h.calls.length = 0;
+  return h;
+}
 
-  h.click('create');
-  assert.equal(h.hiddenOf('panel'), true, '送信中なのにパネルが開いた');
-  assert.ok(h.textOf('message').indexOf('少し待って') !== -1);
+test('編集の応答が、送信中の別カードの移動を巻き戻さない', () => {
+  // 応答の board は「サーバがその要求を処理した時点」のもので、後から確定した
+  // ドラッグの移動を含まない。全体を信じると取り消したはずの移動が復活する。
+  const h = ready();
+  h.drag('PBI-001', 'Ready');          // 送信中のまま置く
+  h.openCard('PBI-002');
+  h.setValue('f-title', 'B かいへん');
+  h.click('panel-save');
+
+  const save = h.calls[h.calls.length - 1];
+  assert.equal(save.method, 'apiUpdatePbi');
+
+  // 編集だけ先に返る。この board に PBI-001 の移動は入っていない。
+  save.handlers.success({ ok: true, board: h.boardOf([
+    { status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' },
+                             { id: 'PBI-002', title: 'B かいへん', updated_at: 'T2' }] },
+    { status: 'Ready', cards: [] }, { status: 'In Progress', cards: [] },
+    { status: 'Review', cards: [] }, { status: 'Done', cards: [] },
+  ]) });
+
+  const cols = h.screen();
+  assert.equal(cols[1].cards.indexOf('PBI-001') !== -1, true,
+    'PBI-001 が New へ巻き戻された（送信中の移動が消えた）');
+});
+
+test('作成の応答が、送信中の別カードの移動を巻き戻さない', () => {
+  const h = ready();
+  h.drag('PBI-001', 'Ready');
+  h.clickAdd('Done');
+  h.setValue('f-title', 'あたらしい');
+  h.click('panel-save');
+
+  const create = h.calls[h.calls.length - 1];
+  assert.equal(create.method, 'apiCreatePbi');
+  assert.equal(create.args[0].status, 'Done', '列の文脈がステータスに入っていない');
+
+  create.handlers.success({ ok: true, id: 'PBI-003', board: h.boardOf([
+    { status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' },
+                             { id: 'PBI-002', title: 'B', updated_at: 'T1' }] },
+    { status: 'Ready', cards: [] }, { status: 'In Progress', cards: [] },
+    { status: 'Review', cards: [] },
+    { status: 'Done', cards: [{ id: 'PBI-003', title: 'あたらしい', updated_at: 'T2' }] },
+  ]) });
+
+  const cols = h.screen();
+  assert.ok(cols[1].cards.indexOf('PBI-001') !== -1, 'PBI-001 の移動が消えた');
+  assert.ok(cols[4].cards.indexOf('PBI-003') !== -1, '作った PBI が出ていない');
+});
+
+test('削除の応答が、送信中の別カードの移動を巻き戻さない', () => {
+  const h = ready();
+  h.drag('PBI-001', 'Ready');
+  h.openCard('PBI-002');
+  h.click('panel-delete');
+
+  const del = h.calls[h.calls.length - 1];
+  assert.equal(del.method, 'apiDeletePbi');
+
+  del.handlers.success({ ok: true, removed: { id: 'PBI-002', title: 'B' }, board: h.boardOf([
+    { status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' }] },
+    { status: 'Ready', cards: [] }, { status: 'In Progress', cards: [] },
+    { status: 'Review', cards: [] }, { status: 'Done', cards: [] },
+  ]) });
+
+  const cols = h.screen();
+  assert.ok(cols[1].cards.indexOf('PBI-001') !== -1, 'PBI-001 の移動が消えた');
+  assert.equal(cols[0].cards.indexOf('PBI-002'), -1, '消したカードが残っている');
+});
+
+test('削除に確認ダイアログを挟まず、即座に送信する', () => {
+  // モーダルは操作を制限し順序を固定するため置かない（フェイルセーフで受ける）。
+  const h = ready();
+  h.openCard('PBI-001');
+  const before = h.calls.length;
+  h.click('panel-delete');
+  assert.equal(h.calls.length, before + 1, '削除が送信されていない');
+  assert.equal(h.calls[before].method, 'apiDeletePbi');
+});
+
+test('削除のあと通知から取り消せ、元の ID のまま戻る', () => {
+  const h = ready();
+  h.openCard('PBI-002');
+  h.click('panel-delete');
+  const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, removed: removed, board: h.boardOf([
+    { status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' }] },
+    { status: 'Ready', cards: [] }, { status: 'In Progress', cards: [] },
+    { status: 'Review', cards: [] }, { status: 'Done', cards: [] },
+  ]) });
+
+  assert.equal(h.hiddenOf('toast'), false, '取り消しの通知が出ていない');
+  assert.ok(h.textOf('toast-text').indexOf('PBI-002') !== -1);
+
+  const before = h.calls.length;
+  h.click('toast-undo');
+  assert.equal(h.calls.length, before + 1);
+  const restore = h.calls[before];
+  assert.equal(restore.method, 'apiRestorePbi', 'apiCreatePbi では ID が変わってしまう');
+  assert.equal(restore.args[0].id, 'PBI-002');
+  assert.equal(restore.args[0].created_at, '2026-09-01', '作成日が失われている');
 });
 
 test('検証エラーではパネルが閉じず、入力が残る', () => {
-  const h = createHarness(INITIAL);
-  h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.serverBoard() });
-  h.click('create');
+  const h = ready();
+  h.clickAdd('New');
   h.setValue('f-title', '');
   h.setValue('f-description', '書きかけの説明');
   h.click('panel-save');
-
-  const call = h.calls[h.calls.length - 1];
-  call.handlers.success({ ok: false, reason: 'invalid', message: 'タイトルを入力してください。', board: null });
+  h.calls[h.calls.length - 1].handlers.success(
+    { ok: false, reason: 'invalid', message: 'タイトルを入力してください。', board: null });
 
   assert.equal(h.hiddenOf('panel'), false, 'パネルが閉じてしまった');
   assert.equal(h.valueOf('f-description'), '書きかけの説明', '入力が消えた');
   assert.ok(h.textOf('panel-message').indexOf('タイトル') !== -1);
 });
 
-test('削除は確認を挟まないと実行されない', () => {
-  const h = createHarness(INITIAL);
-  h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.serverBoard() });
-  h.click('create');   // 一度閉じてから既存カードを開く
-  h.click('panel-close');
-
-  h.openCard('PBI-001');
-  const before = h.calls.length;
-  h.click('panel-delete');
-  assert.equal(h.calls.length, before, '確認前に削除が送信された');
-  assert.equal(h.hiddenOf('confirm'), false, '確認が出ていない');
-  assert.ok(h.textOf('confirm-body').indexOf('PBI-001') !== -1, '何を消すか示していない');
-
-  h.click('confirm-ok');
-  assert.equal(h.calls.length, before + 1);
-  assert.equal(h.calls[before].method, 'apiDeletePbi');
-});
-
-test('確認でやめると削除されない', () => {
-  const h = createHarness(INITIAL);
-  h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.serverBoard() });
-  h.openCard('PBI-001');
-  h.click('panel-delete');
-  const before = h.calls.length;
-  h.click('confirm-cancel');
-  assert.equal(h.hiddenOf('confirm'), true);
-  assert.equal(h.calls.length, before, 'やめたのに削除が送信された');
-});
-
 test('送信中は保存と削除が押せない', () => {
-  const h = createHarness(INITIAL);
-  h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.serverBoard() });
+  const h = ready();
   h.openCard('PBI-001');
   h.click('panel-save');
   assert.equal(h.disabledOf('panel-save'), true, '二重送信できてしまう');
   assert.equal(h.disabledOf('panel-delete'), true);
 });
 
-test('作成が成功するとパネルが閉じ、サーバの board で描き直す', () => {
-  const h = createHarness(INITIAL);
-  h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.serverBoard() });
-  h.click('create');
-  h.setValue('f-title', 'あたらしい PBI');
-  h.click('panel-save');
-
-  const call = h.calls[h.calls.length - 1];
-  assert.equal(call.method, 'apiCreatePbi');
-  assert.equal(call.args[0].title, 'あたらしい PBI');
-
-  const after = [
-    { status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' },
-                             { id: 'PBI-002', title: 'あたらしい PBI', updated_at: 'T2' }] },
-    { status: 'Ready', cards: [] }, { status: 'In Progress', cards: [] },
-    { status: 'Review', cards: [] }, { status: 'Done', cards: [] },
-  ];
-  call.handlers.success({ ok: true, board: h.boardOf(after), id: 'PBI-002' });
-
-  assert.equal(h.hiddenOf('panel'), true, 'パネルが閉じていない');
-  assert.equal(fmt(h.screen()), fmt(h.columnsOf(after)), '画面がサーバと食い違う');
-  assert.ok(h.textOf('message').indexOf('PBI-002') !== -1);
+test('列の追加ボタンは、その列のステータスを初期値にする', () => {
+  const h = ready();
+  h.clickAdd('Review');
+  assert.equal(h.hiddenOf('panel'), false);
+  assert.equal(h.valueOf('f-status'), 'Review', '列の文脈が初期値に入っていない');
 });
 
-test('編集で状態を変えるとカードが別の列へ移る', () => {
-  const h = createHarness(INITIAL);
-  h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.serverBoard() });
+test('パネルを開いてもドラッグできる（モードレス）', () => {
+  // オーバーレイで盤面を覆わない。操作を制限しない。
+  const h = ready();
   h.openCard('PBI-001');
-  h.setValue('f-status', 'Review');
-  h.click('panel-save');
-
-  const call = h.calls[h.calls.length - 1];
-  assert.equal(call.method, 'apiUpdatePbi');
-  assert.equal(call.args[1].status, 'Review');
-  assert.equal(call.args[2], 'T1', '画面を描いた時点の updated_at を送っていない');
-
-  const after = [
-    { status: 'New', cards: [] }, { status: 'Ready', cards: [] },
-    { status: 'In Progress', cards: [] },
-    { status: 'Review', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T2' }] },
-    { status: 'Done', cards: [] },
-  ];
-  call.handlers.success({ ok: true, board: h.boardOf(after) });
-  assert.equal(fmt(h.screen()), fmt(h.columnsOf(after)));
+  const before = h.calls.length;
+  h.drag('PBI-002', 'Done');
+  assert.equal(h.calls.length, before + 1, 'パネルを開くとドラッグできなくなっている');
 });
 ```
-
-シムは `gas/tests/kanban_harness.js` に切り出す（テスト本体と混ぜると読めなくなる）。
-`serverBoard()` は `INITIAL` から、`boardOf(cols)` は任意の列定義から
-`{ columns: [{status, cards}] }` を作るヘルパー、`columnsOf(cols)` は
-`[{status, cards:[id]}]` に潰すヘルパー、`openCard(id)` は描画済みカードの
-`click` を起こすヘルパーとする。
 
 - [ ] **Step 3: 通ることを確認する**
 
 Run: `node --test "gas/tests/*.test.js"`
-Expected: PASS（168 + 7 = 175 件）
+Expected: PASS（174 + 9 = 183 件）
 
-不一致が出たら、それは実装の不具合である。`applyServerBoard` / `settleOverlap` の
-仕組みに作成・編集・削除を載せ切れていない可能性が高い。
+不一致が出たら、それは実装の不具合である。`mergeOneCard` / `settleOverlap` に
+作成・編集・削除・取り消しを載せ切れていない可能性が高い。
 
 - [ ] **Step 4: コミット**
 
 ```bash
 git add gas/tests/kanban_flow.test.js gas/tests/kanban_harness.js
-git commit -m "test: 作成・編集・削除でも応答の到達順を検査する"
+git commit -m "test: 作成・編集・削除・取り消しでも応答の到達順を検査する"
 ```
 
 ---
@@ -1655,8 +2025,11 @@ git commit -m "test: 作成・編集・削除でも応答の到達順を検査�
 書いていない。**アプリで PBI を作成・編集・削除できる**ことを反映する。
 あわせて次を明記する。
 
-- 終わった PBI は削除ではなく Done へ移すこと（削除は取り消せない）
+- 作成は各列の「追加」から。その列のステータスで作られる
+- **削除に確認は出ない。消したあと通知から取り消せる**（一定時間で消える）
+- 終わった PBI は削除ではなく Done へ移すこと
 - 状態はドラッグでもプルダウンでも変えられること（タッチ端末ではプルダウンを使う）
+- 詳細を開いたままドラッグできること
 
 - [ ] **Step 2: 第1段階の設計書の制約を消す**
 
@@ -1677,7 +2050,7 @@ git diff --name-only main..HEAD | grep -E '^(\.claude/|scrum/|CLAUDE\.md|README\
 ```
 
 `CLAUDE.md` / `README.md` が変わっていれば、マージ後に
-`node scripts/publish.js <配布先>` での再配布が必要。README にその旨がある場合は最新にしておく。
+`node scripts/publish.js <配布先>` での再配布が必要。
 
 - [ ] **Step 5: コミット**
 
@@ -1693,7 +2066,10 @@ git commit -m "docs: 第2段階でできるようになったことを反映す�
 自動テストが届かない。**実装の完了条件ではなく、リリース前の確認項目**である。
 
 - 詳細パネルの開閉、作成・編集・削除の一連の流れ
-- 削除の確認ダイアログに ID とタイトルが出ること
+- **削除したあと通知から取り消せること。戻した PBI の ID が変わっていないこと**
+- **詳細を開いたままカードをドラッグできること**（モードレス）
+- **幅の狭い画面（900px 未満）で列が縦に積まれること**
+- 列の「追加」から作ると、その列のステータスで作られること
 - ダークモードでの表示（OS の外観設定を切り替える）
 - タッチ端末で、プルダウンから状態を変えられること
 - ブラウザのコンソールで `google.script.run.withBacklogWrite_(function(){})` が
