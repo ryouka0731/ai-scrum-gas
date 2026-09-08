@@ -546,6 +546,7 @@ function openPanel(id, presetStatus) {
   document.getElementById('panel-delete').hidden = !id;
   writeForm(card, status);
   setPanelMessage('', 'info');
+  setPanelBusy(false);
   document.getElementById('panel').hidden = false;
   render(board);   // 選択中のカードに印を付ける
   document.getElementById('f-title').focus();
@@ -571,29 +572,40 @@ function savePanel() {
   var trustWholeBoard = null;
   pendingIds[id] = true;
   if (Object.keys(pendingIds).length > 1) overlapped = true;
+  render(board);   // 送信中のカードに pending の印を付ける（move() と対称にする）
 
   google.script.run
     .withSuccessHandler(function (res) {
-      setPanelBusy(false);
       delete pendingIds[id];
       trustWholeBoard = settleOverlap();
+      // 応答が返るまでに別のカードを開いている場合がある。board の反映は必ず行い、
+      // パネルに触る操作だけを「まだ同じ PBI を開いているとき」に限る。
+      var mine = (panelState.id === id);
+      if (mine) setPanelBusy(false);
       if (res.ok) {
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
-        closePanel();
+        if (mine) closePanel();
         setMessage(id + ' を保存しました。', 'info');
       } else {
         // 検証エラーではパネルを閉じない。閉じると入力が消える。
         if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         else render(board);
-        setPanelMessage(res.message, 'error');
+        // 別のカードを開いていると、パネルに出しても本人には届かない。
+        if (mine) setPanelMessage(res.message, 'error');
+        else setMessage(id + ': ' + res.message, 'error');
       }
     })
     .withFailureHandler(function (err) {
-      setPanelBusy(false);
       delete pendingIds[id];
       settleOverlap();
       render(board);
-      setPanelMessage('保存に失敗しました: ' + err.message, 'error');
+      var mine = (panelState.id === id);
+      if (mine) {
+        setPanelBusy(false);
+        setPanelMessage('保存に失敗しました: ' + err.message, 'error');
+      } else {
+        setMessage(id + ': 保存に失敗しました: ' + err.message, 'error');
+      }
     })
     .apiUpdatePbi(id, readForm(), panelState.expectedUpdatedAt);
 }
