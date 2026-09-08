@@ -40,42 +40,112 @@ function apiGetBoard() {
 }
 
 /**
- * PBI の状態を変えて CSV へ書き戻す。
- * expectedUpdatedAt は画面を描いた時点の updated_at。他の誰か（またはローカルの
- * Claude Code）が先に変更していれば conflict として拒否し、黙って上書きしない。
+ * 書き戻しを伴う API の共通手順。
+ *
+ * mutate(rows) は { ok:true, rows, id? } か { ok:false, reason, message } を返すこと。
+ * ロックを取ってから読み直すのは、画面を描いた時点のデータを信じないため
+ * （Drive 同期には数秒から数分のラグがある）。
  */
-function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
+function withBacklogWrite_(mutate) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
     return { ok: false, reason: 'busy', message: '他の更新が実行中です。少し待って再試行してください。', board: null };
   }
   try {
-    if (KANBAN_STATUSES.indexOf(newStatus) === -1) {
-      return { ok: false, reason: 'bad_status', message: '不明なステータスです: ' + newStatus, board: null };
-    }
-    // 書き戻しの直前に必ず読み直す。Drive 同期のラグがあるため、
-    // 画面を描いた時点のデータをそのまま信じない。
     const text = readBacklogText_();
     // 未知の列を持つ CSV へ書き戻すと列が消えるため、読み直した直後・
     // 書き戻しより前に必ずヘッダーを検査する。
     assertHeaderMatches(text, BACKLOG_FIELDS);
     const rows = csvToObjects(text);
-    const result = applyRowUpdate(rows, id, { status: newStatus }, expectedUpdatedAt, nowText_());
 
+    const result = mutate(rows);
     if (!result.ok) {
-      const message = result.reason === 'conflict'
-        ? '他の変更が先に入っています。最新の内容に更新しました。'
-        : 'この PBI が見つかりません。最新の内容に更新しました。';
-      return { ok: false, reason: result.reason, message: message, board: buildBoardData(rows) };
+      return { ok: false, reason: result.reason, message: result.message, board: buildBoardData(rows) };
     }
-
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
-    return { ok: true, board: buildBoardData(result.rows) };
+    return { ok: true, board: buildBoardData(result.rows), id: result.id || null };
   } catch (e) {
-    // 権限エラーの案内は writeScrumFile_ が付ける。ここで一律に付けると、
-    // ヘッダー不一致やファイル未検出まで「権限が原因」と誤誘導してしまう。
     return { ok: false, reason: 'error', message: e.message, board: null };
   } finally {
     lock.releaseLock();
   }
+}
+
+/** 競合・不在の定型文。文面を1か所に集める。 */
+function conflictMessage_(reason) {
+  if (reason === 'conflict') return '他の変更が先に入っています。最新の内容に更新しました。';
+  return 'この PBI が見つかりません。最新の内容に更新しました。';
+}
+
+/** 編集を許した項目だけを取り出す。それ以外は捨てる。 */
+function pickEditableFields_(fields) {
+  const src = fields || {};
+  const out = {};
+  PBI_EDITABLE_FIELDS.forEach(function (f) {
+    if (Object.prototype.hasOwnProperty.call(src, f)) out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]);
+  });
+  return out;
+}
+
+/**
+ * PBI の状態を変えて CSV へ書き戻す。
+ * expectedUpdatedAt は画面を描いた時点の updated_at。他の誰か（またはローカルの
+ * Claude Code）が先に変更していれば conflict として拒否し、黙って上書きしない。
+ */
+function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
+  return withBacklogWrite_(function (rows) {
+    if (KANBAN_STATUSES.indexOf(newStatus) === -1) {
+      return { ok: false, reason: 'bad_status', message: '不明なステータスです: ' + newStatus };
+    }
+    const r = applyRowUpdate(rows, id, { status: newStatus }, expectedUpdatedAt, nowText_());
+    if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
+    return { ok: true, rows: r.rows };
+  });
+}
+
+/**
+ * PBI を新しく作る。ID はサーバ側で採番する。
+ *
+ * 作成では競合判定を行わない。照合する既存の行が無いためである。
+ * ID はロックを取ったあと読み直した CSV から採番するので、アプリ内で重複しない。
+ */
+function apiCreatePbi(fields) {
+  return withBacklogWrite_(function (rows) {
+    const picked = pickEditableFields_(fields);
+    if (picked.status === undefined) picked.status = KANBAN_STATUSES[0];
+    const v = validatePbiFields(picked, KANBAN_STATUSES);
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+
+    const id = nextPbiId(rows);
+    const r = appendRow(rows, id, picked, BACKLOG_FIELDS, nowText_());
+    if (!r.ok) {
+      return { ok: false, reason: r.reason, message: 'ID が重複しました。もう一度お試しください。' };
+    }
+    return { ok: true, rows: r.rows, id: id };
+  });
+}
+
+/** PBI の項目を書き換える。 */
+function apiUpdatePbi(id, fields, expectedUpdatedAt) {
+  return withBacklogWrite_(function (rows) {
+    const picked = pickEditableFields_(fields);
+    const v = validatePbiFields(picked, KANBAN_STATUSES);
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+
+    const r = applyRowUpdate(rows, id, picked, expectedUpdatedAt, nowText_());
+    if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
+    return { ok: true, rows: r.rows };
+  });
+}
+
+/**
+ * PBI を消す。取り消せないため、クライアント側で確認を挟むこと。
+ * 「完了」は Done 列への移動で表すので、これは「間違って作った」場合の操作である。
+ */
+function apiDeletePbi(id, expectedUpdatedAt) {
+  return withBacklogWrite_(function (rows) {
+    const r = deleteRow(rows, id, expectedUpdatedAt);
+    if (!r.ok) return { ok: false, reason: r.reason, message: conflictMessage_(r.reason) };
+    return { ok: true, rows: r.rows };
+  });
 }
