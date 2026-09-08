@@ -80,11 +80,7 @@ function applyRowUpdate(rows, id, changes, expectedUpdatedAt, nowText) {
   }
 
   // 元の配列は書き換えない。呼び出し側が失敗時に元の状態を保てるようにする。
-  const next = list.map(function (row) {
-    const copy = {};
-    Object.keys(row).forEach(function (k) { copy[k] = row[k]; });
-    return copy;
-  });
+  const next = list.map(copyRow_);
   Object.keys(changes || {}).forEach(function (k) { next[index][k] = changes[k]; });
   // updated_at は常にサーバ側の時刻で上書きする（クライアントの申告を信じない）。
   // 直前の値と同じになる場合は advanceUpdatedAt_ が異なる値へ進める。
@@ -92,4 +88,63 @@ function applyRowUpdate(rows, id, changes, expectedUpdatedAt, nowText) {
   return { ok: true, rows: next };
 }
 
-if (typeof module !== 'undefined') { module.exports = { applyRowUpdate, advanceUpdatedAt_, addOneSecondToTimeText_ }; }
+/** 行を浅くコピーする。元の配列を書き換えないため。 */
+function copyRow_(row) {
+  const copy = {};
+  Object.keys(row).forEach(function (k) { copy[k] = row[k]; });
+  return copy;
+}
+
+/**
+ * 新しい行を末尾に足す。
+ *
+ * allFields の列を全て空文字で用意してから fields を重ねる。埋め忘れた列があると
+ * toCsv の出力で列がずれる。allFields に無いキーは捨てる（toCsv が拾わないため
+ * 混ぜても黙って消えるだけで、混入に気づけない）。
+ * id / created_at / updated_at はクライアントの申告を信じず、必ず引数の値を使う。
+ */
+function appendRow(rows, id, fields, allFields, nowText) {
+  const list = rows || [];
+  const key = String(id || '').trim();
+  for (let i = 0; i < list.length; i++) {
+    if (String(list[i].id || '').trim() === key) {
+      return { ok: false, reason: 'duplicate_id', current: list[i] };
+    }
+  }
+  const row = {};
+  (allFields || []).forEach(function (f) { row[f] = ''; });
+  Object.keys(fields || {}).forEach(function (k) {
+    if (Object.prototype.hasOwnProperty.call(row, k)) row[k] = fields[k];
+  });
+  row.id = key;
+  row.created_at = nowText;
+  row.updated_at = nowText;
+  return { ok: true, rows: list.map(copyRow_).concat([row]) };
+}
+
+/**
+ * 行を1つ消す。updated_at を照合し、見ていない変更がある行は消させない。
+ */
+function deleteRow(rows, id, expectedUpdatedAt) {
+  const list = rows || [];
+  const key = String(id || '').trim();
+  if (!key) return { ok: false, reason: 'not_found', current: null };
+
+  let index = -1;
+  for (let i = 0; i < list.length; i++) {
+    if (String(list[i].id || '').trim() === key) { index = i; break; }
+  }
+  if (index === -1) return { ok: false, reason: 'not_found', current: null };
+
+  const current = list[index];
+  if (String(current.updated_at || '') !== String(expectedUpdatedAt || '')) {
+    return { ok: false, reason: 'conflict', current: current };
+  }
+  const next = [];
+  list.forEach(function (row, i) { if (i !== index) next.push(copyRow_(row)); });
+  return { ok: true, rows: next };
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = { applyRowUpdate, appendRow, deleteRow, advanceUpdatedAt_, addOneSecondToTimeText_ };
+}
