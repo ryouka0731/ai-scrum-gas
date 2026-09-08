@@ -7,7 +7,10 @@ if (typeof require !== 'undefined' && typeof filterRealRows === 'undefined') {
   var { filterRealRows } = require('./pure_filter.js');
 }
 
-const BOARD_CARD_FIELDS = ['id', 'title', 'priority', 'size', 'sprint', 'updated_at'];
+const BOARD_CARD_FIELDS = [
+  'id', 'title', 'description', 'acceptance_criteria',
+  'priority', 'size', 'sprint', 'updated_at',
+];
 
 /**
  * KANBAN_STATUSES を実行環境に応じて解決する。

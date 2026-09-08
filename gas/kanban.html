@@ -104,6 +104,35 @@
     #board { flex-direction: column; width: 100%; }
     .column { width: 100%; }
   }
+
+  #panel {
+    flex: 0 0 380px; align-self: stretch;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow-1); padding: var(--sp-4);
+    display: flex; flex-direction: column; gap: var(--sp-3);
+  }
+  #panel h2 { font-size: 15px; margin: 0; }
+  .panel-head { display: flex; align-items: center; gap: var(--sp-3); }
+  .field { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .field label { font-size: 12px; color: var(--ink-2); }
+  .field input, .field textarea, .field select {
+    font: inherit; line-height: 1.7; color: var(--ink); background: var(--card-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: var(--sp-2) var(--sp-3);
+  }
+  .field input:focus, .field textarea:focus, .field select:focus {
+    outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent;
+  }
+  .field textarea { min-height: 76px; resize: vertical; }
+  .field .hint { font-size: 11px; color: var(--ink-3); }
+  .row { display: flex; gap: var(--sp-3); }
+  .row > .field { flex: 1; min-width: 0; }
+  .panel-foot { display: flex; gap: var(--sp-3); align-items: center; margin-top: auto; padding-top: var(--sp-3); }
+  .panel-foot .spacer { flex: 1; }
+  #panel-message { font-size: 12px; min-height: 18px; white-space: pre-line; }
+  #panel-message.error { color: var(--danger); }
+  @media (max-width: 900px) {
+    #panel { flex: 1 1 auto; width: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -115,6 +144,52 @@
 <div id="message" class="info">読み込んでいます…</div>
 <div id="main">
   <div id="board"></div>
+  <aside id="panel" hidden aria-label="PBI の詳細">
+    <div class="panel-head">
+      <h2 id="panel-title">PBI</h2>
+      <span class="spacer"></span>
+      <button id="panel-close" class="icon-only" type="button" aria-label="閉じる"></button>
+    </div>
+    <div class="field">
+      <label for="f-title">タイトル</label>
+      <input id="f-title" type="text">
+    </div>
+    <div class="field">
+      <label for="f-description">説明</label>
+      <textarea id="f-description"></textarea>
+    </div>
+    <div class="field">
+      <label for="f-acceptance">受入基準</label>
+      <textarea id="f-acceptance"></textarea>
+      <span class="hint">セミコロン（;）で区切ります</span>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-status">ステータス</label>
+        <select id="f-status"></select>
+      </div>
+      <div class="field">
+        <label for="f-priority">優先度</label>
+        <select id="f-priority"></select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="f-size">サイズ</label>
+        <input id="f-size" type="text" inputmode="numeric">
+      </div>
+      <div class="field">
+        <label for="f-sprint">スプリント</label>
+        <input id="f-sprint" type="text">
+      </div>
+    </div>
+    <div id="panel-message" class="info"></div>
+    <div class="panel-foot">
+      <button id="panel-save" class="primary" type="button"></button>
+      <span class="spacer"></span>
+      <button id="panel-delete" class="danger" type="button"></button>
+    </div>
+  </aside>
 </div>
 
 <script>
@@ -241,7 +316,8 @@ function wireDropzone(zone, status) {
 
 function renderCard(card) {
   var el = document.createElement('div');
-  el.className = 'card' + (pendingIds[card.id] ? ' pending' : '');
+  el.className = 'card' + (pendingIds[card.id] ? ' pending' : '')
+    + (panelState.id === card.id ? ' selected' : '');
   el.draggable = !pendingIds[card.id];
   el.dataset.id = card.id;
 
@@ -293,6 +369,10 @@ function renderCard(card) {
     dragging = null;
     el.classList.remove('dragging');
   });
+  el.addEventListener('click', function () {
+    if (pendingIds[card.id]) return;
+    openPanel(card.id, null);
+  });
   return el;
 }
 
@@ -325,6 +405,33 @@ function boardWithCardRemoved(b, id) {
       return { status: col.status, cards: col.cards.filter(function (c) { return c.id !== id; }) };
     })
   };
+}
+
+/** board を複製し、card を status の列に置いた新しい board を返す（同じ id が居れば置き換える）。 */
+function boardWithCardUpserted(b, card, status) {
+  var removed = boardWithCardRemoved(b, card.id);
+  var next = { columns: removed.columns.map(function (col) {
+    return { status: col.status, cards: col.cards.slice() };
+  }) };
+  for (var i = 0; i < next.columns.length; i++) {
+    if (next.columns[i].status === status) { next.columns[i].cards.push(card); return next; }
+  }
+  // 行き先の列が無い（未知のステータス）ときは、消したままにせず元に戻す。
+  return b;
+}
+
+/**
+ * 応答が運ぶ board から、そのカード1枚だけを今の画面へ反映する。
+ *
+ * 応答の board は「サーバがその要求を処理した時点」のもので、後から確定した
+ * 別カードの移動を含まない。到達順は保証されないため、全体を信じると
+ * 取り消したはずの移動が復活する。変わったのは常にこの1枚だけである。
+ */
+function mergeOneCard(current, serverBoard, id) {
+  var to = columnStatusOf(serverBoard, id);
+  var card = findCard(serverBoard, id);
+  if (to === null || !card) return boardWithCardRemoved(current, id);
+  return boardWithCardUpserted(current, card, to);
 }
 
 /** board を複製し、id のカードを newStatus の列へ移した新しい board を返す（元の board は変えない）。 */
@@ -385,6 +492,112 @@ function rollbackCard(id, newStatus, originalStatus) {
   return boardWithCardMoved(board, id, originalStatus);
 }
 
+var STATUS_OPTIONS = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
+var PRIORITY_OPTIONS = ['Critical', 'High', 'Medium', 'Low'];
+
+// id が null なら新規作成モード。status は新規作成時の初期ステータス。
+var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0] };
+
+function fillSelect(el, values) {
+  el.innerHTML = '';
+  values.forEach(function (v) {
+    var o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    el.appendChild(o);
+  });
+}
+
+function setPanelMessage(text, kind) {
+  var el = document.getElementById('panel-message');
+  el.textContent = text;
+  el.className = kind || 'info';
+}
+
+function readForm() {
+  return {
+    title: document.getElementById('f-title').value,
+    description: document.getElementById('f-description').value,
+    acceptance_criteria: document.getElementById('f-acceptance').value,
+    status: document.getElementById('f-status').value,
+    priority: document.getElementById('f-priority').value,
+    size: document.getElementById('f-size').value,
+    sprint: document.getElementById('f-sprint').value
+  };
+}
+
+function writeForm(card, status) {
+  document.getElementById('f-title').value = (card && card.title) || '';
+  document.getElementById('f-description').value = (card && card.description) || '';
+  document.getElementById('f-acceptance').value = (card && card.acceptance_criteria) || '';
+  document.getElementById('f-status').value = status || STATUS_OPTIONS[0];
+  document.getElementById('f-priority').value = (card && card.priority) || 'Medium';
+  document.getElementById('f-size').value = (card && card.size) || '';
+  document.getElementById('f-sprint').value = (card && card.sprint) || '';
+}
+
+/** id が null なら新規作成。presetStatus は新規作成時の初期ステータス。 */
+function openPanel(id, presetStatus) {
+  var card = id ? findCard(board, id) : null;
+  if (id && !card) return;
+  var status = id ? columnStatusOf(board, id) : (presetStatus || STATUS_OPTIONS[0]);
+  panelState = { id: id, expectedUpdatedAt: card ? card.updated_at : '', status: status };
+  document.getElementById('panel-title').textContent = id ? id : '新しい PBI';
+  document.getElementById('panel-delete').hidden = !id;
+  writeForm(card, status);
+  setPanelMessage('', 'info');
+  document.getElementById('panel').hidden = false;
+  render(board);   // 選択中のカードに印を付ける
+  document.getElementById('f-title').focus();
+}
+
+function closePanel() {
+  document.getElementById('panel').hidden = true;
+  panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0] };
+  render(board);
+}
+
+function setPanelBusy(busy) {
+  document.getElementById('panel-save').disabled = busy;
+  document.getElementById('panel-delete').disabled = busy;
+}
+
+/** 保存する。新規作成の分岐は Task 7 で足す。 */
+function savePanel() {
+  var id = panelState.id;
+  if (!id) return;
+  setPanelBusy(true);
+  setPanelMessage('保存しています…', 'info');
+  var trustWholeBoard = null;
+  pendingIds[id] = true;
+  if (Object.keys(pendingIds).length > 1) overlapped = true;
+
+  google.script.run
+    .withSuccessHandler(function (res) {
+      setPanelBusy(false);
+      delete pendingIds[id];
+      trustWholeBoard = settleOverlap();
+      if (res.ok) {
+        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        closePanel();
+        setMessage(id + ' を保存しました。', 'info');
+      } else {
+        // 検証エラーではパネルを閉じない。閉じると入力が消える。
+        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        else render(board);
+        setPanelMessage(res.message, 'error');
+      }
+    })
+    .withFailureHandler(function (err) {
+      setPanelBusy(false);
+      delete pendingIds[id];
+      settleOverlap();
+      render(board);
+      setPanelMessage('保存に失敗しました: ' + err.message, 'error');
+    })
+    .apiUpdatePbi(id, readForm(), panelState.expectedUpdatedAt);
+}
+
 function load() {
   setMessage('読み込んでいます…', 'info');
   google.script.run
@@ -443,6 +656,16 @@ function move(id, newStatus) {
 
 document.getElementById('reload').addEventListener('click', load);
 fillButton(document.getElementById('reload'), 'reload', '最新にする');
+fillSelect(document.getElementById('f-status'), STATUS_OPTIONS);
+fillSelect(document.getElementById('f-priority'), PRIORITY_OPTIONS);
+document.getElementById('panel-close').appendChild(makeIcon('close'));
+fillButton(document.getElementById('panel-save'), 'save', '保存');
+fillButton(document.getElementById('panel-delete'), 'trash', '削除');
+document.getElementById('panel-close').addEventListener('click', closePanel);
+document.getElementById('panel-save').addEventListener('click', savePanel);
+document.addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape' && !document.getElementById('panel').hidden) closePanel();
+});
 load();
 </script>
 </body>
