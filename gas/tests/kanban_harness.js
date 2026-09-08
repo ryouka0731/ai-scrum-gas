@@ -8,6 +8,9 @@
 // 判定は内部変数ではなく、描画された DOM から読む（screen() / textOf() 等）。
 // ただしシムは CSS を評価しないため、display の打ち消しのような欠陥は原理的に
 // 検出できない。その種の検査は styleRules() を使った静的検査で行う。
+//
+// setTimeout は溜めるだけにし、flushTimers() で明示的に進める（通知の自動消滅を
+// 実時間を待たずに検査するため）。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -355,6 +358,19 @@ function createHarness(initialColumns) {
 
     /** 描画済みカードの click を起こす。 */
     openCard: function (id) { fire(cardElement(id), 'click', {}); },
+
+    /** 溜まっている setTimeout をすべて発火させる（時間経過を進める）。 */
+    flushTimers: function () {
+      const ids = Object.keys(timers).map(Number).sort(function (a, b) { return a - b; });
+      const due = ids.map(function (id) { const t = timers[id]; delete timers[id]; return t; });
+      due.forEach(function (t) { t.fn(); });
+      return due.length;
+    },
+
+    /** document の keydown を起こす（Escape 等）。 */
+    pressKey: function (key) {
+      (document.listeners.keydown || []).slice().forEach(function (fn) { fn({ key: key }); });
+    },
 
     setValue: function (fieldId, value) { el(fieldId).value = value; },
     valueOf: function (fieldId) { return el(fieldId).value; },

@@ -605,9 +605,9 @@ function savePanel() {
   setPanelMessage(id ? '保存しています…' : '作成しています…', 'info');
   var trustWholeBoard = null;
 
-  // 作成には id が無く pendingIds に載らないため、そのままだと更新の応答が先に返った
-  // 時点で overlapped が解除され、後から届く作成の応答が board 全体を信じてしまう。
-  // 合成キーで会計に載せる（renderCard は実在 id としか照合しないので表示には出ない）。
+  // 作成にはまだ id が無い。pendingIds は「送信中の会計」と「実在カードの表示・
+  // 操作抑止」を兼ねているため、合成キーで会計側だけに載せる（renderCard は実在 id
+  // としか照合しないので、このキーが表示に出ることはない）。
   var pendKey = id ? id : '(new)' + seq;
   pendingIds[pendKey] = true;
   inflight++;
@@ -754,10 +754,10 @@ function deletePbi() {
 function restorePbi(row) {
   if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   setMessage(row.id + ' を戻しています…', 'info');
-  // apiRestorePbi は送信中の id を持たない（削除と違い board 上に居ない）ため、
-  // 削除の (new) キーと同様に合成キーで pendingIds の会計に載せる。載せないと、
-  // 他の応答が先に返った時点で pendingIds が空になり overlapped が解除され、
-  // 後から届くこの応答が board 全体を信じてしまう。
+  // pendingIds は実在カードの表示・操作抑止にも使われる。素の id で載せると、
+  // 送信中に load() で board へ戻ってきた同じ id のカードが送信中扱いになり、
+  // 開くこともドラッグもできなくなる。合成キーで衝突を避ける
+  // （作成の (new) キーと同じく、会計側だけに載せるためのもの）。
   var pendKey = '(undo)' + row.id;
   pendingIds[pendKey] = true;
   inflight++;
