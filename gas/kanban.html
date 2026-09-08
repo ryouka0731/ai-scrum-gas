@@ -579,19 +579,17 @@ function savePanel() {
   setPanelMessage(id ? '保存しています…' : '作成しています…', 'info');
   var trustWholeBoard = null;
 
-  if (id) {
-    pendingIds[id] = true;
-    if (Object.keys(pendingIds).length > 1) overlapped = true;
-    render(board);   // 送信中のカードに pending の印を付ける（move() と対称にする）
-  } else if (Object.keys(pendingIds).length > 0) {
-    // 作成はまだ id が無く pendingIds には入れられないが、他に送信中があれば
-    // 応答の board は全体として信じない扱いにしておく。
-    overlapped = true;
-  }
+  // 作成には id が無く pendingIds に載らないため、そのままだと更新の応答が先に返った
+  // 時点で overlapped が解除され、後から届く作成の応答が board 全体を信じてしまう。
+  // 合成キーで会計に載せる（renderCard は実在 id としか照合しないので表示には出ない）。
+  var pendKey = id ? id : '(new)' + seq;
+  pendingIds[pendKey] = true;
+  if (Object.keys(pendingIds).length > 1) overlapped = true;
+  render(board);   // 送信中のカードに pending の印を付ける（move() と対称にする）
 
   var runner = google.script.run
     .withSuccessHandler(function (res) {
-      if (id) delete pendingIds[id];
+      delete pendingIds[pendKey];
       trustWholeBoard = settleOverlap();
       // 応答が返るまでに別のパネルを開いている場合がある。board の反映は必ず行い、
       // パネルに触る操作だけを「まだ同じ要求を出したパネルを開いているとき」に限る。
@@ -616,7 +614,7 @@ function savePanel() {
       }
     })
     .withFailureHandler(function (err) {
-      if (id) delete pendingIds[id];
+      delete pendingIds[pendKey];
       settleOverlap();
       render(board);
       var mine = (seq === panelSeq);
