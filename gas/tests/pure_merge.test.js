@@ -147,3 +147,17 @@ test('過去に戻った値を古い期待値で更新しようとしても拒�
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'conflict');
 });
+
+test('未来日の日付のみでもマーカーが伸びず、解析できる値のまま進む', () => {
+  // ローカルの Claude Code は yyyy-MM-dd で書き、時差で未来日になることがある。
+  // 日付のみを解析できないと `2026-09-05#1#1#1…` と際限なく伸び、
+  // この列（ローカルの AI と共同所有）が読めない値で埋まる。
+  const now = '2026-09-04 14:30:00';
+  let list = [{ id: 'PBI-001', updated_at: '2026-09-05' }];
+  const seen = [];
+  for (let i = 0; i < 3; i++) {
+    list = applyRowUpdate(list, 'PBI-001', { status: 'S' + i }, list[0].updated_at, now).rows;
+    seen.push(list[0].updated_at);
+  }
+  assert.deepEqual(seen, ['2026-09-05 00:00:01', '2026-09-05 00:00:02', '2026-09-05 00:00:03']);
+});

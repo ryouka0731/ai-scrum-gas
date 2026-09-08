@@ -16,9 +16,17 @@
  * yyyy-MM-dd HH:mm:ss 形式の文字列を1秒進める。解析できなければ null を返す。
  * タイムゾーンには依存しない（文字列の各要素を UTC 基準の Date として計算し、
  * 同じ書式へ戻すだけの文字列操作）。
+ *
+ * 日付のみの yyyy-MM-dd も受け取る。ローカルの Claude Code はこの書式で書き、
+ * 時差で未来日になることがある。受け取らないと `2026-09-05#1#1#1…` と
+ * マーカーが際限なく伸び、列が解析できない値で埋まる。
  */
 function addOneSecondToTimeText_(text) {
-  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(text || ''));
+  const raw = String(text || '');
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const m = dateOnly
+    ? [raw, dateOnly[1], dateOnly[2], dateOnly[3], '00', '00', '00']
+    : /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(raw);
   if (!m) return null;
   const dt = new Date(Date.UTC(
     Number(m[1]), Number(m[2]) - 1, Number(m[3]),
