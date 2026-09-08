@@ -26,6 +26,10 @@
       --shadow-2: 0 10px 28px rgba(0,0,0,.6);
     }
   }
+  /* 作成者オリジンの display 指定は UA スタイルシートの [hidden]{display:none} に
+     常に優先するため、hidden 属性だけでは隠れない要素（#panel / #toast / button 等の
+     display: flex 指定を持つもの）向けに明示しておく。 */
+  [hidden] { display: none !important; }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: var(--sp-5); background: var(--bg); color: var(--ink);
@@ -254,8 +258,12 @@ function fillButton(btn, iconName, label) {
 var dragging = null;
 // 現在描画している board。楽観的更新の基準（元の位置へ戻す先）として保持する。
 var board = null;
-// サーバへ送信中のカード id。応答が返るまで再ドラッグさせない。
+// サーバへ送信中のカード id。応答が返るまで再ドラッグさせない（見た目専用）。
 var pendingIds = {};
+// 送信中の要求の総数。同じカードへのドラッグと保存が重なると pendingIds は
+// 同じキー（そのカードの id）を指すため、重なりの判定には使えない。
+// 「送信が何件重なっているか」は pendingIds とは別にこちらで数える。
+var inflight = 0;
 // 送信が重なった batch かどうか。重なっていた間の応答は board 全体を信じない。
 var overlapped = false;
 
@@ -485,7 +493,7 @@ function boardWithCardMoved(b, id, newStatus) {
  */
 function settleOverlap() {
   var trustWholeBoard = !overlapped;
-  if (Object.keys(pendingIds).length === 0) overlapped = false;
+  if (inflight === 0) overlapped = false;
   return trustWholeBoard;
 }
 
@@ -602,12 +610,14 @@ function savePanel() {
   // 合成キーで会計に載せる（renderCard は実在 id としか照合しないので表示には出ない）。
   var pendKey = id ? id : '(new)' + seq;
   pendingIds[pendKey] = true;
-  if (Object.keys(pendingIds).length > 1) overlapped = true;
+  inflight++;
+  if (inflight > 1) overlapped = true;
   render(board);   // 送信中のカードに pending の印を付ける（move() と対称にする）
 
   var runner = google.script.run
     .withSuccessHandler(function (res) {
       delete pendingIds[pendKey];
+      inflight--;
       trustWholeBoard = settleOverlap();
       // 応答が返るまでに別のパネルを開いている場合がある。board の反映は必ず行い、
       // パネルに触る操作だけを「まだ同じ要求を出したパネルを開いているとき」に限る。
@@ -633,6 +643,7 @@ function savePanel() {
     })
     .withFailureHandler(function (err) {
       delete pendingIds[pendKey];
+      inflight--;
       settleOverlap();
       render(board);
       var mine = (seq === panelSeq);
@@ -651,14 +662,22 @@ function savePanel() {
 
 var toastTimer = null;
 var UNDO_SECONDS = 10;
+// 表示中の通知の文面。通知は1件しか出せないため、その最中に次の通知（次の削除）が
+// 来たら前の取り消しはもう押せなくなる。黙って失うのではなく、上書きする前に
+// 全体メッセージで知らせる。
+var activeToastText = null;
 
 /** 取り消せる通知を出す。時間が過ぎたら消える。 */
 function showUndoToast(text, onUndo) {
+  if (toastTimer && activeToastText) {
+    setMessage(activeToastText + '（この削除はもう取り消せません）', 'info');
+  }
   var el = document.getElementById('toast');
   document.getElementById('toast-text').textContent = text;
   var btn = document.getElementById('toast-undo');
   btn.onclick = function () { hideToast(); onUndo(); };
   el.hidden = false;
+  activeToastText = text;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, UNDO_SECONDS * 1000);
 }
@@ -666,6 +685,8 @@ function showUndoToast(text, onUndo) {
 function hideToast() {
   if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
   document.getElementById('toast').hidden = true;
+  document.getElementById('toast-undo').onclick = null;   // 期限切れ後は押せないようにする
+  activeToastText = null;
 }
 
 /**
@@ -685,12 +706,14 @@ function deletePbi() {
 
   setPanelBusy(true);
   pendingIds[id] = true;
-  if (Object.keys(pendingIds).length > 1) overlapped = true;
+  inflight++;
+  if (inflight > 1) overlapped = true;
   render(boardWithCardRemoved(board, id));   // 楽観的に消す
 
   google.script.run
     .withSuccessHandler(function (res) {
       delete pendingIds[id];
+      inflight--;
       var trustWholeBoard = settleOverlap();
       var mine = (seq === panelSeq);
       if (mine) setPanelBusy(false);
@@ -700,7 +723,11 @@ function deletePbi() {
         showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
       } else {
         if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
-        else render(boardWithCardUpserted(board, originalCard, originalStatus));
+        // パネルを開いたままの間にこのカードが board から消えていることがある
+        // （別の応答が先に処理した等）。その場合 originalCard は null になるので、
+        // 存在しないカードを元に戻そうとして例外にしない。
+        else if (originalCard) render(boardWithCardUpserted(board, originalCard, originalStatus));
+        else render(board);
         // 別のパネルを開いていると、パネルに出しても本人には届かない。
         if (mine) setPanelMessage(res.message, 'error');
         else setMessage(id + ': ' + res.message, 'error');
@@ -708,8 +735,10 @@ function deletePbi() {
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
+      inflight--;
       settleOverlap();
-      render(boardWithCardUpserted(board, originalCard, originalStatus));
+      if (originalCard) render(boardWithCardUpserted(board, originalCard, originalStatus));
+      else render(board);
       var mine = (seq === panelSeq);
       if (mine) {
         setPanelBusy(false);
@@ -731,11 +760,13 @@ function restorePbi(row) {
   // 後から届くこの応答が board 全体を信じてしまう。
   var pendKey = '(undo)' + row.id;
   pendingIds[pendKey] = true;
-  if (Object.keys(pendingIds).length > 1) overlapped = true;
+  inflight++;
+  if (inflight > 1) overlapped = true;
 
   google.script.run
     .withSuccessHandler(function (res) {
       delete pendingIds[pendKey];
+      inflight--;
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
@@ -747,6 +778,7 @@ function restorePbi(row) {
     })
     .withFailureHandler(function (err) {
       delete pendingIds[pendKey];
+      inflight--;
       settleOverlap();
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
@@ -779,14 +811,16 @@ function move(id, newStatus) {
   // 取り消したはずの移動を復活させたりする。
   var originalStatus = columnStatusOf(board, id);
 
-  if (Object.keys(pendingIds).length > 0) overlapped = true;
   pendingIds[id] = true;
+  inflight++;
+  if (inflight > 1) overlapped = true;
   render(boardWithCardMoved(board, id, newStatus));
   setMessage(id + ' を ' + newStatus + ' に移しています…', 'info');
 
   google.script.run
     .withSuccessHandler(function (res) {
       delete pendingIds[id];
+      inflight--;
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
         render(applyServerBoard(res.board, id, trustWholeBoard));
@@ -802,6 +836,7 @@ function move(id, newStatus) {
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
+      inflight--;
       settleOverlap();
       render(rollbackCard(id, newStatus, originalStatus));
       setMessage('更新に失敗しました: ' + err.message, 'error');
