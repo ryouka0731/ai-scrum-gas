@@ -133,6 +133,19 @@
   @media (max-width: 900px) {
     #panel { flex: 1 1 auto; width: 100%; }
   }
+
+  #toast {
+    position: fixed; left: 50%; bottom: var(--sp-5); transform: translateX(-50%);
+    display: flex; align-items: center; gap: var(--sp-4);
+    background: var(--ink); color: var(--bg);
+    border-radius: var(--radius); box-shadow: var(--shadow-2);
+    padding: var(--sp-3) var(--sp-4); font-size: 13px; max-width: min(560px, 92vw);
+  }
+  #toast button {
+    background: transparent; border-color: transparent; color: var(--bg);
+    text-decoration: underline; padding: var(--sp-1) var(--sp-2);
+  }
+  #toast button:hover { background: rgba(255,255,255,.12); }
 </style>
 </head>
 <body>
@@ -190,6 +203,11 @@
       <button id="panel-delete" class="danger" type="button"></button>
     </div>
   </aside>
+</div>
+<div id="toast" hidden role="status">
+  <span id="toast-text"></span>
+  <span class="spacer"></span>
+  <button id="toast-undo" type="button"></button>
 </div>
 
 <script>
@@ -631,6 +649,110 @@ function savePanel() {
   else runner.apiCreatePbi(fields);
 }
 
+var toastTimer = null;
+var UNDO_SECONDS = 10;
+
+/** 取り消せる通知を出す。時間が過ぎたら消える。 */
+function showUndoToast(text, onUndo) {
+  var el = document.getElementById('toast');
+  document.getElementById('toast-text').textContent = text;
+  var btn = document.getElementById('toast-undo');
+  btn.onclick = function () { hideToast(); onUndo(); };
+  el.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, UNDO_SECONDS * 1000);
+}
+
+function hideToast() {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  document.getElementById('toast').hidden = true;
+}
+
+/**
+ * 削除する。確認は挟まず、取り消せる通知を出す（モーダルは操作を制限するため使わない）。
+ * 押した瞬間にカードを消し、失敗したら戻す。savePanel() と同じ作りにする:
+ * board の反映は必ず行い、パネルに触る操作だけを「まだ同じパネルを開いているとき」に限る。
+ */
+function deletePbi() {
+  var id = panelState.id;
+  if (!id) return;
+  var seq = panelSeq;   // このパネルが今も同じものかを応答時に見分ける通し番号
+  var title = document.getElementById('f-title').value;
+  var expectedUpdatedAt = panelState.expectedUpdatedAt;
+  // 失敗したときにこの1枚だけを元へ戻すため、消す前の位置を控えておく。
+  var originalCard = findCard(board, id);
+  var originalStatus = columnStatusOf(board, id);
+
+  setPanelBusy(true);
+  pendingIds[id] = true;
+  if (Object.keys(pendingIds).length > 1) overlapped = true;
+  render(boardWithCardRemoved(board, id));   // 楽観的に消す
+
+  google.script.run
+    .withSuccessHandler(function (res) {
+      delete pendingIds[id];
+      var trustWholeBoard = settleOverlap();
+      var mine = (seq === panelSeq);
+      if (mine) setPanelBusy(false);
+      if (res.ok) {
+        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        if (mine) closePanel();
+        showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
+      } else {
+        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        else render(boardWithCardUpserted(board, originalCard, originalStatus));
+        // 別のパネルを開いていると、パネルに出しても本人には届かない。
+        if (mine) setPanelMessage(res.message, 'error');
+        else setMessage(id + ': ' + res.message, 'error');
+      }
+    })
+    .withFailureHandler(function (err) {
+      delete pendingIds[id];
+      settleOverlap();
+      render(boardWithCardUpserted(board, originalCard, originalStatus));
+      var mine = (seq === panelSeq);
+      if (mine) {
+        setPanelBusy(false);
+        setPanelMessage('削除に失敗しました: ' + err.message, 'error');
+      } else {
+        setMessage(id + ': 削除に失敗しました: ' + err.message, 'error');
+      }
+    })
+    .apiDeletePbi(id, expectedUpdatedAt);
+}
+
+/** 削除を取り消す。元の ID と作成日を保ったまま戻す（apiCreatePbi は使わない）。 */
+function restorePbi(row) {
+  if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  setMessage(row.id + ' を戻しています…', 'info');
+  // apiRestorePbi は送信中の id を持たない（削除と違い board 上に居ない）ため、
+  // 削除の (new) キーと同様に合成キーで pendingIds の会計に載せる。載せないと、
+  // 他の応答が先に返った時点で pendingIds が空になり overlapped が解除され、
+  // 後から届くこの応答が board 全体を信じてしまう。
+  var pendKey = '(undo)' + row.id;
+  pendingIds[pendKey] = true;
+  if (Object.keys(pendingIds).length > 1) overlapped = true;
+
+  google.script.run
+    .withSuccessHandler(function (res) {
+      delete pendingIds[pendKey];
+      var trustWholeBoard = settleOverlap();
+      if (res.ok) {
+        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
+        setMessage(row.id + ' を戻しました。', 'info');
+      } else {
+        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
+        setMessage(res.message, 'error');
+      }
+    })
+    .withFailureHandler(function (err) {
+      delete pendingIds[pendKey];
+      settleOverlap();
+      setMessage('取り消せませんでした: ' + err.message, 'error');
+    })
+    .apiRestorePbi(row);
+}
+
 function load() {
   setMessage('読み込んでいます…', 'info');
   google.script.run
@@ -696,8 +818,12 @@ fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
 document.getElementById('panel-close').addEventListener('click', closePanel);
 document.getElementById('panel-save').addEventListener('click', savePanel);
+fillButton(document.getElementById('toast-undo'), 'undo', '取り消す');
+document.getElementById('panel-delete').addEventListener('click', deletePbi);
 document.addEventListener('keydown', function (ev) {
-  if (ev.key === 'Escape' && !document.getElementById('panel').hidden) closePanel();
+  if (ev.key !== 'Escape') return;
+  if (!document.getElementById('toast').hidden) { hideToast(); return; }
+  if (!document.getElementById('panel').hidden) closePanel();
 });
 load();
 </script>
