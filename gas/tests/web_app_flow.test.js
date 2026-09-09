@@ -233,7 +233,7 @@ test('apiRestorePbi は検証を通った行を、元の id / created_at のま�
     id: 'PBI-007', title: 'もどす', priority: 'High', size: '3', status: 'Ready',
     created_at: '2026-09-01 09:00:00', updated_at: '2026-09-05 10:00:00',
   }) + '\n';
-  const { ctx } = createTestContext({ 'product_backlog.csv': csv });
+  const { ctx, files } = createTestContext({ 'product_backlog.csv': csv });
   const del = ctx.apiDeletePbi('PBI-007', '2026-09-05 10:00:00');
   assert.equal(del.ok, true, JSON.stringify(del));
 
@@ -241,6 +241,14 @@ test('apiRestorePbi は検証を通った行を、元の id / created_at のま�
   assert.equal(res.ok, true, JSON.stringify(res));
   const card = findCardInBoard(res.board, 'PBI-007');
   assert.ok(card, 'PBI-007 が board に無い');
+
+  // buildBoardData はカードに created_at を載せないため、盤面ではなく
+  // 書き戻された CSV 本体を読んで、created_at が元のままであることを検査する。
+  const restored = ctx.csvToObjects(files['product_backlog.csv']).find(function (r) {
+    return String(r.id).trim() === 'PBI-007';
+  });
+  assert.ok(restored, 'PBI-007 が CSV に無い');
+  assert.equal(restored.created_at, '2026-09-01 09:00:00', 'created_at が元のまま復元されていない');
 });
 
 test('apiRestorePbi は語彙外の status / priority / 非整数の size を持つ行も、表示→削除→取り消しまで通す', () => {
@@ -284,6 +292,36 @@ test('apiRestorePbi は今の最大値より大きい ID を拒否する（で�
   // 汚染していないので、次の採番は PBI-002 のまま。
   const next = ctx.apiCreatePbi(fullFields('つぎ'));
   assert.equal(next.id, 'PBI-002', '拒否されたはずの復元が採番を汚染した: ' + next.id);
+});
+
+test('apiRestorePbi は PBI-000 を拒否する（採番は PBI-001 から始まる）', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const fake = {
+    id: 'PBI-000', title: 'ゼロ', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  };
+  const res = ctx.apiRestorePbi(fake);
+  assert.equal(res.ok, false, 'PBI-000 の復元が通ってしまった');
+  assert.equal(res.reason, 'invalid');
+});
+
+test('高水位の記帳が一度も成功していない状態で最後の1行を削除しても、その取り消しが通る（記録が失われない）', () => {
+  // 記帳（PropertiesService.setProperty）が常に失敗する状況を再現する。
+  // 記帳は best-effort なので、CSV への書き戻し（削除の成功）自体は妨げられない。
+  const csv = headerOnlyCsv() + csvRow({
+    id: 'PBI-001', title: '最後の1行', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  }) + '\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': csv }, { failSetProperty: true });
+
+  const del = ctx.apiDeletePbi('PBI-001', '2026-09-01 00:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+
+  // 削除後、CSV の行も記録（記帳が一度も成功していない）も空になり、上限が
+  // 一つも立たない。ここで拒否すると、削除した行を戻す先が無く失われる。
+  const restore = ctx.apiRestorePbi(del.removed);
+  assert.equal(restore.ok, true,
+    '記録も CSV も空で上限が立たないため、削除の取り消しが拒否され行が失われた: ' + JSON.stringify(restore));
 });
 
 test('ローカルの Claude Code が書いた大きい ID をアプリで削除しても、その取り消しが通る', () => {

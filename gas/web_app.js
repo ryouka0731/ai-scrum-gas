@@ -264,7 +264,9 @@ function apiDeletePbi(id, expectedUpdatedAt) {
  * - id の番号が「今までに採番された最大値」を超えていないこと
  *   （isPbiIdWithinHighWater。復元は既存の行を戻す操作であり、最大値を超える
  *   ことは原理的にありえない。超えていれば、でっち上げ ID や改ざんとみなし、
- *   以後の採番を汚染させない）
+ *   以後の採番を汚染させない。ただし上限が一つも立たないとき＝記帳が
+ *   best-effort ゆえ一度も成功していないときは、判定をあきらめて通す。
+ *   詳しくは isPbiIdWithinHighWater のコメント参照）
  */
 function apiRestorePbi(row) {
   return withBacklogWrite_(function (rows) {

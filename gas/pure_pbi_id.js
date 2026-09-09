@@ -57,13 +57,22 @@ function nextPbiId(rows, highWaterId) {
  * 超えていないかを返す。復元は既存の行をそのまま戻す操作であり、その ID が
  * 今の最大値を超えることは原理的にありえない。超えていれば、でっち上げ ID や
  * 改ざんとみなせる（それを許すと、以後の採番がその極端な値まで汚染される）。
- * id が PBI-\d+ 形式でなければ false（形式チェックは別に行う）。
+ *
+ * ただしこの上限判定は汚染を防ぐための当て推量であり、正しさの保証ではない。
+ * rows も highWaterId も空で上限が一つも立たないとき（高水位の記帳が
+ * best-effort であるため、記帳が失敗した状態で削除が起きると起こりうる。
+ * readDoneBacklogRowsBestEffort_ と同じ考え方）は、判定をあきらめて通す。
+ * ここで拒否すると、削除した行を戻す先が無くなり、取り消せず失われる。
+ *
+ * id が PBI-\d+ 形式でない、または番号が 0 以下（採番は PBI-001 から始まる）
+ * なら false。
  */
 function isPbiIdWithinHighWater(id, rows, highWaterId) {
   const n = pbiIdNumber(id);
-  if (n === null) return false;
+  if (n === null || n <= 0) return false;
   const maxId = highWaterPbiId(rows, highWaterId);
-  const maxN = maxId === null ? 0 : pbiIdNumber(maxId);
+  if (maxId === null) return true;
+  const maxN = pbiIdNumber(maxId);
   return n <= maxN;
 }
 

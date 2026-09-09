@@ -117,8 +117,22 @@ test('isPbiIdWithinHighWater は rows と highWaterId のどちらか大きい�
   assert.equal(isPbiIdWithinHighWater('PBI-005', [{ id: 'PBI-001' }], 'PBI-005'), true);
 });
 
-test('isPbiIdWithinHighWater は最大値が無い（rows も highWaterId も空）ときは何も許さない', () => {
-  assert.equal(isPbiIdWithinHighWater('PBI-001', [], ''), false);
+test('isPbiIdWithinHighWater は最大値が一つも立たない（rows も highWaterId も空）ときは判定をあきらめて通す', () => {
+  // 高水位の記帳は best-effort であり、記帳が失敗した状態で削除が起きると
+  // rows も highWaterId も空になりうる。そのとき拒否すると、削除した行を
+  // 戻す先が無くなり、取り消せず失われる（readDoneBacklogRowsBestEffort_ と
+  // 同じ考え方で、判定をあきらめて通す）。
+  assert.equal(isPbiIdWithinHighWater('PBI-001', [], ''), true);
+});
+
+test('isPbiIdWithinHighWater は上限が分かるときの判定は維持する（でっち上げ ID の採番汚染防止）', () => {
+  // 上限が一つでも分かるなら、それを超える id は今までどおり拒否する。
+  assert.equal(isPbiIdWithinHighWater('PBI-999999', [], 'PBI-001'), false);
+});
+
+test('isPbiIdWithinHighWater は 0 以下の番号（PBI-000 など）を拒否する（採番は PBI-001 から始まる）', () => {
+  assert.equal(isPbiIdWithinHighWater('PBI-000', [], ''), false);
+  assert.equal(isPbiIdWithinHighWater('PBI-000', [{ id: 'PBI-005' }], ''), false);
 });
 
 test('isPbiIdWithinHighWater は PBI-\\d+ 形式でない id を false で返す', () => {
