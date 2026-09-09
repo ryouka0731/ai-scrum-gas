@@ -128,6 +128,25 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
   }
 });
 
+/**
+ * <select> の value は実ブラウザでは「.value に代入した値と一致する <option> が無ければ
+ * selectedIndex が -1 になり、.value は空文字を返す」という挙動を持つ。
+ * priority のように CSV の既存値が語彙外のことがある select でこれを再現しないと、
+ * 「パネルが空欄で表示している値」と「差分送信の基準値」がずれる欠陥をシムが検出できない。
+ */
+Object.defineProperty(Element.prototype, 'value', {
+  get: function () { return this._value === undefined ? '' : this._value; },
+  set: function (v) {
+    v = String(v);
+    if (this.tagName === 'select') {
+      var hasMatch = this.children.some(function (o) { return o.tagName === 'option' && o.value === v; });
+      this._value = hasMatch ? v : '';
+    } else {
+      this._value = v;
+    }
+  }
+});
+
 Element.prototype.appendChild = function (child) {
   child.parentNode = this;
   this.children.push(child);

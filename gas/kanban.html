@@ -523,7 +523,8 @@ var STATUS_OPTIONS = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 var PRIORITY_OPTIONS = ['Critical', 'High', 'Medium', 'Low'];
 
 // id が null なら新規作成モード。status は新規作成時の初期ステータス。
-var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0] };
+// fields は writeForm() が入れた直後のフォームの内容（差分送信の基準）。
+var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
 
 // 「今このパネルは、その要求を出したときと同じものか」を判定するための通し番号。
 // panelState.id では、作成中に別の列の「追加」を押された場合を区別できない（どちらも null）。
@@ -557,6 +558,26 @@ function readForm() {
   };
 }
 
+/**
+ * 編集でサーバへ送る項目を作る。触っていない項目は送らない。
+ *
+ * CSV はローカルの Claude Code と共同所有しているため、パネルが表示できない値
+ * （priority が空、status が語彙外、size が '2.5' 等）を常に送り返すと、
+ * 触っていない項目が黙って書き換わるか、検証に引っかかって保存そのものが
+ * 塞がれる。validatePbiFields は指定されなかった項目を検証しない。
+ *
+ * ただし title だけは、指定されなくても必須として検査される（空タイトルの行を
+ * 作らせないため）。外すと何も直せなくなるので常に送る。
+ */
+function changedFields(initial) {
+  var now = readForm();
+  var out = { title: now.title };
+  Object.keys(now).forEach(function (k) {
+    if (!initial || now[k] !== initial[k]) out[k] = now[k];
+  });
+  return out;
+}
+
 function writeForm(card, status) {
   document.getElementById('f-title').value = (card && card.title) || '';
   document.getElementById('f-description').value = (card && card.description) || '';
@@ -573,10 +594,13 @@ function openPanel(id, presetStatus) {
   if (id && !card) return;
   var status = id ? columnStatusOf(board, id) : (presetStatus || STATUS_OPTIONS[0]);
   panelSeq++;
-  panelState = { id: id, expectedUpdatedAt: card ? card.updated_at : '', status: status };
+  panelState = { id: id, expectedUpdatedAt: card ? card.updated_at : '', status: status, fields: null };
   document.getElementById('panel-title').textContent = id ? id : '新しい PBI';
   document.getElementById('panel-delete').hidden = !id;
   writeForm(card, status);
+  // 差分送信の基準。card ではなくフォームから読む。select は語彙外の値を
+  // 受け付けないため、card の値とフォームの表示は一致しないことがある。
+  panelState.fields = readForm();
   setPanelMessage('', 'info');
   setPanelBusy(false);
   document.getElementById('panel').hidden = false;
@@ -587,7 +611,7 @@ function openPanel(id, presetStatus) {
 function closePanel() {
   document.getElementById('panel').hidden = true;
   panelSeq++;   // 閉じたあとに応答が来ても、そのパネルは既に無い
-  panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0] };
+  panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
   render(board);
 }
 
@@ -613,7 +637,8 @@ function syncPanelExpectedUpdatedAt(id) {
 function savePanel() {
   var id = panelState.id;
   var seq = panelSeq;   // このパネルが今も同じものかを応答時に見分ける通し番号
-  var fields = readForm();
+  // 作成は列の文脈（status）を含む全項目を送る。差分の基準になる既存行が無い。
+  var fields = id ? changedFields(panelState.fields) : readForm();
   setPanelBusy(true);
   setPanelMessage(id ? '保存しています…' : '作成しています…', 'info');
   var trustWholeBoard = null;

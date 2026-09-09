@@ -238,6 +238,36 @@ test('編集は入力欄の内容と updated_at をそのままサーバへ送�
   assert.equal(call.args[2], 'T1', '競合検出のための updated_at が送られていない');
 });
 
+test('編集は触っていない項目を送らない（優先度が語彙外でも巻き込まない）', () => {
+  // readForm() は7項目を常に送っていた。CSV はローカルの Claude Code と共同所有のため、
+  // 触っていない項目まで送り返すと、黙って書き換わるか（priority が空→パネルは
+  // Medium と表示するが、行の実際の値は語彙外のまま）、パネルが表示できない値
+  // （語彙外の priority、'2.5' のような size 等）が検証エラーになって、
+  // タイトルを1文字直したいだけの保存そのものが塞がれる。
+  const CARD_C = { id: 'PBI-003', title: 'C', updated_at: 'T1', priority: '高（語彙外）' };
+  const initial = cols({ New: [CARD_C] });
+  const h = createHarness(initial);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, board: h.boardOf(initial) });
+
+  h.openCard('PBI-003');
+  // 前提: 語彙外の priority は select 上で選べず空欄になる（実ブラウザの select と同じ）。
+  assert.equal(h.valueOf('f-priority'), '', '前提が崩れている（select が語彙外の値を表示できてしまう）');
+  h.setValue('f-title', 'C かいへん');
+  h.click('panel-save');
+
+  const call = h.calls[h.calls.length - 1];
+  assert.equal(call.method, 'apiUpdatePbi');
+  const fields = call.args[1];
+  assert.equal(fields.title, 'C かいへん', '触った title が送られていない');
+  assert.equal(Object.prototype.hasOwnProperty.call(fields, 'priority'), false,
+    '触っていない priority を送っている（差分送信になっていない）');
+  assert.equal(Object.prototype.hasOwnProperty.call(fields, 'description'), false,
+    '触っていない description を送っている（差分送信になっていない）');
+  assert.equal(Object.prototype.hasOwnProperty.call(fields, 'status'), false,
+    '触っていない status を送っている（差分送信になっていない）');
+});
+
 test('作成は入力欄の内容をそのままサーバへ送る', () => {
   const h = ready();
   h.clickAdd('Ready');
@@ -785,19 +815,23 @@ function applyCall(current, call, stamp) {
   const next = copyCols(current);
   const id = call.args[0];
   let card = null;
-  next.forEach(function (c) { c.cards.forEach(function (x) { if (x.id === id) card = x; }); });
+  let from = null;
+  next.forEach(function (c) { c.cards.forEach(function (x) { if (x.id === id) { card = x; from = c; } }); });
   assert.ok(card, 'サーバ側に ' + id + ' が居ません');
   // 実サーバ（applyRowUpdate）はここで競合を判定する。値が違えば拒否される。
   assert.equal(call.args[2], card.updated_at, id + ': 競合検出のための updated_at が違う');
 
-  let to;
+  // 実サーバ（applyRowUpdate）は渡された項目だけを書き換える。status を送らなければ
+  // 列は動かない。差分送信になった apiUpdatePbi をここで無条件に読むと、送っていない
+  // status が undefined になり、この検査自体が誤って落ちる。
+  let to = from.status;
   if (call.method === 'apiUpdateStatus') {
     to = call.args[1];
   } else if (call.method === 'apiUpdatePbi') {
     const fields = call.args[1];
-    card.title = fields.title;
-    card.description = fields.description;
-    to = fields.status;
+    if (Object.prototype.hasOwnProperty.call(fields, 'title')) card.title = fields.title;
+    if (Object.prototype.hasOwnProperty.call(fields, 'description')) card.description = fields.description;
+    if (Object.prototype.hasOwnProperty.call(fields, 'status')) to = fields.status;
   } else {
     throw new Error('この検査で想定していないメソッド: ' + call.method);
   }
@@ -837,7 +871,10 @@ test('3操作を commit順6 × 到達順6 で回しても、画面がサーバ�
       assert.equal(calls[2].args[0], 'PBI-003');
       assert.equal(calls[2].args[1].title, 'C かいへん');
       assert.equal(calls[2].args[1].description, 'せつめい');
-      assert.equal(calls[2].args[1].status, 'New');
+      // PBI-003 は元から New 列にいる。status は触っていないので差分送信では送らない
+      // （差分の基準は writeForm 直後の値であり、常に 'New' が含まれるわけではない）。
+      assert.equal(Object.prototype.hasOwnProperty.call(calls[2].args[1], 'status'), false,
+        label + ': 触っていない status を送っている');
 
       // サーバは commit の順に、送られてきた引数どおりに処理する。
       // 応答が運ぶ board はその時点のもの。
