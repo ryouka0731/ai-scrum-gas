@@ -10,6 +10,12 @@
 if (typeof require !== 'undefined' && typeof filterRealRows === 'undefined') {
   var { filterRealRows } = require('./pure_filter.js');
 }
+if (typeof require !== 'undefined' && typeof realSprints === 'undefined') {
+  var { realSprints } = require('./pure_grid_board.js');
+}
+if (typeof require !== 'undefined' && typeof extractSection === 'undefined') {
+  var { extractSection } = require('./pure_markdown.js');
+}
 
 /** やることの要約。ステータスの語彙は引数で受け取る（KANBAN_STATUSES は const のため）。 */
 function summarizeBacklog(rows, statuses) {
@@ -37,4 +43,23 @@ function summarizeBacklog(rows, statuses) {
   return { byStatus: byStatus, total: total };
 }
 
-if (typeof module !== 'undefined') { module.exports = { summarizeBacklog }; }
+/**
+ * スプリントの要約。velocity.csv の最新行（realSprints の最後）と、
+ * sprint_backlog.md のゴールから作る。
+ * buildDashboardGrid はこれらを集計していないので、ここで作る。
+ */
+function summarizeSprint(velocityRows, sprintBacklogMd) {
+  const real = realSprints(velocityRows || []);
+  if (real.length === 0) return null;
+  const v = real[real.length - 1];
+  const num = function (x) { const n = parseFloat(x); return isNaN(n) ? 0 : n; };
+  return {
+    sprint: String(v.sprint || '').trim(),
+    goal: extractSection(sprintBacklogMd || '', 'スプリントゴール') || '',
+    planned: num(v.planned_points),
+    completed: num(v.completed_points),
+    carriedOver: num(v.carried_over_points),
+  };
+}
+
+if (typeof module !== 'undefined') { module.exports = { summarizeBacklog, summarizeSprint }; }

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { summarizeBacklog } = require('../pure_summary.js');
+const { summarizeBacklog, summarizeSprint } = require('../pure_summary.js');
 
 const ST = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 const real = (over) => Object.assign({
@@ -55,4 +55,30 @@ test('空でも全ステータスが 0 で並ぶ', () => {
   assert.equal(s.byStatus.length, ST.length);
   assert.equal(s.total.count, 0);
   assert.equal(s.total.points, 0);
+});
+
+test('スプリントの要約は velocity.csv の最新行から作る', () => {
+  const vel = [
+    { sprint: 'sprint001', planned_points: '20', completed_points: '18',
+      carried_over_points: '2', sprint_start: '2026-08-18', sprint_end: '2026-08-31' },
+    { sprint: 'sprint002', planned_points: '25', completed_points: '0',
+      carried_over_points: '0', sprint_start: '2026-09-01', sprint_end: '2026-09-14' },
+  ];
+  const s = summarizeSprint(vel, '## スプリントゴール\n\n動くものを出す\n');
+  assert.equal(s.sprint, 'sprint002');
+  assert.equal(s.planned, 25);
+  assert.ok(s.goal.indexOf('動くものを出す') !== -1);
+});
+
+test('スプリントの要約は日付が埋まった行が無ければ null', () => {
+  assert.equal(summarizeSprint([{ sprint: 'sprint001', sprint_start: 'YYYY-MM-DD' }], ''), null);
+  assert.equal(summarizeSprint([], ''), null);
+});
+
+test('ポイントが空でも 0 になる', () => {
+  const s = summarizeSprint(
+    [{ sprint: 'sprint001', sprint_start: '2026-08-18', sprint_end: '2026-08-31' }], '');
+  assert.equal(s.planned, 0);
+  assert.equal(s.completed, 0);
+  assert.equal(s.carriedOver, 0);
 });
