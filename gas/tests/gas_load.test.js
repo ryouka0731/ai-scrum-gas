@@ -45,7 +45,7 @@ test('評価後のグローバルから各層の関数を参照できる', () =>
     vm.runInContext(fs.readFileSync(path.join(GAS_DIR, name), 'utf8'), context, { filename: name });
   });
   // GAS 側の呼び出しは「同じグローバルに他ファイルの関数がある」ことが前提になっている
-  ['syncAll', 'onOpen', 'writeGrid', 'buildBacklogGrid', 'buildSyncLogGrid', 'pickLatestSprintName']
+  ['syncAll_', 'onOpen', 'writeGrid_', 'buildBacklogGrid', 'buildSyncLogGrid', 'pickLatestSprintName']
     .forEach(function (fn) {
       assert.equal(typeof context[fn], 'function', fn + ' がグローバルに見つかりません');
     });
