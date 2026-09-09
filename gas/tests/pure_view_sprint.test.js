@@ -53,6 +53,21 @@ test('ロードマップは帯を塗る位置を返す', () => {
   assert.ok(Array.isArray(v.marks));
 });
 
+test('ロードマップの marks.row は table.rows（ヘッダーを除いた配列）の添字を指す', () => {
+  // buildRoadmapGrid の marks.row はヘッダー込みグリッドの添字なので、
+  // ビューで -1 して正規化していないと1行ずれる。
+  const rows = [
+    { id: 'PBI-001', title: '不一致', status: 'New', sprint: 'sprint999',
+      created_at: '2026-08-18', updated_at: '2026-08-18' },
+    { id: 'PBI-002', title: '一致', status: 'New', sprint: 'sprint001',
+      created_at: '2026-08-18', updated_at: '2026-08-18' },
+  ];
+  const v = buildRoadmapView(rows, VEL);
+  assert.equal(v.marks.length, 1);
+  assert.equal(v.marks[0].row, 1);
+  assert.equal(v.table.rows[v.marks[0].row][0], 'PBI-002');
+});
+
 test('ロードマップは velocity.csv にスプリントが無ければ帯を塗らない', () => {
   // buildRoadmapGrid（既存・触らない）は実データ行を sprint 一致に関係なく常に出す
   // （スプリント列が無くなるだけ）。行数ではなく「塗る位置が無い」ことで確認する。

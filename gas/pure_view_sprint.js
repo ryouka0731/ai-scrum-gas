@@ -32,10 +32,15 @@ function buildVelocityView(velocityRows) {
   return { table: splitGrid_(buildVelocityGrid(velocityRows || [])) };
 }
 
-/** ロードマップ。marks は帯を塗るセルの位置。 */
+/**
+ * ロードマップ。marks は table.rows（ヘッダーを除いた配列）基準の帯を塗るセル位置。
+ * buildRoadmapGrid の marks.row はヘッダー込みグリッドの添字なので、ここで -1 して
+ * table.rows の添字に正規化する（画面側にこの知識を漏らさないため）。
+ */
 function buildRoadmapView(rows, velocityRows) {
   const out = buildRoadmapGrid(rows || [], velocityRows || []);
-  return { table: splitGrid_(out.grid), marks: out.marks || [] };
+  const marks = (out.marks || []).map(function (m) { return { row: m.row - 1, col: m.col }; });
+  return { table: splitGrid_(out.grid), marks: marks };
 }
 
 if (typeof module !== 'undefined') {

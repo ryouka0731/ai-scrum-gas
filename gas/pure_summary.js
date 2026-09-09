@@ -47,6 +47,9 @@ function summarizeBacklog(rows, statuses) {
  * スプリントの要約。velocity.csv の最新行（realSprints の最後）と、
  * sprint_backlog.md のゴールから作る。
  * buildDashboardGrid はこれらを集計していないので、ここで作る。
+ *
+ * velocity.csv は追記順＝時系列順である前提。行を並べ替えると、
+ * 「最新スプリント」のつもりが古い行になる。
  */
 function summarizeSprint(velocityRows, sprintBacklogMd) {
   const real = realSprints(velocityRows || []);
