@@ -363,6 +363,10 @@ function renderColumn(col) {
 }
 
 function onAddClick(status) {
+  // 盤面タブを見ていないのに開かせない（move() と同じ規則: 盤面由来の操作は、
+  // 盤面が隠れているとき起こらない）。#board は hidden で隠れていても DOM からは
+  // 消えていないため、この防御が無いと隠れた盤面の「追加」ボタンから書き込みが飛ぶ。
+  if (activeView !== 'board') return;
   openPanel(null, status);
 }
 
@@ -442,6 +446,8 @@ function renderCard(card) {
   });
   el.addEventListener('click', function () {
     if (pendingIds[card.id]) return;
+    // 盤面タブを見ていないのに開かせない（move() と同じ規則）。
+    if (activeView !== 'board') return;
     openPanel(card.id, null);
   });
   return el;
@@ -990,6 +996,16 @@ function showTableLoading() {
   host.appendChild(loading);
 }
 
+/**
+ * 「読み込んでいます…」を畳む。読み取りの失敗（今のビューのものと確定したもの）を
+ * 描いたときに呼ぶ。エラー文言は #message に出るため、ここでは空にするだけでよい。
+ * 捨てるべき応答（別のビューへ切り替え済み）では呼ばないこと —
+ * そのときは新しいビューの読み込み中表示を消してしまう。
+ */
+function foldTableLoading() {
+  document.getElementById('table-view').innerHTML = '';
+}
+
 /** 要約を描く。summary の形はタブごとに違う（無ければ何も出さない）。 */
 function renderSummary(summary) {
   var host = document.getElementById('summary');
@@ -1049,10 +1065,16 @@ function loadView() {
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
         renderSummary(res.summary);
         setMessage('', 'info');
-      } else { setMessage(res.message, 'error'); }
+      } else {
+        // 失敗が確定した（＝捨てるべき応答ではない）ので、「読み込んでいます…」を畳む。
+        // 畳まないと、エラー文言の下に「まだ読んでいる」表示が残ったままになる。
+        if (requestedView !== 'board') foldTableLoading();
+        setMessage(res.message, 'error');
+      }
     })
     .withFailureHandler(function (err) {
       if (seq !== viewSeq) return;
+      if (requestedView !== 'board') foldTableLoading();
       setMessage('読み込みに失敗しました: ' + err.message, 'error');
     })
     .apiGetView(requestedView);
