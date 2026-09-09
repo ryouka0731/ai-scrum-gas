@@ -86,7 +86,7 @@ test('ポイントが空でも 0 になる', () => {
 test('障害物の要約はファイル別に数え、雛形行を除く', () => {
   const s = summarizeImpediment(
     [{ id: 'IMP-001', title: 'a' }, { id: 'メモ', title: '' }],
-    [{ id: 'IMP-002', title: 'b' }]);
+    [{ id: 'IMP-002', title: 'b' }, { id: 'メモ', title: '' }]);
   assert.equal(s.open, 1);
   assert.equal(s.resolved, 1);
 });

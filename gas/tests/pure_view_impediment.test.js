@@ -15,6 +15,12 @@ test('列は field と label の対で、id が先頭', () => {
   });
 });
 
+test('列は status を含まない（未解決/解決済はファイルで分かれるため）', () => {
+  assert.deepEqual(
+    IMPEDIMENT_COLUMNS.map((c) => c.field),
+    ['id', 'title', 'description', 'reported_by', 'reported_at', 'sprint', 'resolved_at', 'resolution']);
+});
+
 test('未解決と解決済がファイル別に分かれる', () => {
   const v = buildImpedimentView(
     [imp({ id: 'IMP-001' })],
