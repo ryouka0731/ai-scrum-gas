@@ -182,6 +182,7 @@
   }
   th { color: var(--ink-2); font-weight: normal; white-space: nowrap; }
   td { overflow-wrap: anywhere; }
+  td.mark { background: var(--accent); color: var(--accent-ink); }
   .table-empty { color: var(--ink-2); font-size: 12px; padding: var(--sp-4) 0; }
 </style>
 </head>
@@ -587,6 +588,11 @@ var TABS = [
 var activeTab = 'pbi';
 var activeView = 'board';
 
+// 「今この読み込みは、発行したときに選ばれていたビューのものか」を判定するための
+// 通し番号（panelSeq と同じ考え方）。名前の比較（旧 requestedView !== activeView）だと、
+// 同じビューへの2つの読み込みが逆順に届いたとき古い方が勝ってしまうのを防げない。
+var viewSeq = 0;
+
 // id が null なら新規作成モード。status は新規作成時の初期ステータス。
 // fields は writeForm() が入れた直後のフォームの内容（差分送信の基準）。
 var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
@@ -918,8 +924,11 @@ function renderTabs() {
   var views = document.getElementById('views');
   views.innerHTML = '';
   var tab = TABS.filter(function (t) { return t.id === activeTab; })[0];
+  var single = !tab || tab.views.length <= 1;
   // ビューが1つだけのタブでは切り替えを出さない（押せる先が無いものを見せない）。
-  if (!tab || tab.views.length <= 1) return;
+  // ボタンを作らないだけでは #views の margin が隙間として残るため、hidden も立てる。
+  views.hidden = single;
+  if (single) return;
   tab.views.forEach(function (v) {
     var b = document.createElement('button');
     b.type = 'button';
@@ -932,12 +941,16 @@ function renderTabs() {
 }
 
 function switchTab(tabId) {
+  // 選択中のタブをもう一度押しても、今のビューがそのタブに属しているなら変えない
+  // （views[0] に戻すと、ベロシティを見ている最中にバーンダウンへ飛んでしまう）。
+  if (tabId === activeTab) return;
   var tab = TABS.filter(function (t) { return t.id === tabId; })[0];
   if (!tab) return;
   activeTab = tabId;
   activeView = tab.views[0].id;
   closePanel();
   renderTabs();
+  showView(activeView);
   loadView();
 }
 
@@ -945,10 +958,37 @@ function switchView(viewId) {
   activeView = viewId;
   closePanel();
   renderTabs();
+  showView(activeView);
   loadView();
 }
 
 function currentView() { return activeView; }
+
+/**
+ * 「どのビューを見せるか」をクリック時点で確定させる。応答を待たない。
+ *
+ * hidden の切替と要約のクリアを応答任せにすると、読み取りが失敗する・遅延するたびに
+ * 選んだタブと違う（前のタブの、操作可能な）盤面や表が残る。表側は前のビューの中身を
+ * そのまま残さないよう、応答が届くまで「読み込んでいます…」に置き換える
+ * （盤面側は元から1種類の描画先しか無く、他のビューの中身と混ざらないため置き換えない）。
+ */
+function showView(viewId) {
+  var isBoard = viewId === 'board';
+  document.getElementById('board').hidden = !isBoard;
+  document.getElementById('table-view').hidden = isBoard;
+  renderSummary(null);   // 新しい要約は応答で入るまでクリアしておく
+  if (!isBoard) showTableLoading();
+}
+
+/** #table-view を「読み込み中」の状態にする。前のビューの表を残したまま応答を待たない。 */
+function showTableLoading() {
+  var host = document.getElementById('table-view');
+  host.innerHTML = '';
+  var loading = document.createElement('div');
+  loading.className = 'table-empty';
+  loading.textContent = '読み込んでいます…';
+  host.appendChild(loading);
+}
 
 /** 要約を描く。summary の形はタブごとに違う（無ければ何も出さない）。 */
 function renderSummary(summary) {
@@ -962,7 +1002,9 @@ function renderSummary(summary) {
     host.appendChild(span);
   }
 
-  if (summary.byStatus) {
+  // 分岐は実際に読むプロパティ（total / sprint / open）でガードする。summary.byStatus は
+  // 空配列でも truthy になるため、それで分岐すると読む先（total）と食い違いうる。
+  if (summary.total !== undefined) {
     // やること: 合計件数・ポイント。
     stat('合計', summary.total.count + '件 / ' + summary.total.points + 'pt');
   } else if (summary.sprint !== undefined) {
@@ -985,25 +1027,34 @@ function loadView() {
   // 書き込みを見分けられない。盤面だけでなく表のビューでも同じ扱いにする。
   var seenSeq = writeSeq;
   var requestedView = activeView;
+  viewSeq++;
+  var seq = viewSeq;   // この読み込みが今も最新かを応答時に見分ける通し番号（panelSeq と同型）
   setMessage('読み込んでいます…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
+      // 「今も選ばれているビューの、一番新しい読み込みか」を最初に見る。同じビューへの
+      // 読み直しが逆順に届く場合も含めて、これより後に発行された読み込みがあれば捨てる。
+      // writeSeq の判定より先に置かないと、既に描き終えた別ビューの上に、見てもいない
+      // 遠いビューのエラー文言が被さる。
+      if (seq !== viewSeq) return;
       if (res.ok) {
         if (writeSeq !== seenSeq) {
           // 描かずに黙って終わると、何も起きなかったように見えるのが一番悪い。
           setMessage('読み込み中に他の変更が入りました。もう一度お試しください。', 'error');
           return;
         }
-        if (requestedView !== activeView) return;   // 応答が届く前に別のビューへ切り替えた
-        var isBoard = requestedView === 'board';
-        document.getElementById('board').hidden = !isBoard;
-        document.getElementById('table-view').hidden = isBoard;
-        if (isBoard) { render(res.view); } else { renderTable(res.view); }
+        // hidden の切替と要約のクリアは showView() が発行前（クリック時点）に済ませている。
+        // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
+        // 操作可能な盤面や表が残ってしまう）。
+        if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
         renderSummary(res.summary);
         setMessage('', 'info');
       } else { setMessage(res.message, 'error'); }
     })
-    .withFailureHandler(function (err) { setMessage('読み込みに失敗しました: ' + err.message, 'error'); })
+    .withFailureHandler(function (err) {
+      if (seq !== viewSeq) return;
+      setMessage('読み込みに失敗しました: ' + err.message, 'error');
+    })
     .apiGetView(requestedView);
 }
 
@@ -1028,17 +1079,26 @@ function tableHead(labels) {
   return thead;
 }
 
-/** headers（文字列配列）と rows（セル値の配列の配列）から表を作る。バーンダウン/ベロシティ/ロードマップ用。 */
-function gridTable(headers, rows) {
+/**
+ * headers（文字列配列）と rows（セル値の配列の配列）から表を作る。
+ * バーンダウン/ベロシティ/ロードマップ用。marks（省略可）はロードマップの帯を塗る
+ * セル位置 [{row, col}]（row は rows の添字、col は行内セルの添字。ヘッダー行は含まない）。
+ * 範囲外や欠落があっても例外にはせず、単にどこも塗らない。
+ */
+function gridTable(headers, rows, marks) {
   if (!rows || rows.length === 0) return emptyTableRow('ありません。');
+  // 毎セル marks を線形探索すると行数×列数×件数になるため、先にキー集合を作る。
+  var markKeys = {};
+  (marks || []).forEach(function (m) { markKeys[m.row + ':' + m.col] = true; });
   var table = document.createElement('table');
   table.appendChild(tableHead(headers));
   var tbody = document.createElement('tbody');
-  rows.forEach(function (row) {
+  rows.forEach(function (row, ri) {
     var tr = document.createElement('tr');
-    row.forEach(function (cell) {
+    row.forEach(function (cell, ci) {
       var td = document.createElement('td');
       td.textContent = (cell === null || cell === undefined) ? '' : String(cell);
+      if (markKeys[ri + ':' + ci]) td.classList.add('mark');
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -1095,7 +1155,7 @@ function renderTable(view) {
     return;
   }
   if (view.table) {
-    host.appendChild(gridTable(view.table.headers, view.table.rows));
+    host.appendChild(gridTable(view.table.headers, view.table.rows, view.marks));
     return;
   }
   host.appendChild(objectTable(view.columns, view.rows));
@@ -1108,6 +1168,10 @@ function renderTable(view) {
  * 最新の board）で描き直す。
  */
 function move(id, newStatus) {
+  // 盤面タブを見ていないのにドラッグを送らせない。#board は hidden 属性で隠れていても
+  // DOM からは消えていない（要素は残ったまま）ため、この防御が無いと、別タブへ切り替えた
+  // あとに残っている盤面をドラッグして書き込みが飛んでしまう。
+  if (activeView !== 'board') return;
   var card = findCard(board, id);
   if (!card) return;
   var expectedUpdatedAt = card.updated_at;
@@ -1167,6 +1231,7 @@ document.addEventListener('keydown', function (ev) {
   if (!document.getElementById('panel').hidden) closePanel();
 });
 renderTabs();
+showView(activeView);
 loadView();
 </script>
 </body>

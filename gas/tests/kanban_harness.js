@@ -265,7 +265,7 @@ function cloneColumns(cols) {
 
 /**
  * kanban.html の <script> を載せたハーネスを作る。
- * 評価は sandbox.load() の初回呼び出しまで遅らせる（<script> 末尾の load() が
+ * 評価は sandbox.load() の初回呼び出しまで遅らせる（<script> 末尾の loadView() が
  * そのまま初期読み込みになるため、apiGetView がちょうど1件積まれる）。
  */
 function createHarness(initialColumns) {
@@ -301,9 +301,13 @@ function createHarness(initialColumns) {
     clearTimeout: function (id) { delete timers[id]; }
   };
   let evaluated = false;
-  // <script> の評価で load 宣言に置き換わる。初回だけこのラッパが呼ばれる。
+  // kanban.html の <script> はもう load という名前の関数を宣言していない
+  // （末尾が renderTabs(); showView(activeView); loadView(); になっている）。
+  // このラッパーはハーネス側だけの入り口で、<script> の評価を初回呼び出しまで
+  // 遅らせるためのもの（末尾の loadView() がそのまま初期読み込みになり、
+  // apiGetView がちょうど1件積まれる）。
   sandbox.load = function () {
-    if (evaluated) throw new Error('load の差し替えに失敗しています');
+    if (evaluated) throw new Error('sandbox.load() を2回呼んでいます（<script> の評価は1回だけです）');
     evaluated = true;
     vm.runInContext(scriptSource(), sandbox, { filename: 'kanban.html' });
   };
@@ -417,6 +421,54 @@ function createHarness(initialColumns) {
           cards: c.cards.map(function (card) { return (typeof card === 'string') ? card : card.id; })
         };
       });
+    },
+
+    /** #tabs の中から、そのラベルのタブボタンの click を起こす。 */
+    clickTab: function (label) {
+      const hit = byId.tabs.children.filter(function (b) { return b.textContent === label; });
+      if (hit.length !== 1) throw new Error('タブ「' + label + '」が ' + hit.length + ' 件見つかりました');
+      fire(hit[0], 'click', {});
+    },
+
+    /** #views の中から、そのラベルのビューボタンの click を起こす。 */
+    clickView: function (label) {
+      const hit = byId.views.children.filter(function (b) { return b.textContent === label; });
+      if (hit.length !== 1) throw new Error('ビュー「' + label + '」が ' + hit.length + ' 件見つかりました');
+      fire(hit[0], 'click', {});
+    },
+
+    /** #tabs / #views のボタンのラベルと選択状態（aria-selected）を DOM から読む。 */
+    tabState: function () {
+      const state = function (container) {
+        return container.children.map(function (b) {
+          return { label: b.textContent, selected: b.getAttribute('aria-selected') === 'true' };
+        });
+      };
+      return { tabs: state(byId.tabs), views: state(byId.views), viewsHidden: !!byId.views.hidden };
+    },
+
+    /** id の要素の下にある table の tbody を [[{text, marked}]] で読む（表が無ければ null）。 */
+    tableRowsOf: function (hostId) {
+      const host = el(hostId);
+      const tables = collect(host, function (e) { return e.tagName === 'table'; });
+      if (tables.length === 0) return null;
+      const tbody = collect(tables[0], function (e) { return e.tagName === 'tbody'; })[0];
+      if (!tbody) return [];
+      return tbody.children.map(function (tr) {
+        return tr.children.map(function (td) {
+          return { text: td.textContent, marked: td.classList.contains('mark') };
+        });
+      });
+    },
+
+    /** id の要素の下にあるテキストをすべて（DOM 順に空白区切りで）連結して読む。 */
+    textTreeOf: function (hostId) {
+      const texts = [];
+      (function walk(e) {
+        if (e.textContent) texts.push(e.textContent);
+        e.children.forEach(walk);
+      })(el(hostId));
+      return texts.join(' ');
     }
   };
 }
