@@ -144,6 +144,23 @@ test('送信中は保存と削除が押せない', () => {
   assert.equal(h.disabledOf('panel-delete'), true);
 });
 
+test('送信中は入力欄も編集できない（成功で書きかけの追加編集が消えるのを防ぐ）', () => {
+  // ボタンだけ塞いでも、送信中に利用者が入力欄を触り続けられ、成功応答で
+  // closePanel() するとその追加編集が黙って消える。
+  const h = ready();
+  h.openCard('PBI-001');
+  h.click('panel-save');
+  ['f-title', 'f-description', 'f-acceptance', 'f-status', 'f-priority', 'f-size', 'f-sprint']
+    .forEach(function (id) {
+      assert.equal(h.disabledOf(id), true, id + ' が送信中も編集できる');
+    });
+
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null, removed: null, board: h.boardOf(INITIAL) });
+  // パネルは保存成功で閉じるが、次にパネルを開いたときのために解除も確かめる。
+  h.openCard('PBI-002');
+  assert.equal(h.disabledOf('f-title'), false, '応答後も入力欄が塞がったままになっている');
+});
+
 test('列の追加ボタンは、その列のステータスを初期値にする', () => {
   const h = ready();
   h.clickAdd('Review');

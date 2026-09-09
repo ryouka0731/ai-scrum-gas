@@ -633,9 +633,15 @@ function closePanel() {
   render(board);
 }
 
+// 送信中もフォームの入力欄が編集できてしまうと、応答が成功したときに
+// closePanel() で書きかけの編集が黙って消える。ボタンだけでなく入力欄も
+// 塞いで、送信した内容と画面の内容がずれたまま先へ進めないようにする。
+var PANEL_FORM_FIELD_IDS = ['f-title', 'f-description', 'f-acceptance', 'f-status', 'f-priority', 'f-size', 'f-sprint'];
+
 function setPanelBusy(busy) {
   document.getElementById('panel-save').disabled = busy;
   document.getElementById('panel-delete').disabled = busy;
+  PANEL_FORM_FIELD_IDS.forEach(function (id) { document.getElementById(id).disabled = busy; });
 }
 
 /**
