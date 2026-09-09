@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { summarizeBacklog, summarizeSprint } = require('../pure_summary.js');
+const { summarizeBacklog, summarizeSprint, summarizeImpediment } = require('../pure_summary.js');
 
 const ST = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 const real = (over) => Object.assign({
@@ -81,4 +81,16 @@ test('ポイントが空でも 0 になる', () => {
   assert.equal(s.planned, 0);
   assert.equal(s.completed, 0);
   assert.equal(s.carriedOver, 0);
+});
+
+test('障害物の要約はファイル別に数え、雛形行を除く', () => {
+  const s = summarizeImpediment(
+    [{ id: 'IMP-001', title: 'a' }, { id: 'メモ', title: '' }],
+    [{ id: 'IMP-002', title: 'b' }]);
+  assert.equal(s.open, 1);
+  assert.equal(s.resolved, 1);
+});
+
+test('障害物の要約は空でも 0 で返る', () => {
+  assert.deepEqual(summarizeImpediment(null, null), { open: 0, resolved: 0 });
 });
