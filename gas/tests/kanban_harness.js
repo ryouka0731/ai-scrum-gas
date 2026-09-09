@@ -426,5 +426,7 @@ module.exports = {
   styleRules: styleRules,
   selectorList: selectorList,
   declarations: declarations,
-  topLevelRules: topLevelRules
+  topLevelRules: topLevelRules,
+  styleSource: styleSource,
+  scriptSource: scriptSource
 };
