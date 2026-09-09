@@ -1001,3 +1001,72 @@ test('別のパネルへ切り替えたあとの競合応答は、そのパネ�
   assert.equal(second.args[0], 'PBI-002');
   assert.equal(second.args[2], 'T1', '別のカードの updated_at が混ざった');
 });
+
+// ---------------------------------------------------------------------------
+// load() を会計に載せる（writeSeq）
+// ---------------------------------------------------------------------------
+//
+// apiGetBoard はロックを取らないため、書き込み中の古い CSV を読める。ドラッグ等の
+// 送信中に「最新にする」を押すと、load() の応答がその書き込みを含まない古い board を
+// 運んでくることがある。inflight（応答時点で送信中の要求が無いか）だけでは、発行後に
+// 確定して既に終わった書き込みを見分けられない。この画面で4回踏んだ「応答の到達順で
+// 画面とサーバが永続的に食い違う」不具合の5回目。
+
+test('ドラッグの送信中に最新にすると、確定後に届く古い board で画面が巻き戻らない', () => {
+  const h = ready();
+  h.drag('PBI-001', 'Done');
+  const dragCall = h.calls[h.calls.length - 1];
+
+  h.click('reload');                     // ドラッグの送信中に「最新にする」
+  const loadCall = h.calls[h.calls.length - 1];
+  assert.equal(loadCall.method, 'apiGetBoard');
+
+  // ドラッグが先に確定する。
+  const moved = cols({ Done: [CARD_A], New: [CARD_B] });
+  dragCall.handlers.success({ ok: true, board: h.boardOf(moved) });
+  assert.equal(fmt(h.screen()), fmt(h.columnsOf(moved)), '前提: ドラッグの応答で画面が動いていない');
+
+  // load() の応答は、発行後に確定したこのドラッグを含まない古い board。
+  loadCall.handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+
+  assert.equal(fmt(h.screen()), fmt(h.columnsOf(moved)),
+    '確定した書き込みが古い board で巻き戻ってしまう');
+  assert.ok(h.textOf('message').indexOf('もう一度') !== -1,
+    '巻き戻さなかっただけで、利用者への手がかりが無い（何も起きなかったように見える）');
+});
+
+test('送信中に何も確定していなければ、最新にした結果はそのまま描く', () => {
+  // 上の検査が「常に描かない」への回帰でないことを確かめる。
+  const h = ready();
+  h.drag('PBI-001', 'Done');             // まだ応答が無い（確定していない）
+  const dragCall = h.calls[h.calls.length - 1];
+
+  h.click('reload');
+  const loadCall = h.calls[h.calls.length - 1];
+  loadCall.handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+
+  assert.equal(fmt(h.screen()), fmt(h.columnsOf(INITIAL)), '確定した書き込みが無いのに描かなかった');
+  assert.equal(h.textOf('message'), '', '巻き戻り検知の文面が誤って出ている');
+
+  dragCall.handlers.success({ ok: true, board: h.boardOf(cols({ Done: [CARD_A], New: [CARD_B] })) });
+});
+
+test('保存の送信中に最新にしても、確定していなければそのまま描く（drag 以外の書き込みでも同じ会計を使う）', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.setValue('f-title', 'A かいへん');
+  h.click('panel-save');
+  const saveCall = h.calls[h.calls.length - 1];
+
+  h.click('reload');
+  const loadCall = h.calls[h.calls.length - 1];
+
+  const savedBoard = cols({ New: [{ id: 'PBI-001', title: 'A かいへん', updated_at: 'T2' }, CARD_B] });
+  saveCall.handlers.success({ ok: true, board: h.boardOf(savedBoard) });
+
+  // load() の応答が、保存の確定後に届いた古い board。
+  loadCall.handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+
+  assert.equal(fmt(h.screen()), fmt(h.columnsOf(savedBoard)), '保存の確定が古い board で巻き戻った');
+  assert.ok(h.textOf('message').indexOf('もう一度') !== -1, '利用者への手がかりが無い');
+});

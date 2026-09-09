@@ -94,7 +94,7 @@
   .card.selected { border-color: var(--accent); box-shadow: var(--shadow-2); }
   .card .prio { display: flex; align-items: center; gap: var(--sp-2); font-size: 11px; color: var(--ink-2); }
   .card .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
-  .card .title { margin: var(--sp-2) 0 var(--sp-3); color: var(--ink); }
+  .card .title { margin: var(--sp-2) 0 var(--sp-3); color: var(--ink); overflow-wrap: anywhere; }
   .card .meta {
     color: var(--ink-3); font-size: 11px; display: flex; gap: var(--sp-3);
     border-top: 1px solid var(--line); padding-top: var(--sp-2);
@@ -144,12 +144,22 @@
     background: var(--ink); color: var(--bg);
     border-radius: var(--radius); box-shadow: var(--shadow-2);
     padding: var(--sp-3) var(--sp-4); font-size: 13px; max-width: min(560px, 92vw);
+    /* 今は DOM 順で最前面になっているだけ。あとで position を持つ要素が
+       足されると黙って隠れてしまうため、明示しておく。 */
+    z-index: 10;
   }
   #toast button {
     background: transparent; border-color: transparent; color: var(--bg);
     text-decoration: underline; padding: var(--sp-1) var(--sp-2);
   }
   #toast button:hover { background: rgba(255,255,255,.12); }
+  /* 狭い画面では #panel が全幅で縦に積まれ、下端の入力欄・保存ボタンが画面下部に来る。
+     通知を bottom に置いたままだと、消えるまでの10秒間それらを覆ってしまう。
+     #toast 本体の規則より後ろに置き、bottom を確実に上書きする（同じ詳細度なので
+     ソース順が先の規則は負ける）。 */
+  @media (max-width: 900px) {
+    #toast { top: var(--sp-3); bottom: auto; }
+  }
 </style>
 </head>
 <body>
@@ -266,6 +276,12 @@ var pendingIds = {};
 var inflight = 0;
 // 送信が重なった batch かどうか。重なっていた間の応答は board 全体を信じない。
 var overlapped = false;
+// 書き込み（ドラッグ・保存・作成・削除・取り消し）が確定するたびに増える通し番号。
+// apiGetBoard はロックを取らないため、書き込み中の古い CSV を読める。load() の応答が
+// 「発行してから届くまでの間に確定した書き込み」を含まない古い board であることを、
+// inflight（応答時点で送信中の要求が無いか）だけでは見分けられない。load() を出した
+// 時点の値を控えておき、応答時に比べる。
+var writeSeq = 0;
 
 function setMessage(text, kind) {
   var el = document.getElementById('message');
@@ -662,6 +678,7 @@ function savePanel() {
       var mine = (seq === panelSeq);
       if (mine) setPanelBusy(false);
       if (res.ok) {
+        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
         var newId = id || res.id;
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, newId));
         if (mine) closePanel();
@@ -759,6 +776,7 @@ function deletePbi() {
       var mine = (seq === panelSeq);
       if (mine) setPanelBusy(false);
       if (res.ok) {
+        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         if (mine) closePanel();
         showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
@@ -812,6 +830,7 @@ function restorePbi(row) {
       inflight--;
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
+        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
         setMessage(row.id + ' を戻しました。', 'info');
       } else {
@@ -829,11 +848,22 @@ function restorePbi(row) {
 }
 
 function load() {
+  // apiGetBoard はロックを取らないため、書き込み中の古い CSV を読める。応答が届くまでの
+  // 間に何か1件でも書き込みが確定していれば、この board はもう古い。inflight（応答時点で
+  // 送信中の要求が無いか）だけでは、発行後に確定して既に終わった書き込みを見分けられない。
+  var seenSeq = writeSeq;
   setMessage('読み込んでいます…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
-      if (res.ok) { render(res.board); setMessage('', 'info'); }
-      else { setMessage(res.message, 'error'); }
+      if (res.ok) {
+        if (writeSeq !== seenSeq) {
+          // 描かずに黙って終わると、何も起きなかったように見えるのが一番悪い。
+          setMessage('読み込み中に他の変更が入りました。もう一度お試しください。', 'error');
+          return;
+        }
+        render(res.board);
+        setMessage('', 'info');
+      } else { setMessage(res.message, 'error'); }
     })
     .withFailureHandler(function (err) { setMessage('読み込みに失敗しました: ' + err.message, 'error'); })
     .apiGetBoard();
@@ -866,6 +896,7 @@ function move(id, newStatus) {
       inflight--;
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
+        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
         render(applyServerBoard(res.board, id, trustWholeBoard));
         setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
       } else {
