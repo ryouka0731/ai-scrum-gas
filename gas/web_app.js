@@ -9,6 +9,8 @@
 const WEB_APP_TITLE = 'AI Scrum ボード';
 const BACKLOG_CSV_NAME = 'product_backlog.csv';
 const DONE_BACKLOG_CSV_NAME = 'product_backlog_done.csv';
+// PBI_ID_RE は pure_filter.js で定義済み（GAS は単一グローバルスコープなので
+// ここでは再宣言しない。再宣言するとプロジェクト全体の読み込みが失敗する）。
 
 /** Web アプリの入口。 */
 function doGet(e) {
@@ -216,12 +218,38 @@ function apiDeletePbi(id, expectedUpdatedAt) {
 /**
  * 削除した PBI を戻す。通知の「取り消す」から呼ばれる。
  * apiCreatePbi ではなくこちらを使うのは、元の id と created_at を保つため。
+ *
+ * google.script.run はブラウザから任意の値で呼べるため、apiCreatePbi /
+ * apiUpdatePbi と同じ検証をここでも通す。素通しすると、存在しない ID をでっち
+ * 上げて作成・更新の検証を丸ごと迂回できたり、極端な ID（例: PBI-999999）で
+ * 以後の採番を汚染できたりする。
  */
 function apiRestorePbi(row) {
   return withBacklogWrite_(function (rows) {
+    const id = String((row || {}).id || '').trim();
+    if (!PBI_ID_RE.test(id)) {
+      return { ok: false, reason: 'invalid', message: 'PBI ID の形式が不正です: ' + id };
+    }
+    // 復元する行は CSV の全列を持つオブジェクトであり、priority / size のような
+    // 任意項目も常に「値あり（空文字を含む）」として渡ってくる。create/update は
+    // フォームの select が常に実在の値を選ぶため空文字を送らないが、復元対象は
+    // アプリの外（ローカルの Claude Code 等）で作られた過去の行かもしれない。
+    // 空文字まで語彙チェックにかけると、正当な過去データの復元まで拒否してしまう
+    // ため、空文字は「未設定」として扱いチェックから外す。空でないのに語彙外の
+    // 値（改ざん・でっち上げ）は今までどおり拒否する。
+    const picked = pickEditableFields_(row);
+    Object.keys(picked).forEach(function (k) {
+      if (k !== 'title' && picked[k] === '') delete picked[k];
+    });
+    const v = validatePbiFields(picked, KANBAN_STATUSES);
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+
     const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_());
     if (!r.ok) {
-      return { ok: false, reason: r.reason, message: 'この PBI は既に存在します。取り消しは要りません。' };
+      const message = r.reason === 'invalid'
+        ? 'PBI ID が指定されていません。'
+        : 'この PBI は既に存在します。取り消しは要りません。';
+      return { ok: false, reason: r.reason, message: message };
     }
     return { ok: true, rows: r.rows };
   });

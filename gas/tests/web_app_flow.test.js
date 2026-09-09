@@ -178,3 +178,64 @@ test('完了バックログ（product_backlog_done.csv）にある最大 ID も�
   assert.equal(created.ok, true, JSON.stringify(created));
   assert.equal(created.id, 'PBI-051', '完了バックログの最大 ID より後ろから採番されていない');
 });
+
+test('apiRestorePbi は語彙外の status を持つ行を拒否する', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const bad = {
+    id: 'PBI-001', title: 'ふっかつ', status: 'ヨクワカラナイ状態',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  };
+  const res = ctx.apiRestorePbi(bad);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'invalid');
+
+  // 拒否されたのでその ID は使われておらず、通常の作成ではまだ PBI-001 が採番される。
+  const created = ctx.apiCreatePbi(fullFields('普通の作成'));
+  assert.equal(created.id, 'PBI-001', '拒否されたはずの復元が行を作ってしまった');
+});
+
+test('apiRestorePbi は PBI-\\d+ 形式でない id を拒否する', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const forms = ['', 'PBI-999999abc', 'DROP TABLE', '  ', 'PBI-'];
+  forms.forEach(function (id) {
+    const res = ctx.apiRestorePbi({ id: id, title: 'x', status: 'New' });
+    assert.equal(res.ok, false, 'id=' + JSON.stringify(id) + ' が通ってしまった');
+    assert.equal(res.reason, 'invalid', 'id=' + JSON.stringify(id));
+  });
+});
+
+test('apiRestorePbi は検証を通った行を、元の id / created_at のまま復元する', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const row = {
+    id: 'PBI-007', title: 'もどす', description: '', acceptance_criteria: '',
+    priority: 'High', size: '3', status: 'Ready', sprint: '',
+    created_at: '2026-09-01 09:00:00', updated_at: '2026-09-05 10:00:00',
+  };
+  const res = ctx.apiRestorePbi(row);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const card = findCardInBoard(res.board, 'PBI-007');
+  assert.ok(card, 'PBI-007 が board に無い');
+});
+
+test('apiRestorePbi は priority / size が空文字の行（アプリの外で作られた過去の行）も復元できる', () => {
+  // CSV は全列を持つオブジェクトのため、優先度未設定の行は '' として渡ってくる。
+  // create/update のフォームは常に実在の値を選ぶので空文字を送らないが、復元対象は
+  // ローカルの Claude Code が直接 CSV に書いた行かもしれない。空文字まで語彙外
+  // として拒否すると、正当な過去データの復元まで塞いでしまう。
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const row = {
+    id: 'PBI-042', title: 'ローカルの Claude Code が作った行', description: '', acceptance_criteria: '',
+    priority: '', size: '', status: 'New', sprint: '',
+    created_at: '2026-09-01 09:00:00', updated_at: '2026-09-05 10:00:00',
+  };
+  const res = ctx.apiRestorePbi(row);
+  assert.equal(res.ok, true, '空文字の priority / size で正当な復元が拒否された: ' + JSON.stringify(res));
+});
+
+test('apiRestorePbi は priority が語彙外（空文字ではない）の行は拒否する', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const row = { id: 'PBI-042', title: 'x', priority: 'でたらめ', status: 'New' };
+  const res = ctx.apiRestorePbi(row);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'invalid');
+});
