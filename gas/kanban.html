@@ -599,6 +599,13 @@ var activeView = 'board';
 // 同じビューへの2つの読み込みが逆順に届いたとき古い方が勝ってしまうのを防げない。
 var viewSeq = 0;
 
+// #table-view に showTableLoading() の「読み込んでいます…」placeholder が今も
+// 出ているか。foldTableLoading() はこれが true のときだけ畳む — false（renderTable()
+// が実データの表を描いた後）で畳むと、「最新にする」（showView() を経由しない）が
+// 失敗したときに描画済みの表を消してしまう。DOM の中身を文字列で照合しない
+// （表示文言を変えたときに黙って壊れるのを避ける）。
+var tableLoading = false;
+
 // id が null なら新規作成モード。status は新規作成時の初期ステータス。
 // fields は writeForm() が入れた直後のフォームの内容（差分送信の基準）。
 var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
@@ -994,16 +1001,23 @@ function showTableLoading() {
   loading.className = 'table-empty';
   loading.textContent = '読み込んでいます…';
   host.appendChild(loading);
+  tableLoading = true;
 }
 
 /**
- * 「読み込んでいます…」を畳む。読み取りの失敗（今のビューのものと確定したもの）を
- * 描いたときに呼ぶ。エラー文言は #message に出るため、ここでは空にするだけでよい。
- * 捨てるべき応答（別のビューへ切り替え済み）では呼ばないこと —
- * そのときは新しいビューの読み込み中表示を消してしまう。
+ * 「読み込んでいます…」を畳む。エラー文言は #message に出るため、ここでは空にする
+ * だけでよい。判定は tableLoading（今そこに placeholder が出ているか）で行う —
+ * 「捨てるべき応答か」では判定しない。renderTable() が実データの表を描いた後
+ * （tableLoading === false）に畳むと、「最新にする」（showView() を経由しないので
+ * placeholder が立ち直らない）が失敗したときに描画済みの表を消してしまう。
+ * viewSeq が不一致（別のビューへ切り替え済み）のときに畳まれないのは、その時点で
+ * 新しい showTableLoading() が placeholder を立て直しているから（tableLoading は
+ * 新しい読み込みのものに置き換わっている）で、ここでは意識して判定していない。
  */
 function foldTableLoading() {
+  if (!tableLoading) return;
   document.getElementById('table-view').innerHTML = '';
+  tableLoading = false;
 }
 
 /** 要約を描く。summary の形はタブごとに違う（無ければ何も出さない）。 */
@@ -1056,6 +1070,9 @@ function loadView() {
       if (res.ok) {
         if (writeSeq !== seenSeq) {
           // 描かずに黙って終わると、何も起きなかったように見えるのが一番悪い。
+          // ここも失敗の確定と同じく、placeholder が出ていれば畳む
+          // （tableLoading が false なら foldTableLoading() は何もしない）。
+          foldTableLoading();
           setMessage('読み込み中に他の変更が入りました。もう一度お試しください。', 'error');
           return;
         }
@@ -1066,15 +1083,14 @@ function loadView() {
         renderSummary(res.summary);
         setMessage('', 'info');
       } else {
-        // 失敗が確定した（＝捨てるべき応答ではない）ので、「読み込んでいます…」を畳む。
-        // 畳まないと、エラー文言の下に「まだ読んでいる」表示が残ったままになる。
-        if (requestedView !== 'board') foldTableLoading();
+        // 失敗が確定した（＝捨てるべき応答ではない）。placeholder が出ていれば畳む。
+        foldTableLoading();
         setMessage(res.message, 'error');
       }
     })
     .withFailureHandler(function (err) {
       if (seq !== viewSeq) return;
-      if (requestedView !== 'board') foldTableLoading();
+      foldTableLoading();
       setMessage('読み込みに失敗しました: ' + err.message, 'error');
     })
     .apiGetView(requestedView);
@@ -1162,6 +1178,7 @@ function tableSection(title, columns, rows) {
 /** 表を描く。ユーザー由来の文字列は textContent で入れる。 */
 function renderTable(view) {
   var host = document.getElementById('table-view');
+  tableLoading = false;   // 実データを描くので、もう「読み込み中」ではない
   host.innerHTML = '';
   if (!view) {
     var none = document.createElement('div');
