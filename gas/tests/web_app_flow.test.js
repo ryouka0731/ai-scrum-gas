@@ -54,7 +54,12 @@ function findCardInBoard(board, id) {
  * files はフォルダ直下のファイル名→本文（可変）。product_backlog.csv 以外は
  * 読み取り専用（assertWritableFileName が絞っているので書けないのが正しい）。
  */
-function createTestContext(files) {
+/**
+ * opts.failSetProperty: true にすると PropertiesService.setProperty が常に例外を
+ * 投げる（高水位の記帳が失敗する状況を再現するため）。
+ */
+function createTestContext(files, opts) {
+  opts = opts || {};
   function makeIterator(arr) {
     let i = 0;
     return { hasNext: function () { return i < arr.length; }, next: function () { return arr[i++]; } };
@@ -93,7 +98,10 @@ function createTestContext(files) {
       getScriptProperties: function () {
         return {
           getProperty: function (key) { return Object.prototype.hasOwnProperty.call(props, key) ? props[key] : null; },
-          setProperty: function (key, value) { props[key] = value; },
+          setProperty: function (key, value) {
+            if (opts.failSetProperty) throw new Error('setProperty はテストで意図的に失敗させています');
+            props[key] = value;
+          },
         };
       },
     },
@@ -197,10 +205,25 @@ test('apiRestorePbi は PBI-\\d+ 形式でない id を拒否する', () => {
 });
 
 test('apiRestorePbi はタイトルが空の行を拒否する', () => {
+  // 空 CSV・記録なしのまま id だけで呼ぶと、title に到達する前に
+  // isPbiIdWithinHighWater（採番の上限判定）で reason:'invalid' として拒否され、
+  // title ガードを検査したことにならない（両者は reason が同じで区別できない）。
+  // 上限を通過させるため、まず1件作って削除し、その removed の title だけを
+  // 空にして復元する。
   const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
-  const res = ctx.apiRestorePbi({ id: 'PBI-001', title: '', status: 'New' });
+  const created = ctx.apiCreatePbi(fullFields('あとで消す'));
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const card = findCardInBoard(created.board, created.id);
+  const del = ctx.apiDeletePbi(created.id, card.updated_at);
+  assert.equal(del.ok, true, JSON.stringify(del));
+
+  const removedWithoutTitle = Object.assign({}, del.removed, { title: '' });
+  const res = ctx.apiRestorePbi(removedWithoutTitle);
   assert.equal(res.ok, false);
   assert.equal(res.reason, 'invalid');
+  // reason だけでは上限判定との区別がつかないため、メッセージの内容まで検査する。
+  assert.equal(res.message, 'タイトルを入力してください。',
+    'title ガードではない別の経路で拒否された: ' + JSON.stringify(res));
 });
 
 test('apiRestorePbi は検証を通った行を、元の id / created_at のまま復元する', () => {
@@ -278,6 +301,50 @@ test('ローカルの Claude Code が書いた大きい ID をアプリで削除
 
   const restore = ctx.apiRestorePbi(del.removed);
   assert.equal(restore.ok, true, '外で作られた大きい ID の取り消しが拒否された: ' + JSON.stringify(restore));
+});
+
+test('高水位の記帳（setProperty）が失敗しても、ドラッグ・削除は成功する', () => {
+  // advanceLastPbiIdWatermark_ は best-effort の記帳であり、ここが失敗しても
+  // withBacklogWrite_ 本体（CSV への書き戻し）まで巻き添えにしてはいけない。
+  const csv = headerOnlyCsv() + csvRow({
+    id: 'PBI-001', title: '対象', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  }) + '\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': csv }, { failSetProperty: true });
+
+  // ドラッグ（ステータス変更）。
+  const moved = ctx.apiUpdateStatus('PBI-001', 'In Progress', '2026-09-01 00:00:00');
+  assert.equal(moved.ok, true, 'setProperty の失敗でドラッグまで失敗した: ' + JSON.stringify(moved));
+
+  // 削除。
+  const card = findCardInBoard(moved.board, 'PBI-001');
+  assert.ok(card, 'PBI-001 が board に無い');
+  const del = ctx.apiDeletePbi('PBI-001', card.updated_at);
+  assert.equal(del.ok, true, 'setProperty の失敗で削除まで失敗した: ' + JSON.stringify(del));
+});
+
+test('advanceLastPbiIdWatermark_ は mutate より前に呼ばれる（mutate が rows を破壊的に変更しても高水位を取り逃さない）', () => {
+  // 今の pure 層（deleteRow 等）は rows を書き換えず新しい配列を返すが、将来
+  // 破壊的に書き換えるようになっても取り逃さないよう、advance は mutate の
+  // 前に呼ぶ実装になっている（web_app.js のコメント参照）。この順序を誰も
+  // 検査していないと、入れ替えられても気づけない。ここでは pure 層が破壊的で
+  // ある状況を模した mutate を直接渡し、順序を固定する。
+  const csv = headerOnlyCsv() + csvRow({
+    id: 'PBI-042', title: '破壊的テスト', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  }) + '\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': csv });
+
+  // advance が mutate の後に呼ばれる実装だと、ここで空にされた rows しか
+  // 見えず、PBI-042 の高水位が記録されないまま終わる。
+  const result = ctx.withBacklogWrite_(function (rows) {
+    rows.length = 0;
+    return { ok: true, rows: rows };
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+
+  assert.equal(ctx.getLastPbiId_(), 'PBI-042',
+    'mutate による破壊的変更の後に高水位を計算しており、PBI-042 を取り逃した');
 });
 
 test('外で作られた大きい ID を削除した後、採番が下から歩き直して衝突しない', () => {

@@ -55,14 +55,23 @@ function readDoneBacklogRowsBestEffort_() {
  * Claude Code が直接 CSV に書いた ID（記録より大きい）は、その行が delete 等で
  * rows から消える前に一度でも書き戻しが起きれば、ここで必ず捕捉される。
  * 記録は一方向にしか進めない（大きい方を採るだけ）ので、逆行はしない。
+ *
+ * 高水位はあくまで best-effort の記帳であり、CSV 本体の書き戻しを止める理由には
+ * ならない。readDoneBacklogRowsBestEffort_ と同様、失敗しても例外を投げず黙って
+ * 諦める（最悪でも「記録が古いままで、でっち上げ ID の復元が1回誤って拒否される」
+ * だけで済み、ドラッグ・編集・削除まで巻き添えにしない）。
  */
 function advanceLastPbiIdWatermark_(rows) {
-  const scanRows = rows.concat(readDoneBacklogRowsBestEffort_());
-  const recorded = getLastPbiId_();
-  const scannedMax = highWaterPbiId(scanRows, '');
-  if (scannedMax === null) return;
-  const recordedN = recorded ? pbiIdNumber(recorded) : null;
-  if (recordedN === null || pbiIdNumber(scannedMax) > recordedN) setLastPbiId_(scannedMax);
+  try {
+    const scanRows = rows.concat(readDoneBacklogRowsBestEffort_());
+    const recorded = getLastPbiId_();
+    const scannedMax = highWaterPbiId(scanRows, '');
+    if (scannedMax === null) return;
+    const recordedN = recorded ? pbiIdNumber(recorded) : null;
+    if (recordedN === null || pbiIdNumber(scannedMax) > recordedN) setLastPbiId_(scannedMax);
+  } catch (e) {
+    // best-effort: 記録できなくても書き戻し本体は続行する。
+  }
 }
 
 /** カンバンの内容を返す。 */
@@ -97,8 +106,10 @@ function withBacklogWrite_(mutate) {
     // 書き戻しより前に必ずヘッダーを検査する。
     assertHeaderMatches(text, BACKLOG_FIELDS);
     const rows = csvToObjects(text);
-    // mutate の前に必ず高水位を進める。delete のように行が rows から消える
-    // 操作でも、消える前の rows を一度は見ているので取り逃さない。
+    // mutate の前に必ず高水位を進める。今の pure 層（pure_merge.js）は rows を
+    // 直接書き換えず新しい配列を返すので mutate の後でも安全なはずだが、
+    // pure 層が将来 rows を破壊的に書き換えるようになっても取り逃さないよう、
+    // 安全側として mutate の前に置いている。
     advanceLastPbiIdWatermark_(rows);
 
     const result = mutate(rows);
