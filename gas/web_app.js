@@ -74,17 +74,94 @@ function advanceLastPbiIdWatermark_(rows) {
   }
 }
 
-/** カンバンの内容を返す。 */
-function apiGetBoard() {
+const VELOCITY_CSV_NAME = 'velocity.csv';
+const IMPEDIMENT_CSV_NAME = 'impediment_log.csv';
+const IMPEDIMENT_RESOLVED_CSV_NAME = 'impediment_log_resolved.csv';
+
+/** scrum 直下の CSV を読む。無い・壊れているときは空配列（ビューごとに独立して失敗させる）。 */
+function readCsvRowsBestEffort_(name) {
   try {
-    // 読み込み時点でヘッダーを検査する。ここで気づかないと、ヘッダーが
-    // BACKLOG_FIELDS と違っていても board は正常に描画され、ドラッグして
-    // 初めてエラーが出る（原因が分からないまま操作を繰り返させてしまう）。
-    const text = readBacklogText_();
-    assertHeaderMatches(text, BACKLOG_FIELDS);
-    return { ok: true, board: buildBoardData(csvToObjects(text)) };
+    const text = readTextFile_(getScrumFolder_(), name);
+    if (text === null) return [];
+    return csvToObjects(text);
   } catch (e) {
-    return { ok: false, message: e.message };
+    return [];
+  }
+}
+
+/** 最新のスプリントフォルダの sprint_backlog.md を読む。無ければ空文字。 */
+function readSprintBacklogMdBestEffort_() {
+  try {
+    const folder = findLatestSprintFolder_(getScrumFolder_());
+    if (!folder) return '';
+    return readTextFile_(folder, 'sprint_backlog.md') || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * ビューの内容を返す。読み取りのみ。
+ *
+ * タブごとに API を増やすと公開関数が増える。google.script.run は全グローバル関数を
+ * ブラウザへ公開するため、公開面は小さいほどよい。
+ *
+ * 読み取りの失敗はビューごとに独立させる。どれも他のタブを巻き添えにしない。
+ */
+function apiGetView(name) {
+  const key = String(name || 'board');
+  try {
+    if (key === 'board' || key === 'list') {
+      // 読み込み時点でヘッダーを検査する。ここで気づかないと、ヘッダーが
+      // BACKLOG_FIELDS と違っていても盤面は正常に描画され、ドラッグして
+      // 初めてエラーが出る（原因が分からないまま操作を繰り返させてしまう）。
+      const text = readBacklogText_();
+      assertHeaderMatches(text, BACKLOG_FIELDS);
+      const rows = csvToObjects(text);
+      const summary = summarizeBacklog(rows, KANBAN_STATUSES);
+      const view = key === 'board' ? buildBoardData(rows) : buildListView(rows);
+      return { ok: true, name: key, view: view, summary: summary };
+    }
+    if (key === 'done') {
+      const rows = readDoneBacklogRowsBestEffort_();
+      return { ok: true, name: key, view: buildDoneView(rows), summary: null };
+    }
+    if (key === 'burndown') {
+      const md = readSprintBacklogMdBestEffort_();
+      const vel = readCsvRowsBestEffort_(VELOCITY_CSV_NAME);
+      return {
+        ok: true, name: key,
+        view: buildBurndownView(md),   // 元データが無ければ null
+        summary: summarizeSprint(vel, md),
+      };
+    }
+    if (key === 'velocity' || key === 'roadmap') {
+      const vel = readCsvRowsBestEffort_(VELOCITY_CSV_NAME);
+      const md = readSprintBacklogMdBestEffort_();
+      let view;
+      if (key === 'velocity') {
+        view = buildVelocityView(vel);
+      } else {
+        // board/list と同じくヘッダーを検査する。ここを飛ばすと、ヘッダーが壊れた
+        // CSV でも roadmap だけ黙って誤った表を返し、board との非対称が生まれる。
+        const text = readBacklogText_();
+        assertHeaderMatches(text, BACKLOG_FIELDS);
+        view = buildRoadmapView(csvToObjects(text), vel);
+      }
+      return { ok: true, name: key, view: view, summary: summarizeSprint(vel, md) };
+    }
+    if (key === 'impediment') {
+      const open = readCsvRowsBestEffort_(IMPEDIMENT_CSV_NAME);
+      const done = readCsvRowsBestEffort_(IMPEDIMENT_RESOLVED_CSV_NAME);
+      return {
+        ok: true, name: key,
+        view: buildImpedimentView(open, done),
+        summary: summarizeImpediment(open, done),
+      };
+    }
+    return { ok: false, name: key, message: '不明なビューです: ' + key };
+  } catch (e) {
+    return { ok: false, name: key, message: e.message };
   }
 }
 

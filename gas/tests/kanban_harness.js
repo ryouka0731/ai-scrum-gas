@@ -209,7 +209,7 @@ function buildStaticElements() {
 
 // 実装が呼ぶサーバ側 API。ここに無い名前を呼ぶと TypeError になり、取りこぼしに気づける。
 const API_METHODS = [
-  'apiGetBoard', 'apiUpdateStatus', 'apiUpdatePbi',
+  'apiGetView', 'apiUpdateStatus', 'apiUpdatePbi',
   'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi'
 ];
 
@@ -266,7 +266,7 @@ function cloneColumns(cols) {
 /**
  * kanban.html の <script> を載せたハーネスを作る。
  * 評価は sandbox.load() の初回呼び出しまで遅らせる（<script> 末尾の load() が
- * そのまま初期読み込みになるため、apiGetBoard がちょうど1件積まれる）。
+ * そのまま初期読み込みになるため、apiGetView がちょうど1件積まれる）。
  */
 function createHarness(initialColumns) {
   const byId = buildStaticElements();

@@ -57,6 +57,8 @@ function findCardInBoard(board, id) {
 /**
  * opts.failSetProperty: true にすると PropertiesService.setProperty が常に例外を
  * 投げる（高水位の記帳が失敗する状況を再現するため）。
+ * opts.failReadFile: 指定した名前で getFilesByName を呼ぶと例外を投げる（Drive 側が
+ * エラーを返す状況を再現するため。ファイル不在＝readTextFile_ が null を返す、とは別の経路）。
  */
 function createTestContext(files, opts) {
   opts = opts || {};
@@ -74,6 +76,9 @@ function createTestContext(files, opts) {
   }
   const scrumFolder = {
     getFilesByName: function (name) {
+      if (opts.failReadFile && name === opts.failReadFile) {
+        throw new Error('getFilesByName はテストで意図的に失敗させています: ' + name);
+      }
       return Object.prototype.hasOwnProperty.call(files, name) ? makeIterator([makeFile(name)]) : makeIterator([]);
     },
   };
@@ -158,7 +163,7 @@ test('最大の PBI を削除→作成→取り消し、が成功する（削除
   // deepStrictEqual が「構造は同じだが参照が別」で弾く foreign array を返しうる。
   // ここでは native な配列へ手動で詰め直す。
   const finalIds = [];
-  ctx.apiGetBoard().board.columns.forEach(function (c) {
+  ctx.apiGetView('board').view.columns.forEach(function (c) {
     c.cards.forEach(function (card) { finalIds.push(card.id); });
   });
   finalIds.sort();
@@ -262,7 +267,7 @@ test('apiRestorePbi は語彙外の status / priority / 非整数の size を持
   const { ctx } = createTestContext({ 'product_backlog.csv': csv });
 
   // 表示: buildBoardData は語彙外の status を New 列へフォールバックして描く。
-  const board1 = ctx.apiGetBoard().board;
+  const board1 = ctx.apiGetView('board').view;
   assert.ok(findCardInBoard(board1, 'PBI-050'), '語彙外の行が盤面に出ない');
 
   // 削除はできる。
@@ -399,4 +404,73 @@ test('外で作られた大きい ID を削除した後、採番が下から歩�
   assert.equal(created.ok, true, JSON.stringify(created));
   assert.equal(created.id, 'PBI-101',
     '削除後の採番が下から歩き直し、外で作られた ID と衝突する経路に戻った: ' + created.id);
+});
+
+test('apiGetView は不明な名前を拒否する', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const res = ctx.apiGetView('しらないビュー');
+  assert.equal(res.ok, false);
+  assert.ok(res.message.indexOf('不明なビュー') !== -1);
+});
+
+test('apiGetView は読み取りに失敗したビューが他を巻き添えにしない', () => {
+  // velocity.csv が無くても board は読める。
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const board = ctx.apiGetView('board');
+  assert.equal(board.ok, true);
+  const velocity = ctx.apiGetView('velocity');
+  assert.equal(velocity.ok, true);
+  // velocity.view.table.rows は vm コンテキストの別レルム配列のため、deepEqual([]) は
+  // 「構造は同じだが参照が別」で弾かれる（本ファイル冒頭のコメント参照）。長さで見る。
+  assert.ok(Array.isArray(velocity.view.table.rows), 'rows が配列でない');
+  assert.equal(velocity.view.table.rows.length, 0);
+});
+
+test('readCsvRowsBestEffort_ は Drive が例外を投げても空配列にする（ファイル不在とは別の経路）', () => {
+  // 「見つからない」（readTextFile_ が null を返す）ときは catch まで届かない。
+  // ここでは getFilesByName 自体が例外を投げる状況を再現し、catch が効くことを確かめる。
+  // 中身を空にすると csvToObjects('') が空配列を返すため、例外経路を通らなくても
+  // 同じ結論（rows が空）に着いてしまい、throw が効いているかを検証できない。
+  // 有効な1行を入れ、例外を無視すればこの行が rows に出てしまう状態にしておく。
+  const { ctx } = createTestContext(
+    {
+      'product_backlog.csv': headerOnlyCsv(),
+      'velocity.csv': 'sprint,planned_points,completed_points,carried_over_points,sprint_start,sprint_end,notes\n' +
+        'sprint001,10,8,2,2026-01-01,2026-01-14,\n',
+    },
+    { failReadFile: 'velocity.csv' }
+  );
+  const velocity = ctx.apiGetView('velocity');
+  assert.equal(velocity.ok, true, 'Drive の例外で velocity タブ全体が失敗した: ' + JSON.stringify(velocity));
+  assert.ok(Array.isArray(velocity.view.table.rows), 'rows が配列でない');
+  assert.equal(velocity.view.table.rows.length, 0);
+});
+
+test('apiGetView はバーンダウンの元データが無ければ view を null で返す', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const res = ctx.apiGetView('burndown');
+  assert.equal(res.ok, true);
+  assert.equal(res.view, null);
+});
+
+test('apiGetView(roadmap) は board と同じくヘッダーが壊れた CSV を拒否する', () => {
+  // 列が欠けた壊れたヘッダー。board はこれを ok:false で拒否する。
+  const brokenCsv = 'id,title,status\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': brokenCsv });
+
+  const board = ctx.apiGetView('board');
+  assert.equal(board.ok, false, '前提: board がヘッダー検査で拒否していない');
+
+  const roadmap = ctx.apiGetView('roadmap');
+  assert.equal(roadmap.ok, false,
+    'roadmap がヘッダー検査を通っておらず、壊れた CSV から誤った表を返している');
+});
+
+test('apiGetView(board) は要約を一緒に返す', () => {
+  // タブを開いた時点で1往復で済ませるため。
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const res = ctx.apiGetView('board');
+  assert.equal(res.ok, true);
+  assert.ok(res.summary);
+  assert.ok(Array.isArray(res.summary.byStatus));
 });
