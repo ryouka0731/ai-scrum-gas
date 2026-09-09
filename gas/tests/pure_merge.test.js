@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { applyRowUpdate } = require('../pure_merge.js');
+const { applyRowUpdate, appendRow, deleteRow, restoreRow } = require('../pure_merge.js');
 
 function rows() {
   return [
@@ -160,4 +160,129 @@ test('未来日の日付のみでもマーカーが伸びず、解析できる�
     seen.push(list[0].updated_at);
   }
   assert.deepEqual(seen, ['2026-09-05 00:00:01', '2026-09-05 00:00:02', '2026-09-05 00:00:03']);
+});
+
+const FIELDS = ['id', 'title', 'description', 'priority', 'size', 'status', 'created_at', 'updated_at'];
+
+test('appendRow は全ての列を埋める', () => {
+  // 埋め忘れた列があると toCsv の出力で列がずれる。
+  const r = appendRow([], 'PBI-001', { title: 'あたらしい' }, FIELDS, '2026-09-08 10:00:00');
+  assert.equal(r.ok, true);
+  assert.deepEqual(Object.keys(r.rows[0]).sort(), FIELDS.slice().sort());
+  assert.equal(r.rows[0].title, 'あたらしい');
+  assert.equal(r.rows[0].description, '');
+  assert.equal(r.rows[0].id, 'PBI-001');
+  assert.equal(r.rows[0].created_at, '2026-09-08 10:00:00');
+  assert.equal(r.rows[0].updated_at, '2026-09-08 10:00:00');
+});
+
+test('appendRow は allFields に無いキーを捨てる', () => {
+  // 未知の列を混ぜると、toCsv が拾わないので黙って消える。混ぜさせない。
+  const r = appendRow([], 'PBI-001', { title: 'a', 勝手な列: 'x' }, FIELDS, '2026-09-08 10:00:00');
+  assert.equal(r.rows[0]['勝手な列'], undefined);
+});
+
+test('appendRow は id / created_at / updated_at の指定を無視してサーバの値を使う', () => {
+  const r = appendRow([], 'PBI-001',
+    { title: 'a', id: 'PBI-999', created_at: 'うそ', updated_at: 'うそ' },
+    FIELDS, '2026-09-08 10:00:00');
+  assert.equal(r.rows[0].id, 'PBI-001');
+  assert.equal(r.rows[0].created_at, '2026-09-08 10:00:00');
+  assert.equal(r.rows[0].updated_at, '2026-09-08 10:00:00');
+});
+
+test('appendRow は既存行を変えず、元の配列も変えない', () => {
+  const list = [{ id: 'PBI-001', title: 'もとから', updated_at: 'T0' }];
+  const r = appendRow(list, 'PBI-002', { title: 'b' }, FIELDS, '2026-09-08 10:00:00');
+  assert.equal(r.rows.length, 2);
+  assert.equal(r.rows[0].title, 'もとから');
+  assert.equal(list.length, 1, '元の配列が書き換わっている');
+});
+
+test('appendRow は id が重複したら拒否する', () => {
+  const list = [{ id: 'PBI-001', title: 'a', updated_at: 'T0' }];
+  const r = appendRow(list, 'PBI-001', { title: 'b' }, FIELDS, '2026-09-08 10:00:00');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'duplicate_id');
+});
+
+test('deleteRow は対象だけを消す', () => {
+  const list = [
+    { id: 'PBI-001', updated_at: 'T1' },
+    { id: 'PBI-002', updated_at: 'T2' },
+    { id: 'PBI-003', updated_at: 'T3' },
+  ];
+  const r = deleteRow(list, 'PBI-002', 'T2');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.rows.map(x => x.id), ['PBI-001', 'PBI-003']);
+  assert.equal(list.length, 3, '元の配列が書き換わっている');
+});
+
+test('deleteRow は updated_at が不一致なら拒否する', () => {
+  // 見ていない変更がある行を消させない。
+  const list = [{ id: 'PBI-001', updated_at: 'T2' }];
+  const r = deleteRow(list, 'PBI-001', 'T1');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'conflict');
+  assert.equal(r.current.id, 'PBI-001');
+});
+
+test('deleteRow は無い id を not_found で返す', () => {
+  assert.equal(deleteRow([{ id: 'PBI-001', updated_at: 'T1' }], 'PBI-999', 'T1').reason, 'not_found');
+});
+
+test('deleteRow は空の id を not_found で返す', () => {
+  // 中間の空行にマッチさせない。
+  const list = [{ id: 'PBI-001', updated_at: 'T1' }, { id: '', updated_at: '' }];
+  assert.equal(deleteRow(list, '', '').reason, 'not_found');
+});
+
+test('restoreRow は id と created_at を元のまま戻す', () => {
+  // apiCreatePbi で作り直すと ID が変わり、ローカルの Claude Code が残した参照が切れる。
+  const removed = {
+    id: 'PBI-007', title: 'もどす', description: 'せつめい', priority: 'High',
+    size: '3', status: 'Ready', created_at: '2026-09-01 09:00:00', updated_at: '2026-09-05 10:00:00',
+  };
+  const r = restoreRow([{ id: 'PBI-001', updated_at: 'T1' }], removed, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.ok, true);
+  const back = r.rows[r.rows.length - 1];
+  assert.equal(back.id, 'PBI-007');
+  assert.equal(back.created_at, '2026-09-01 09:00:00', 'created_at が書き換わった');
+  assert.equal(back.title, 'もどす');
+  assert.equal(back.description, 'せつめい');
+});
+
+test('restoreRow は updated_at を戻した時刻にする', () => {
+  // 戻したことも変更なので、他の人の画面から見て「見ていない変更」になる必要がある。
+  const removed = { id: 'PBI-007', title: 'a', created_at: '2026-09-01', updated_at: '2026-09-05' };
+  const r = restoreRow([], removed, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.rows[0].updated_at, '2026-09-08 12:00:00');
+});
+
+test('restoreRow は全ての列を埋め、未知のキーを捨てる', () => {
+  const removed = { id: 'PBI-007', title: 'a', 勝手な列: 'x' };
+  const r = restoreRow([], removed, FIELDS, '2026-09-08 12:00:00');
+  assert.deepEqual(Object.keys(r.rows[0]).sort(), FIELDS.slice().sort());
+  assert.equal(r.rows[0]['勝手な列'], undefined);
+});
+
+test('restoreRow は既に同じ id があれば拒否する', () => {
+  // 通知を2回押した、他の人が同じ ID を起票した、などで二重に増やさない。
+  const list = [{ id: 'PBI-007', updated_at: 'T1' }];
+  const r = restoreRow(list, { id: 'PBI-007', title: 'a' }, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'duplicate_id');
+});
+
+test('restoreRow は元の配列を書き換えない', () => {
+  const list = [{ id: 'PBI-001', updated_at: 'T1' }];
+  restoreRow(list, { id: 'PBI-007', title: 'a' }, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(list.length, 1);
+});
+
+test('restoreRow は id が空なら invalid で拒否する（duplicate_id ではない）', () => {
+  // 「既に存在する」のではなく不正な入力なので、文面が食い違う duplicate_id を返さない。
+  const r = restoreRow([], { title: 'a' }, FIELDS, '2026-09-08 12:00:00');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'invalid');
 });

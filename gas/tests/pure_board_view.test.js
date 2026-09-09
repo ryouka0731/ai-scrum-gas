@@ -27,7 +27,7 @@ test('カードに必要な項目だけを載せる', () => {
   const d = buildBoardData([pbi('PBI-001', 'A', 'Ready')]);
   const card = d.columns.filter(function (c) { return c.status === 'Ready'; })[0].cards[0];
   assert.deepEqual(Object.keys(card).sort(),
-    ['id', 'priority', 'size', 'sprint', 'title', 'updated_at'].sort());
+    ['id', 'title', 'description', 'acceptance_criteria', 'priority', 'size', 'sprint', 'updated_at'].sort());
 });
 
 test('未知のステータスを New に寄せる', () => {
@@ -61,8 +61,8 @@ test('カードの値が入力どおりに転写される', () => {
   const d = buildBoardData([pbi('PBI-001', 'A', 'Ready')]);
   const card = d.columns.filter(function (c) { return c.status === 'Ready'; })[0].cards[0];
   assert.deepEqual(card, {
-    id: 'PBI-001', title: 'A', priority: 'High', size: '3',
-    sprint: 'Sprint 001', updated_at: '2026-09-01',
+    id: 'PBI-001', title: 'A', description: '説明', acceptance_criteria: 'A; B',
+    priority: 'High', size: '3', sprint: 'Sprint 001', updated_at: '2026-09-01',
   });
 });
 
@@ -72,4 +72,15 @@ test('updated_at が null のとき空文字にする', () => {
   const d = buildBoardData([row]);
   const card = d.columns.filter(function (c) { return c.status === 'Ready'; })[0].cards[0];
   assert.equal(card.updated_at, '');
+});
+
+test('カードは説明と受入基準も運ぶ（詳細パネルで編集するため）', () => {
+  const rows = [{
+    id: 'PBI-001', title: 'a', description: 'せつめい',
+    acceptance_criteria: 'きじゅん', priority: 'High', size: '3',
+    status: 'New', sprint: 'sprint001', created_at: '2026-09-01', updated_at: '2026-09-01',
+  }];
+  const card = buildBoardData(rows).columns[0].cards[0];
+  assert.equal(card.description, 'せつめい');
+  assert.equal(card.acceptance_criteria, 'きじゅん');
 });
