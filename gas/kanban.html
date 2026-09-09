@@ -517,13 +517,15 @@ function settleOverlap() {
  * 応答が運ぶ board は「サーバがその要求を処理した時点」のもので、後から
  * commit された別カードの移動を含まない。応答の到達順は保証されないため、
  * 送信が重なった batch では board 全体を信じず、このカードの位置だけ取り込む。
+ *
+ * 取り込むカードは必ず serverBoard 側（サーバが進めた updated_at を持つ）の
+ * ものを使う。今の board（画面上の、まだ古い updated_at のカード）を動かすと、
+ * 見た目上は正しい列に映るのに updated_at だけ古いままになり、そのカードを
+ * 開いて保存すると必ず一度 conflict する。mergeOneCard と同じ取り込み方にする。
  */
 function applyServerBoard(serverBoard, id, trustWholeBoard) {
   if (trustWholeBoard) return serverBoard;
-  var to = columnStatusOf(serverBoard, id);
-  // サーバ側にもう無いカード（ローカルの Claude Code が行を消した等）は画面からも消す。
-  if (to === null) return boardWithCardRemoved(board, id);
-  return boardWithCardMoved(board, id, to);
+  return mergeOneCard(board, serverBoard, id);
 }
 
 /**

@@ -554,6 +554,30 @@ test('重なった送信でも、最後の応答で会計が戻る', () => {
   assert.equal(h.sandbox.overlapped, false, '次の batch まで重なりが残っている');
 });
 
+test('重なったドラッグの成功応答でも、そのカードの updated_at はサーバの値に更新される', () => {
+  // 重なっている間の応答（trustWholeBoard=false）は、今の画面にある古いカード
+  // オブジェクトを動かすだけでは足りない。サーバが進めた updated_at を反映しないと、
+  // このカードを開いて保存したとき古い expectedUpdatedAt を送ってしまい、
+  // 実際には何も競合していないのに必ず一度 conflict になる。
+  const h = ready();
+  h.drag('PBI-001', 'Ready');
+  h.drag('PBI-002', 'Done');
+  assert.equal(h.sandbox.overlapped, true, '重なりが記録されていない');
+
+  const calls = h.calls.slice();
+  // PBI-001 の移動が先に確定する。サーバは updated_at を T1 → T2 に進める。
+  calls[0].handlers.success({ ok: true, id: null, removed: null,
+    board: h.boardOf(cols({ Ready: [{ id: 'PBI-001', title: 'A', updated_at: 'T2' }], New: [CARD_B] })) });
+  // PBI-002 はまだ送信中で重なりは解けていない。
+
+  h.openCard('PBI-001');
+  h.click('panel-save');
+  const save = h.calls[h.calls.length - 1];
+  assert.equal(save.method, 'apiUpdatePbi');
+  assert.equal(save.args[2], 'T2',
+    '保存が古い updated_at (T1) を送っている。重なった応答がサーバの新しい updated_at を反映していない');
+});
+
 test('重なりが解けたあとの単独の応答は、board 全体を取り込む', () => {
   // 会計が漏れて overlapped が解除されないと、以降の応答は1枚しか取り込まなくなり、
   // 外（ローカルの Claude Code 等）で増減したカードが画面に出なくなる。
