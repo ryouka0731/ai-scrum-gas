@@ -1,5 +1,15 @@
 # Web アプリ第2段階（PBI の作成・編集・削除 + UI 刷新）実装計画
 
+> **実行済みの記録:** この計画は実行済みであり、当時の計画内容の記録として残している。
+> 実行後のレビューで、`savePanel` / `deletePbi` は競合時に `expectedUpdatedAt` を更新する
+> ようになった（`syncPanelExpectedUpdatedAt`。無いと同じ古い値を送り続け、パネルから
+> 抜け出せなくなる）。編集は `readForm()` の全項目送信ではなく、触っていない項目を送らない
+> 差分送信（`changedFields`）にした。`load()` は書き込みの会計（`writeSeq`）に載せ、
+> 発行後に確定した書き込みを見分けられるようにした。`[hidden]` は CSS で
+> `[hidden] { display: none !important; }` と明示した（作成者オリジンの display 指定が
+> 優先されるため）。**下のコードブロックは計画当時のまま更新していない。**
+> 現行仕様の真実の源泉は `docs/superpowers/specs/`（この計画ではない）。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 人がスプレッドシートを開かずに、Web アプリだけで PBI を作成・編集・削除できるようにする。
