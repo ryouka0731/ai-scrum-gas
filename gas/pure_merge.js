@@ -156,7 +156,9 @@ function restoreRow(rows, row, allFields, nowText) {
   const list = rows || [];
   const src = row || {};
   const key = String(src.id || '').trim();
-  if (!key) return { ok: false, reason: 'duplicate_id', current: null };
+  // id が無いのは「既に存在する」のではなく不正な入力である。duplicate_id を
+  // 返すと「この PBI は既に存在します」と出てしまい、実際の原因と食い違う。
+  if (!key) return { ok: false, reason: 'invalid', current: null };
   for (let i = 0; i < list.length; i++) {
     if (String(list[i].id || '').trim() === key) {
       return { ok: false, reason: 'duplicate_id', current: list[i] };

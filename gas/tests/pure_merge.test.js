@@ -280,8 +280,9 @@ test('restoreRow は元の配列を書き換えない', () => {
   assert.equal(list.length, 1);
 });
 
-test('restoreRow は id が空なら拒否する', () => {
+test('restoreRow は id が空なら invalid で拒否する（duplicate_id ではない）', () => {
+  // 「既に存在する」のではなく不正な入力なので、文面が食い違う duplicate_id を返さない。
   const r = restoreRow([], { title: 'a' }, FIELDS, '2026-09-08 12:00:00');
   assert.equal(r.ok, false);
-  assert.equal(r.reason, 'duplicate_id');
+  assert.equal(r.reason, 'invalid');
 });
