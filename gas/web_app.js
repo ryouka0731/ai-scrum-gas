@@ -8,6 +8,7 @@
 
 const WEB_APP_TITLE = 'AI Scrum ボード';
 const BACKLOG_CSV_NAME = 'product_backlog.csv';
+const DONE_BACKLOG_CSV_NAME = 'product_backlog_done.csv';
 
 /** Web アプリの入口。 */
 function doGet(e) {
@@ -23,6 +24,25 @@ function readBacklogText_() {
     throw new Error('scrum/' + BACKLOG_CSV_NAME + ' が見つかりません。配布が済んでいるか確認してください。');
   }
   return text;
+}
+
+/**
+ * scrum/product_backlog_done.csv の行を返す。採番の高水位を補うためだけに使う
+ * 補助情報であり、無い・解析できない場合は空配列にする（完了バックログが読めない
+ * ことを理由に新規 PBI の作成そのものを止めない）。
+ *
+ * 完了へ移した PBI の ID は product_backlog.csv からは見えなくなるため、これを
+ * 見ないと「完了へ移した後に highWater が記録されていない古い ID」を新規作成が
+ * 再利用しうる（削除の場合と同じ、参照の食い違いを生む）。
+ */
+function readDoneBacklogRowsBestEffort_() {
+  try {
+    const text = readTextFile_(getScrumFolder_(), DONE_BACKLOG_CSV_NAME);
+    if (text === null) return [];
+    return csvToObjects(text);
+  } catch (e) {
+    return [];
+  }
 }
 
 /** カンバンの内容を返す。 */
@@ -128,6 +148,11 @@ function apiUpdateStatus(id, newStatus, expectedUpdatedAt) {
  *
  * 作成では競合判定を行わない。照合する既存の行が無いためである。
  * ID はロックを取ったあと読み直した CSV から採番するので、アプリ内で重複しない。
+ *
+ * 採番は「今の rows（+ 完了バックログ）の最大値」と「記録済みの高水位
+ * （getLastPbiId_）」の両方を見て、大きい方の次を使う。rows だけを見ると、
+ * 最大の PBI を削除した直後の作成がその ID を再利用してしまう。採番したら
+ * 高水位を更新する（ロック内、成功したときだけ）。
  */
 function apiCreatePbi(fields) {
   return withBacklogWrite_(function (rows) {
@@ -136,11 +161,13 @@ function apiCreatePbi(fields) {
     const v = validatePbiFields(picked, KANBAN_STATUSES);
     if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
 
-    const id = nextPbiId(rows);
+    const scanRows = rows.concat(readDoneBacklogRowsBestEffort_());
+    const id = nextPbiId(scanRows, getLastPbiId_());
     const r = appendRow(rows, id, picked, BACKLOG_FIELDS, nowText_());
     if (!r.ok) {
       return { ok: false, reason: r.reason, message: 'ID が重複しました。もう一度お試しください。' };
     }
+    setLastPbiId_(id);
     return { ok: true, rows: r.rows, id: id };
   });
 }
