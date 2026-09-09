@@ -47,6 +47,24 @@ function readDoneBacklogRowsBestEffort_() {
   }
 }
 
+/**
+ * rows（+ 完了バックログ）の最大 ID が記録済みの高水位を上回っていれば、
+ * 記録をその値まで進める。
+ *
+ * withBacklogWrite_ が書き戻しのたびに（読み直した rows で）呼ぶ。ローカルの
+ * Claude Code が直接 CSV に書いた ID（記録より大きい）は、その行が delete 等で
+ * rows から消える前に一度でも書き戻しが起きれば、ここで必ず捕捉される。
+ * 記録は一方向にしか進めない（大きい方を採るだけ）ので、逆行はしない。
+ */
+function advanceLastPbiIdWatermark_(rows) {
+  const scanRows = rows.concat(readDoneBacklogRowsBestEffort_());
+  const recorded = getLastPbiId_();
+  const scannedMax = highWaterPbiId(scanRows, '');
+  if (scannedMax === null) return;
+  const recordedN = recorded ? pbiIdNumber(recorded) : null;
+  if (recordedN === null || pbiIdNumber(scannedMax) > recordedN) setLastPbiId_(scannedMax);
+}
+
 /** カンバンの内容を返す。 */
 function apiGetBoard() {
   try {
@@ -79,6 +97,9 @@ function withBacklogWrite_(mutate) {
     // 書き戻しより前に必ずヘッダーを検査する。
     assertHeaderMatches(text, BACKLOG_FIELDS);
     const rows = csvToObjects(text);
+    // mutate の前に必ず高水位を進める。delete のように行が rows から消える
+    // 操作でも、消える前の rows を一度は見ているので取り逃さない。
+    advanceLastPbiIdWatermark_(rows);
 
     const result = mutate(rows);
     if (!result.ok) {
@@ -219,10 +240,20 @@ function apiDeletePbi(id, expectedUpdatedAt) {
  * 削除した PBI を戻す。通知の「取り消す」から呼ばれる。
  * apiCreatePbi ではなくこちらを使うのは、元の id と created_at を保つため。
  *
- * google.script.run はブラウザから任意の値で呼べるため、apiCreatePbi /
- * apiUpdatePbi と同じ検証をここでも通す。素通しすると、存在しない ID をでっち
- * 上げて作成・更新の検証を丸ごと迂回できたり、極端な ID（例: PBI-999999）で
- * 以後の採番を汚染できたりする。
+ * 復元は「今そこに表示・編集・削除できていた行を、そのまま戻す」操作である。
+ * status / priority / size が語彙外の行（ローカルの Claude Code が直接 CSV に
+ * 書いた行など）も表示・削除はできるため、復元だけをその語彙で拒否すると、
+ * 取り消し操作が名目だけになる（changedFields のコメントにある「常に検証する
+ * と保存そのものが塞がれる」と同じ理由）。そのため語彙は検証しない。
+ *
+ * google.script.run はブラウザから任意の値で呼べるため、次の3点だけを検証する。
+ * - title が空でないこと（空タイトルの行は isPlaceholderRow で盤面に出ないため、
+ *   戻しても見えない）
+ * - id が PBI-\d+ の形であること
+ * - id の番号が「今までに採番された最大値」を超えていないこと
+ *   （isPbiIdWithinHighWater。復元は既存の行を戻す操作であり、最大値を超える
+ *   ことは原理的にありえない。超えていれば、でっち上げ ID や改ざんとみなし、
+ *   以後の採番を汚染させない）
  */
 function apiRestorePbi(row) {
   return withBacklogWrite_(function (rows) {
@@ -230,19 +261,14 @@ function apiRestorePbi(row) {
     if (!PBI_ID_RE.test(id)) {
       return { ok: false, reason: 'invalid', message: 'PBI ID の形式が不正です: ' + id };
     }
-    // 復元する行は CSV の全列を持つオブジェクトであり、priority / size のような
-    // 任意項目も常に「値あり（空文字を含む）」として渡ってくる。create/update は
-    // フォームの select が常に実在の値を選ぶため空文字を送らないが、復元対象は
-    // アプリの外（ローカルの Claude Code 等）で作られた過去の行かもしれない。
-    // 空文字まで語彙チェックにかけると、正当な過去データの復元まで拒否してしまう
-    // ため、空文字は「未設定」として扱いチェックから外す。空でないのに語彙外の
-    // 値（改ざん・でっち上げ）は今までどおり拒否する。
-    const picked = pickEditableFields_(row);
-    Object.keys(picked).forEach(function (k) {
-      if (k !== 'title' && picked[k] === '') delete picked[k];
-    });
-    const v = validatePbiFields(picked, KANBAN_STATUSES);
-    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+    const scanRows = rows.concat(readDoneBacklogRowsBestEffort_());
+    if (!isPbiIdWithinHighWater(id, scanRows, getLastPbiId_())) {
+      return { ok: false, reason: 'invalid', message: 'PBI ID が採番済みの範囲を超えています: ' + id };
+    }
+    const title = String((row || {}).title || '').trim();
+    if (!title) {
+      return { ok: false, reason: 'invalid', message: 'タイトルを入力してください。' };
+    }
 
     const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_());
     if (!r.ok) {

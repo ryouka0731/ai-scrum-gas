@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { nextPbiId } = require('../pure_pbi_id.js');
+const { nextPbiId, pbiIdNumber, maxPbiId, highWaterPbiId, isPbiIdWithinHighWater } = require('../pure_pbi_id.js');
 
 test('空の行集合では PBI-001 になる', () => {
   assert.equal(nextPbiId([]), 'PBI-001');
@@ -67,4 +67,60 @@ test('highWaterId が空・未指定でも rows だけで従来どおり動く',
 test('highWaterId が PBI 形式でなければ無視する', () => {
   const rows = [{ id: 'PBI-002' }];
   assert.equal(nextPbiId(rows, 'メモ'), 'PBI-003');
+});
+
+// --- pbiIdNumber ---
+
+test('pbiIdNumber は PBI-\\d+ の番号部分を数値で返す', () => {
+  assert.equal(pbiIdNumber('PBI-007'), 7);
+  assert.equal(pbiIdNumber('  PBI-1200  '), 1200);
+});
+
+test('pbiIdNumber は PBI-\\d+ 形式でなければ null を返す', () => {
+  [null, undefined, '', 'メモ', 'PBI-', 'PBI-abc', 'PBI-999999abc', 'pbi-1'].forEach(function (v) {
+    assert.equal(pbiIdNumber(v), null, JSON.stringify(v));
+  });
+});
+
+// --- maxPbiId / highWaterPbiId ---
+
+test('maxPbiId は行の配列と id 文字列の配列のどちらからも最大値の文字列を返す', () => {
+  assert.equal(maxPbiId([{ id: 'PBI-001' }, { id: 'PBI-010' }, { id: 'PBI-003' }]), 'PBI-010');
+  assert.equal(maxPbiId(['PBI-001', 'PBI-010', 'PBI-003']), 'PBI-010');
+  assert.equal(maxPbiId([]), null);
+  assert.equal(maxPbiId([{ id: '' }, { id: 'メモ' }]), null);
+});
+
+test('highWaterPbiId は rows と highWaterId のうち番号が大きい方の文字列を返す', () => {
+  assert.equal(highWaterPbiId([{ id: 'PBI-001' }], 'PBI-005'), 'PBI-005');
+  assert.equal(highWaterPbiId([{ id: 'PBI-010' }], 'PBI-005'), 'PBI-010');
+  assert.equal(highWaterPbiId([], ''), null);
+});
+
+// --- isPbiIdWithinHighWater: 復元する ID は「今までの最大値」を超えられない ---
+
+test('isPbiIdWithinHighWater は最大値以下の id を許す', () => {
+  const rows = [{ id: 'PBI-001' }, { id: 'PBI-003' }];
+  assert.equal(isPbiIdWithinHighWater('PBI-002', rows, 'PBI-003'), true, '欠番の復元が拒否された');
+  assert.equal(isPbiIdWithinHighWater('PBI-003', rows, 'PBI-003'), true, '最大値そのものの復元が拒否された');
+});
+
+test('isPbiIdWithinHighWater は最大値を超える id を拒否する（でっち上げ ID の採番汚染防止）', () => {
+  const rows = [{ id: 'PBI-001' }];
+  assert.equal(isPbiIdWithinHighWater('PBI-999999', rows, 'PBI-001'), false);
+});
+
+test('isPbiIdWithinHighWater は rows と highWaterId のどちらか大きい方を基準にする', () => {
+  // rows 側だけが大きいケース（ローカルの Claude Code が rows の外で先に採番した場合）。
+  assert.equal(isPbiIdWithinHighWater('PBI-010', [{ id: 'PBI-010' }], 'PBI-003'), true);
+  // highWaterId 側だけが大きいケース（rows から最大の行が既に削除された場合）。
+  assert.equal(isPbiIdWithinHighWater('PBI-005', [{ id: 'PBI-001' }], 'PBI-005'), true);
+});
+
+test('isPbiIdWithinHighWater は最大値が無い（rows も highWaterId も空）ときは何も許さない', () => {
+  assert.equal(isPbiIdWithinHighWater('PBI-001', [], ''), false);
+});
+
+test('isPbiIdWithinHighWater は PBI-\\d+ 形式でない id を false で返す', () => {
+  assert.equal(isPbiIdWithinHighWater('メモ', [{ id: 'PBI-999' }], 'PBI-999'), false);
 });

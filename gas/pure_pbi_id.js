@@ -1,5 +1,5 @@
 /**
- * PBI ID の採番。GAS API に依存しない純関数。
+ * PBI ID の採番と、その番号にまつわる判断。GAS API に依存しない純関数。
  *
  * 欠番は埋めない。埋めると削除された PBI の ID が別物に再利用され、
  * ローカルの Claude Code が残した参照が別の PBI を指すようになる。
@@ -8,31 +8,65 @@
  * 瞬間に次の採番がその ID を再利用してしまう。それを防ぐため、呼び出し側が
  * 記録しておいた高水位（highWaterId、これまでに採番した最大の ID）も渡し、
  * 両者のうち大きい方を採用する。記録は一方向にしか進めない（GAS 層で
- * 採番時にだけ更新する）ので、rows 側が記録を上回ることはあっても、
+ * 書き戻しのたびに更新する）ので、rows 側が記録を上回ることはあっても、
  * 記録が rows 側の実際の最大値を追い越すことはなく安全である。
  */
 
 const PBI_ID_NUM_RE = /^PBI-(\d+)$/;
 
-/** 既存の行集合と記録済みの高水位 ID から次の PBI ID を返す。 */
+/** id 文字列の番号を返す。PBI-\d+ 形式でなければ null。 */
+function pbiIdNumber(idText) {
+  const m = PBI_ID_NUM_RE.exec(String(idText || '').trim());
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * rows（行の配列。id 文字列そのものを混ぜてもよい）の中から、番号が最大の
+ * PBI ID 文字列を返す。無ければ null。元の文字列（桁数）をそのまま返すため、
+ * 呼び出し側が高水位として記録する値の桁を保てる。
+ */
+function maxPbiId(rows) {
+  let max = -1;
+  let best = null;
+  (rows || []).forEach(function (item) {
+    const raw = String((item && typeof item === 'object' ? item.id : item) || '').trim();
+    const n = pbiIdNumber(raw);
+    if (n !== null && n > max) { max = n; best = raw; }
+  });
+  return best;
+}
+
+/** rows と highWaterId の両方から、今までに採番された最大の PBI ID 文字列を返す（無ければ null）。 */
+function highWaterPbiId(rows, highWaterId) {
+  return maxPbiId((rows || []).concat([highWaterId]));
+}
+
+/** rows と記録済みの高水位 ID から次の PBI ID を返す。 */
 function nextPbiId(rows, highWaterId) {
-  let max = 0;
-  let width = 3;
-  function consider(idText) {
-    const m = PBI_ID_NUM_RE.exec(String(idText || '').trim());
-    if (!m) return;
-    const n = parseInt(m[1], 10);
-    if (n > max) { max = n; width = m[1].length; }
-  }
-  (rows || []).forEach(function (row) { consider((row || {}).id); });
-  // rows に無くても、記録済みの高水位のほうが大きければそちらを採る
-  // （rows から最大の行が削除された場合や、ローカルの Claude Code が
-  // rows の外で先に採番した場合を拾う）。
-  consider(highWaterId);
-  const s = String(max + 1);
+  const maxId = highWaterPbiId(rows, highWaterId);
+  const n = maxId === null ? 0 : pbiIdNumber(maxId);
+  const width = maxId === null ? 3 : PBI_ID_NUM_RE.exec(maxId)[1].length;
+  const s = String(n + 1);
   let padded = s;
   while (padded.length < width) padded = '0' + padded;
   return 'PBI-' + padded;
 }
 
-if (typeof module !== 'undefined') { module.exports = { nextPbiId }; }
+/**
+ * id の番号が、rows と highWaterId から求めた「今までに採番された最大値」を
+ * 超えていないかを返す。復元は既存の行をそのまま戻す操作であり、その ID が
+ * 今の最大値を超えることは原理的にありえない。超えていれば、でっち上げ ID や
+ * 改ざんとみなせる（それを許すと、以後の採番がその極端な値まで汚染される）。
+ * id が PBI-\d+ 形式でなければ false（形式チェックは別に行う）。
+ */
+function isPbiIdWithinHighWater(id, rows, highWaterId) {
+  const n = pbiIdNumber(id);
+  if (n === null) return false;
+  const maxId = highWaterPbiId(rows, highWaterId);
+  const maxN = maxId === null ? 0 : pbiIdNumber(maxId);
+  return n <= maxN;
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = { nextPbiId, pbiIdNumber, maxPbiId, highWaterPbiId, isPbiIdWithinHighWater };
+}

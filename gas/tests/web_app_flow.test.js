@@ -31,6 +31,13 @@ function headerOnlyCsv() {
   return BACKLOG_FIELDS_FOR_TEST.join(',') + '\n';
 }
 
+/** BACKLOG_FIELDS_FOR_TEST の順で CSV の1行を組み立てる（欠けた列は空文字）。 */
+function csvRow(fields) {
+  return BACKLOG_FIELDS_FOR_TEST.map(function (f) {
+    return fields[f] !== undefined ? String(fields[f]) : '';
+  }).join(',');
+}
+
 /** [{status,cards}] の board から id のカードを探す。無ければ null。 */
 function findCardInBoard(board, id) {
   for (const col of board.columns) {
@@ -179,21 +186,6 @@ test('完了バックログ（product_backlog_done.csv）にある最大 ID も�
   assert.equal(created.id, 'PBI-051', '完了バックログの最大 ID より後ろから採番されていない');
 });
 
-test('apiRestorePbi は語彙外の status を持つ行を拒否する', () => {
-  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
-  const bad = {
-    id: 'PBI-001', title: 'ふっかつ', status: 'ヨクワカラナイ状態',
-    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
-  };
-  const res = ctx.apiRestorePbi(bad);
-  assert.equal(res.ok, false);
-  assert.equal(res.reason, 'invalid');
-
-  // 拒否されたのでその ID は使われておらず、通常の作成ではまだ PBI-001 が採番される。
-  const created = ctx.apiCreatePbi(fullFields('普通の作成'));
-  assert.equal(created.id, 'PBI-001', '拒否されたはずの復元が行を作ってしまった');
-});
-
 test('apiRestorePbi は PBI-\\d+ 形式でない id を拒否する', () => {
   const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
   const forms = ['', 'PBI-999999abc', 'DROP TABLE', '  ', 'PBI-'];
@@ -204,38 +196,102 @@ test('apiRestorePbi は PBI-\\d+ 形式でない id を拒否する', () => {
   });
 });
 
-test('apiRestorePbi は検証を通った行を、元の id / created_at のまま復元する', () => {
+test('apiRestorePbi はタイトルが空の行を拒否する', () => {
   const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
-  const row = {
-    id: 'PBI-007', title: 'もどす', description: '', acceptance_criteria: '',
-    priority: 'High', size: '3', status: 'Ready', sprint: '',
+  const res = ctx.apiRestorePbi({ id: 'PBI-001', title: '', status: 'New' });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'invalid');
+});
+
+test('apiRestorePbi は検証を通った行を、元の id / created_at のまま復元する', () => {
+  // 復元は「削除の直前にそこにあった行」を戻す操作なので、まず削除して
+  // del.removed を復元する（PBI-007 がいきなり最大値を超えないようにする）。
+  const csv = headerOnlyCsv() + csvRow({
+    id: 'PBI-007', title: 'もどす', priority: 'High', size: '3', status: 'Ready',
     created_at: '2026-09-01 09:00:00', updated_at: '2026-09-05 10:00:00',
-  };
-  const res = ctx.apiRestorePbi(row);
+  }) + '\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': csv });
+  const del = ctx.apiDeletePbi('PBI-007', '2026-09-05 10:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+
+  const res = ctx.apiRestorePbi(del.removed);
   assert.equal(res.ok, true, JSON.stringify(res));
   const card = findCardInBoard(res.board, 'PBI-007');
   assert.ok(card, 'PBI-007 が board に無い');
 });
 
-test('apiRestorePbi は priority / size が空文字の行（アプリの外で作られた過去の行）も復元できる', () => {
-  // CSV は全列を持つオブジェクトのため、優先度未設定の行は '' として渡ってくる。
-  // create/update のフォームは常に実在の値を選ぶので空文字を送らないが、復元対象は
-  // ローカルの Claude Code が直接 CSV に書いた行かもしれない。空文字まで語彙外
-  // として拒否すると、正当な過去データの復元まで塞いでしまう。
-  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
-  const row = {
-    id: 'PBI-042', title: 'ローカルの Claude Code が作った行', description: '', acceptance_criteria: '',
-    priority: '', size: '', status: 'New', sprint: '',
-    created_at: '2026-09-01 09:00:00', updated_at: '2026-09-05 10:00:00',
-  };
-  const res = ctx.apiRestorePbi(row);
-  assert.equal(res.ok, true, '空文字の priority / size で正当な復元が拒否された: ' + JSON.stringify(res));
+test('apiRestorePbi は語彙外の status / priority / 非整数の size を持つ行も、表示→削除→取り消しまで通す', () => {
+  // 復元は「今そこに表示・編集・削除できていた行を、そのまま戻す」操作である。
+  // 語彙外の値（ローカルの Claude Code が直接 CSV に書いた行を想定）を持つ行も
+  // 表示・削除はできるため、復元だけを拒否すると取り消し操作が名目だけになる。
+  const csv = headerOnlyCsv() + csvRow({
+    id: 'PBI-050', title: '曖昧な行', priority: '重要', size: 'M', status: 'Backlog',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  }) + '\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': csv });
+
+  // 表示: buildBoardData は語彙外の status を New 列へフォールバックして描く。
+  const board1 = ctx.apiGetBoard().board;
+  assert.ok(findCardInBoard(board1, 'PBI-050'), '語彙外の行が盤面に出ない');
+
+  // 削除はできる。
+  const del = ctx.apiDeletePbi('PBI-050', '2026-09-01 00:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+  assert.ok(del.removed, '削除した行が返っていない');
+
+  // 取り消し: 語彙外の priority / status、非整数の size があっても復元できる。
+  const restore = ctx.apiRestorePbi(del.removed);
+  assert.equal(restore.ok, true, '語彙外の値を理由に正当な取り消しが拒否された: ' + JSON.stringify(restore));
+  assert.ok(findCardInBoard(restore.board, 'PBI-050'));
 });
 
-test('apiRestorePbi は priority が語彙外（空文字ではない）の行は拒否する', () => {
+test('apiRestorePbi は今の最大値より大きい ID を拒否する（でっち上げによる採番汚染の防止）', () => {
   const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
-  const row = { id: 'PBI-042', title: 'x', priority: 'でたらめ', status: 'New' };
-  const res = ctx.apiRestorePbi(row);
-  assert.equal(res.ok, false);
+  const created = ctx.apiCreatePbi(fullFields('普通'));
+  assert.equal(created.id, 'PBI-001');
+
+  const fake = {
+    id: 'PBI-999999', title: 'でっちあげ', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  };
+  const res = ctx.apiRestorePbi(fake);
+  assert.equal(res.ok, false, 'でっち上げ ID の復元が通ってしまった');
   assert.equal(res.reason, 'invalid');
+
+  // 汚染していないので、次の採番は PBI-002 のまま。
+  const next = ctx.apiCreatePbi(fullFields('つぎ'));
+  assert.equal(next.id, 'PBI-002', '拒否されたはずの復元が採番を汚染した: ' + next.id);
+});
+
+test('ローカルの Claude Code が書いた大きい ID をアプリで削除しても、その取り消しが通る', () => {
+  // withBacklogWrite_ が書き戻しのたびに高水位を rows の最大値まで進めるため、
+  // 削除の書き戻し時点で PBI-100 の存在が高水位へ反映され、行が消えたあとの
+  // 復元でも「最大値を超えている」と誤判定されない。
+  const csv = headerOnlyCsv() + csvRow({
+    id: 'PBI-100', title: '外で作られた', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  }) + '\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': csv });
+
+  const del = ctx.apiDeletePbi('PBI-100', '2026-09-01 00:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+
+  const restore = ctx.apiRestorePbi(del.removed);
+  assert.equal(restore.ok, true, '外で作られた大きい ID の取り消しが拒否された: ' + JSON.stringify(restore));
+});
+
+test('外で作られた大きい ID を削除した後、採番が下から歩き直して衝突しない', () => {
+  const csv = headerOnlyCsv() + csvRow({
+    id: 'PBI-100', title: '外で作られた', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
+  }) + '\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': csv });
+
+  const del = ctx.apiDeletePbi('PBI-100', '2026-09-01 00:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+
+  const created = ctx.apiCreatePbi(fullFields('つぎ'));
+  assert.equal(created.ok, true, JSON.stringify(created));
+  assert.equal(created.id, 'PBI-101',
+    '削除後の採番が下から歩き直し、外で作られた ID と衝突する経路に戻った: ' + created.id);
 });
