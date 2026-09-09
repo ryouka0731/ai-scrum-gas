@@ -160,6 +160,29 @@
   @media (max-width: 900px) {
     #toast { top: var(--sp-3); bottom: auto; }
   }
+
+  .tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--line); }
+  .tabs button {
+    border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    background: transparent; color: var(--ink-2); padding: var(--sp-2) var(--sp-3);
+  }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .views { display: flex; gap: var(--sp-1); margin: var(--sp-3) 0; }
+  .views button { font-size: 12px; padding: var(--sp-1) var(--sp-3); }
+  .views button[aria-selected="true"] { background: var(--card-2); border-color: var(--accent); }
+  #summary {
+    font-size: 12px; color: var(--ink-2); padding: var(--sp-3) 0;
+    display: flex; gap: var(--sp-4); flex-wrap: wrap;
+  }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td {
+    border-bottom: 1px solid var(--line); padding: var(--sp-2) var(--sp-3);
+    text-align: left; vertical-align: top;
+  }
+  th { color: var(--ink-2); font-weight: normal; white-space: nowrap; }
+  td { overflow-wrap: anywhere; }
+  .table-empty { color: var(--ink-2); font-size: 12px; padding: var(--sp-4) 0; }
 </style>
 </head>
 <body>
@@ -169,8 +192,12 @@
   <button id="reload" type="button"></button>
 </header>
 <div id="message" class="info">読み込んでいます…</div>
+<div class="tabs" id="tabs" role="tablist"></div>
+<div class="views" id="views" role="tablist"></div>
+<div id="summary"></div>
 <div id="main">
   <div id="board"></div>
+  <div id="table-view" class="table-wrap" hidden></div>
   <aside id="panel" hidden aria-label="PBI の詳細">
     <div class="panel-head">
       <h2 id="panel-title">PBI</h2>
@@ -277,9 +304,9 @@ var inflight = 0;
 // 送信が重なった batch かどうか。重なっていた間の応答は board 全体を信じない。
 var overlapped = false;
 // 書き込み（ドラッグ・保存・作成・削除・取り消し）が確定するたびに増える通し番号。
-// apiGetView はロックを取らないため、書き込み中の古い CSV を読める。load() の応答が
+// apiGetView はロックを取らないため、書き込み中の古い CSV を読める。loadView() の応答が
 // 「発行してから届くまでの間に確定した書き込み」を含まない古い board であることを、
-// inflight（応答時点で送信中の要求が無いか）だけでは見分けられない。load() を出した
+// inflight（応答時点で送信中の要求が無いか）だけでは見分けられない。loadView() を出した
 // 時点の値を控えておき、応答時に比べる。
 var writeSeq = 0;
 
@@ -540,6 +567,26 @@ function rollbackCard(id, newStatus, originalStatus) {
 var STATUS_OPTIONS = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 var PRIORITY_OPTIONS = ['Critical', 'High', 'Medium', 'Low'];
 
+// タブは対象の名前。ビューはその対象の見え方。
+var TABS = [
+  { id: 'pbi', label: 'やること', views: [
+    { id: 'board', label: '盤面' },
+    { id: 'list', label: '一覧' },
+    { id: 'done', label: '完了' },
+  ] },
+  { id: 'sprint', label: 'スプリント', views: [
+    { id: 'burndown', label: 'バーンダウン' },
+    { id: 'velocity', label: 'ベロシティ' },
+    { id: 'roadmap', label: 'ロードマップ' },
+  ] },
+  { id: 'impediment', label: '障害物', views: [
+    { id: 'impediment', label: '一覧' },
+  ] },
+];
+
+var activeTab = 'pbi';
+var activeView = 'board';
+
 // id が null なら新規作成モード。status は新規作成時の初期ステータス。
 // fields は writeForm() が入れた直後のフォームの内容（差分送信の基準）。
 var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
@@ -686,7 +733,7 @@ function savePanel() {
       var mine = (seq === panelSeq);
       if (mine) setPanelBusy(false);
       if (res.ok) {
-        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
+        writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         var newId = id || res.id;
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, newId));
         if (mine) closePanel();
@@ -784,7 +831,7 @@ function deletePbi() {
       var mine = (seq === panelSeq);
       if (mine) setPanelBusy(false);
       if (res.ok) {
-        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
+        writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         if (mine) closePanel();
         showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
@@ -824,7 +871,7 @@ function restorePbi(row) {
   if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   setMessage(row.id + ' を戻しています…', 'info');
   // pendingIds は実在カードの表示・操作抑止にも使われる。素の id で載せると、
-  // 送信中に load() で board へ戻ってきた同じ id のカードが送信中扱いになり、
+  // 送信中に loadView() で board へ戻ってきた同じ id のカードが送信中扱いになり、
   // 開くこともドラッグもできなくなる。合成キーで衝突を避ける
   // （作成の (new) キーと同じく、会計側だけに載せるためのもの）。
   var pendKey = '(undo)' + row.id;
@@ -838,7 +885,7 @@ function restorePbi(row) {
       inflight--;
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
-        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
+        writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
         setMessage(row.id + ' を戻しました。', 'info');
       } else {
@@ -855,11 +902,89 @@ function restorePbi(row) {
     .apiRestorePbi(row);
 }
 
-function load() {
+function renderTabs() {
+  var tabs = document.getElementById('tabs');
+  tabs.innerHTML = '';
+  TABS.forEach(function (t) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = t.label;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', t.id === activeTab ? 'true' : 'false');
+    b.addEventListener('click', function () { switchTab(t.id); });
+    tabs.appendChild(b);
+  });
+
+  var views = document.getElementById('views');
+  views.innerHTML = '';
+  var tab = TABS.filter(function (t) { return t.id === activeTab; })[0];
+  // ビューが1つだけのタブでは切り替えを出さない（押せる先が無いものを見せない）。
+  if (!tab || tab.views.length <= 1) return;
+  tab.views.forEach(function (v) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = v.label;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', v.id === activeView ? 'true' : 'false');
+    b.addEventListener('click', function () { switchView(v.id); });
+    views.appendChild(b);
+  });
+}
+
+function switchTab(tabId) {
+  var tab = TABS.filter(function (t) { return t.id === tabId; })[0];
+  if (!tab) return;
+  activeTab = tabId;
+  activeView = tab.views[0].id;
+  closePanel();
+  renderTabs();
+  loadView();
+}
+
+function switchView(viewId) {
+  activeView = viewId;
+  closePanel();
+  renderTabs();
+  loadView();
+}
+
+function currentView() { return activeView; }
+
+/** 要約を描く。summary の形はタブごとに違う（無ければ何も出さない）。 */
+function renderSummary(summary) {
+  var host = document.getElementById('summary');
+  host.innerHTML = '';
+  if (!summary) return;
+
+  function stat(label, value) {
+    var span = document.createElement('span');
+    span.textContent = label + ': ' + value;
+    host.appendChild(span);
+  }
+
+  if (summary.byStatus) {
+    // やること: 合計件数・ポイント。
+    stat('合計', summary.total.count + '件 / ' + summary.total.points + 'pt');
+  } else if (summary.sprint !== undefined) {
+    // スプリント: 直近スプリントの計画/完了/持ち越し。
+    stat('スプリント', summary.sprint);
+    stat('計画', summary.planned + 'pt');
+    stat('完了', summary.completed + 'pt');
+    stat('持ち越し', summary.carriedOver + 'pt');
+  } else if (summary.open !== undefined) {
+    // 障害物: 未解決/解決済の件数。
+    stat('未解決', summary.open + '件');
+    stat('解決済', summary.resolved + '件');
+  }
+}
+
+function loadView() {
   // apiGetView はロックを取らないため、書き込み中の古い CSV を読める。応答が届くまでの
-  // 間に何か1件でも書き込みが確定していれば、この board はもう古い。inflight（応答時点で
-  // 送信中の要求が無いか）だけでは、発行後に確定して既に終わった書き込みを見分けられない。
+  // 間に何か1件でも書き込みが確定していれば、この board（表のビューも同様）はもう古い。
+  // inflight（応答時点で送信中の要求が無いか）だけでは、発行後に確定して既に終わった
+  // 書き込みを見分けられない。盤面だけでなく表のビューでも同じ扱いにする。
   var seenSeq = writeSeq;
+  var requestedView = activeView;
   setMessage('読み込んでいます…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
@@ -869,12 +994,111 @@ function load() {
           setMessage('読み込み中に他の変更が入りました。もう一度お試しください。', 'error');
           return;
         }
-        render(res.view);
+        if (requestedView !== activeView) return;   // 応答が届く前に別のビューへ切り替えた
+        var isBoard = requestedView === 'board';
+        document.getElementById('board').hidden = !isBoard;
+        document.getElementById('table-view').hidden = isBoard;
+        if (isBoard) { render(res.view); } else { renderTable(res.view); }
+        renderSummary(res.summary);
         setMessage('', 'info');
       } else { setMessage(res.message, 'error'); }
     })
     .withFailureHandler(function (err) { setMessage('読み込みに失敗しました: ' + err.message, 'error'); })
-    .apiGetView('board');
+    .apiGetView(requestedView);
+}
+
+/** 「ありません。」を表示する要素を作る。行が0件の表はヘッダーだけ出さない。 */
+function emptyTableRow(text) {
+  var div = document.createElement('div');
+  div.className = 'table-empty';
+  div.textContent = text;
+  return div;
+}
+
+/** ヘッダー行を作る。 */
+function tableHead(labels) {
+  var thead = document.createElement('thead');
+  var tr = document.createElement('tr');
+  labels.forEach(function (label) {
+    var th = document.createElement('th');
+    th.textContent = label;
+    tr.appendChild(th);
+  });
+  thead.appendChild(tr);
+  return thead;
+}
+
+/** headers（文字列配列）と rows（セル値の配列の配列）から表を作る。バーンダウン/ベロシティ/ロードマップ用。 */
+function gridTable(headers, rows) {
+  if (!rows || rows.length === 0) return emptyTableRow('ありません。');
+  var table = document.createElement('table');
+  table.appendChild(tableHead(headers));
+  var tbody = document.createElement('tbody');
+  rows.forEach(function (row) {
+    var tr = document.createElement('tr');
+    row.forEach(function (cell) {
+      var td = document.createElement('td');
+      td.textContent = (cell === null || cell === undefined) ? '' : String(cell);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
+/** columns（{field,label}の配列）と rows（オブジェクトの配列）から表を作る。一覧/完了/障害物用。 */
+function objectTable(columns, rows) {
+  if (!rows || rows.length === 0) return emptyTableRow('ありません。');
+  var table = document.createElement('table');
+  table.appendChild(tableHead(columns.map(function (c) { return c.label; })));
+  var tbody = document.createElement('tbody');
+  rows.forEach(function (row) {
+    var tr = document.createElement('tr');
+    columns.forEach(function (c) {
+      var td = document.createElement('td');
+      var v = row[c.field];
+      td.textContent = (v === null || v === undefined) ? '' : String(v);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
+/** 見出し付きの表。障害物の未解決/解決済のように、同じ列定義の表を複数並べるときに使う。 */
+function tableSection(title, columns, rows) {
+  var section = document.createElement('div');
+  var h = document.createElement('h3');
+  h.textContent = title;
+  section.appendChild(h);
+  section.appendChild(objectTable(columns, rows));
+  return section;
+}
+
+/** 表を描く。ユーザー由来の文字列は textContent で入れる。 */
+function renderTable(view) {
+  var host = document.getElementById('table-view');
+  host.innerHTML = '';
+  if (!view) {
+    var none = document.createElement('div');
+    none.className = 'table-empty';
+    none.textContent = 'まだありません。';
+    host.appendChild(none);
+    return;
+  }
+  // 障害物は未解決と解決済の2つの表になる。
+  if (view.open !== undefined && view.resolved !== undefined) {
+    host.appendChild(tableSection('未解決', view.columns, view.open));
+    host.appendChild(tableSection('解決済', view.columns, view.resolved));
+    return;
+  }
+  if (view.table) {
+    host.appendChild(gridTable(view.table.headers, view.table.rows));
+    return;
+  }
+  host.appendChild(objectTable(view.columns, view.rows));
 }
 
 /**
@@ -904,7 +1128,7 @@ function move(id, newStatus) {
       inflight--;
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
-        writeSeq++;   // load() が発行後の書き込みを見分けるための会計
+        writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         render(applyServerBoard(res.board, id, trustWholeBoard));
         setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
       } else {
@@ -926,7 +1150,7 @@ function move(id, newStatus) {
     .apiUpdateStatus(id, newStatus, expectedUpdatedAt);
 }
 
-document.getElementById('reload').addEventListener('click', load);
+document.getElementById('reload').addEventListener('click', loadView);
 fillButton(document.getElementById('reload'), 'reload', '最新にする');
 fillSelect(document.getElementById('f-status'), STATUS_OPTIONS);
 fillSelect(document.getElementById('f-priority'), PRIORITY_OPTIONS);
@@ -942,7 +1166,8 @@ document.addEventListener('keydown', function (ev) {
   if (!document.getElementById('toast').hidden) { hideToast(); return; }
   if (!document.getElementById('panel').hidden) closePanel();
 });
-load();
+renderTabs();
+loadView();
 </script>
 </body>
 </html>
