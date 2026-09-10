@@ -120,7 +120,12 @@ function apiGetView(name) {
       const rows = csvToObjects(text);
       const summary = summarizeBacklog(rows, KANBAN_STATUSES);
       const view = key === 'board' ? buildBoardData(rows) : buildListView(rows);
-      return { ok: true, name: key, view: view, summary: summary };
+      const out = { ok: true, name: key, view: view, summary: summary };
+      // パネルのスプリント欄は velocity.csv から選ばせる。パネルは盤面でしか開かない
+      // ので、盤面の応答に載せて渡す（パネルを開くたびに往復させない）。
+      // velocity.csv が無くても盤面は読める（空配列＝未割り当てだけが選べる）。
+      if (key === 'board') out.velocityRows = readCsvRowsBestEffort_(VELOCITY_CSV_NAME);
+      return out;
     }
     if (key === 'done') {
       const rows = readDoneBacklogRowsBestEffort_();

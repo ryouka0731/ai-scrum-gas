@@ -23,11 +23,19 @@ const plain = (o) => Object.assign({}, o);
 const CONFLICT_MSG = '他の変更が先に入っています。最新の内容に更新しました。';
 const BUSY_MSG = '他の更新が実行中です。少し待って再試行してください。';
 
+// パネルのスプリント欄は velocity.csv から選ばせる（自由入力ではない）。盤面の応答が
+// この行を運ぶので、初期読み込みの応答に載せる。載せないと select に選択肢が無く、
+// 実ブラウザ同様、値を入れても空になる。
+const VELOCITY = [
+  { sprint: 'sprint001', sprint_start: '2026-08-18', sprint_end: '2026-08-31' },
+  { sprint: 'sprint002', sprint_start: '2026-09-01', sprint_end: '2026-09-14' },
+];
+
 /** 初期読み込みを済ませたハーネスを返す。 */
 function ready() {
   const h = createHarness(INITIAL);
   h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, view: h.boardOf(INITIAL) });
+  h.calls[0].handlers.success({ ok: true, view: h.boardOf(INITIAL), velocityRows: VELOCITY });
   return h;
 }
 

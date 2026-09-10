@@ -461,6 +461,69 @@ function createHarness(initialColumns) {
       });
     },
 
+    /** その要素のタグ名を読む（input と select の取り違えを見分けるため）。 */
+    tagOf: function (id) { return el(id).tagName; },
+
+    /** <select> の選択肢を [{value, label}] で読む（描画順のまま）。 */
+    optionsOf: function (fieldId) {
+      return el(fieldId).children
+        .filter(function (o) { return o.tagName === 'option'; })
+        .map(function (o) { return { value: o.value, label: o.textContent }; });
+    },
+
+    /**
+     * hostId の下にある補足（.help）を、操作できる形で返す。
+     *
+     * 用語は ? ボタンの aria-label（「<用語>とは」）から読む。内部変数ではなく
+     * 画面から辿るため。用語集に無い語では makeHelp が空の .help を返すので、
+     * ボタンを持たないものは「補足が出ていない」として除く。
+     */
+    helpsIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.classList.contains('help'); })
+        .map(function (wrap) {
+          const btn = wrap.children.filter(function (c) { return c.tagName === 'button'; })[0];
+          const body = wrap.children.filter(function (c) { return c.classList.contains('help-body'); })[0];
+          if (!btn || !body) return null;
+          return {
+            term: String(btn.getAttribute('aria-label') || '').replace(/とは$/, ''),
+            press: function () { fire(btn, 'click', {}); },
+            /**
+             * タッチ端末での1回のタップ。ブラウザが出す順に起こす:
+             * pointerdown が先、そのあとに互換のための mouseenter と focus、最後に click。
+             */
+            tap: function () {
+              fire(btn, 'pointerdown', {});
+              fire(btn, 'mouseenter', {});
+              fire(btn, 'focus', {});
+              fire(btn, 'click', {});
+            },
+            /**
+             * マウスでの1回のクリック。カーソルが乗るのが先で、pointerdown はその後。
+             */
+            mouseClick: function () {
+              fire(btn, 'mouseenter', {});
+              fire(btn, 'pointerdown', {});
+              fire(btn, 'click', {});
+            },
+            hover: function () { fire(btn, 'mouseenter', {}); },
+            leave: function () { fire(wrap, 'mouseleave', {}); },
+            focus: function () { fire(btn, 'focus', {}); },
+            blur: function () { fire(btn, 'blur', {}); },
+            isOpen: function () { return !body.hidden; },
+            expanded: function () { return btn.getAttribute('aria-expanded'); },
+            text: function () { return body.textContent; }
+          };
+        })
+        .filter(Boolean);
+    },
+
+    /** hostId の下にある、その用語の補足をひとつ返す（無ければ例外）。 */
+    helpFor: function (hostId, term) {
+      const hit = this.helpsIn(hostId).filter(function (h) { return h.term === term; });
+      if (hit.length !== 1) throw new Error('補足「' + term + '」が ' + hit.length + ' 件見つかりました');
+      return hit[0];
+    },
+
     /** id の要素の下にあるテキストをすべて（DOM 順に空白区切りで）連結して読む。 */
     textTreeOf: function (hostId) {
       const texts = [];
@@ -475,6 +538,7 @@ function createHarness(initialColumns) {
 
 module.exports = {
   createHarness: createHarness,
+  htmlSource: html,
   styleRules: styleRules,
   selectorList: selectorList,
   declarations: declarations,

@@ -426,6 +426,29 @@ test('apiGetView は読み取りに失敗したビューが他を巻き添えに
   assert.equal(velocity.view.table.rows.length, 0);
 });
 
+test('apiGetView(board) は velocity.csv の行を一緒に返す（パネルのスプリント欄の選択肢）', () => {
+  // パネルは盤面でしか開かない。開くたびにサーバへ往復させないよう、盤面の応答に載せる。
+  const { ctx } = createTestContext({
+    'product_backlog.csv': headerOnlyCsv(),
+    'velocity.csv': 'sprint,planned_points,completed_points,carried_over_points,sprint_start,sprint_end,notes\n' +
+      'sprint001,10,8,2,2026-01-01,2026-01-14,\n',
+  });
+  const board = ctx.apiGetView('board');
+  assert.equal(board.ok, true, JSON.stringify(board));
+  assert.ok(Array.isArray(board.velocityRows), 'velocityRows が配列で返っていない');
+  assert.equal(board.velocityRows.length, 1);
+  assert.equal(board.velocityRows[0].sprint, 'sprint001');
+  assert.equal(board.velocityRows[0].sprint_start, '2026-01-01');
+});
+
+test('velocity.csv が無くても盤面は読め、選択肢は空配列で返る', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const board = ctx.apiGetView('board');
+  assert.equal(board.ok, true);
+  assert.ok(Array.isArray(board.velocityRows), 'velocityRows が配列で返っていない');
+  assert.equal(board.velocityRows.length, 0);
+});
+
 test('readCsvRowsBestEffort_ は Drive が例外を投げても空配列にする（ファイル不在とは別の経路）', () => {
   // 「見つからない」（readTextFile_ が null を返す）ときは catch まで届かない。
   // ここでは getFilesByName 自体が例外を投げる状況を再現し、catch が効くことを確かめる。

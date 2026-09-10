@@ -174,6 +174,27 @@
     font-size: 12px; color: var(--ink-2); padding: var(--sp-3) 0;
     display: flex; gap: var(--sp-4); flex-wrap: wrap;
   }
+  /* スプリントゴールは文章。数値の統計と同じ並びに埋めると読み飛ばされるため、
+     行を分け（flex-basis: 100%）、本文と同じ濃さにする。長文でも横スクロールを
+     出さない（.card .title と同じ overflow-wrap）。 */
+  #summary .goal { flex-basis: 100%; color: var(--ink); overflow-wrap: anywhere; }
+
+  /* 用語の補足。モーダルにしない（開いている間も盤面を操作できる）。 */
+  .help { position: relative; display: inline-flex; }
+  .help > button {
+    border: none; background: transparent; color: var(--ink-2);
+    padding: 0 var(--sp-1); font-size: 11px; line-height: 1;
+  }
+  .help > button:hover, .help > button:focus-visible { color: var(--accent); }
+  .help-body {
+    position: absolute; top: 100%; left: 0; z-index: 20;
+    width: max-content; max-width: min(280px, 80vw);
+    background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: var(--shadow-2); padding: var(--sp-3);
+    font-size: 12px; line-height: 1.7; font-weight: normal; text-align: left;
+  }
+
   .table-wrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; font-size: 12px; }
   th, td {
@@ -216,7 +237,9 @@
     <div class="field">
       <label for="f-acceptance">受入基準</label>
       <textarea id="f-acceptance"></textarea>
-      <span class="hint">セミコロン（;）で区切ります</span>
+      <!-- パネルの入力欄は補足を押させず .hint で常に見せる（余白があるため）。
+           文面は用語集から入れる（glossaryOf('受入基準')。ここに直接書くと源泉が2つになる）。 -->
+      <span id="f-acceptance-hint" class="hint"></span>
     </div>
     <div class="row">
       <div class="field">
@@ -230,12 +253,16 @@
     </div>
     <div class="row">
       <div class="field">
-        <label for="f-size">サイズ</label>
+        <!-- 入力欄の id と CSV の列名は size のまま（列名は変えない）。 -->
+        <label for="f-size">ポイント</label>
         <input id="f-size" type="text" inputmode="numeric">
+        <span class="hint">相対見積り。ベロシティは完了したポイントの合計</span>
       </div>
       <div class="field">
         <label for="f-sprint">スプリント</label>
-        <input id="f-sprint" type="text">
+        <!-- 自由入力だと打ち間違いが幽霊スプリントを作り、velocity.csv に無い名前を
+             書くとその PBI はロードマップから黙って消える。velocity.csv から選ばせる。 -->
+        <select id="f-sprint"></select>
       </div>
     </div>
     <div id="panel-message" class="info"></div>
@@ -293,6 +320,169 @@ function fillButton(btn, iconName, label) {
   btn.appendChild(span);
 }
 
+/**
+ * 用語と説明。gas/pure_glossary.js の写し。
+ *
+ * GAS のサーバ側 .js はブラウザからは呼べない（google.script.run は非同期で、
+ * 描画の途中では待てない）ため、画面に出す文面はここに持つしかない。写しが黙って
+ * ずれないよう、gas/tests/kanban_glossary.test.js が pure_glossary.js との一致を
+ * 固定している。文面を直すときは pure_glossary.js と両方を直すこと。
+ */
+var GLOSSARY = {
+  'ストーリーポイント':
+    'その項目1つの相対的な大きさ。時間ではない。ベロシティは、完了したストーリーポイントの合計。',
+  'ベロシティ':
+    'チームが1スプリントで完了できたストーリーポイントの合計。次のスプリントで積める量の目安になる。',
+  'バーンダウン':
+    'スプリントの残り作業が日を追ってどう減ったかの記録。線が下がりきればスプリントの目標に届く。',
+  'ロードマップ':
+    'どのやることを、どのスプリントで扱う予定かの一覧。帯の位置が期間を表す。',
+  'スプリント':
+    '区切られた作業期間。この単位で計画し、終わりに成果を確かめる。',
+  '障害物':
+    'チームの進みを妨げているもの。気づいた人が書き出し、取り除けたら解決済みにする。',
+  '受入基準':
+    'そのやることが「終わった」と言える条件。セミコロン（;）で区切って複数書く。',
+  'New': 'まだ着手していない段階。',
+  'Ready': '着手できる状態まで内容が定まった段階。',
+  'In Progress': '誰かが手をつけている段階。',
+  'Review': '受入基準を満たしたかを確かめている段階。',
+  'Done': '受入基準を満たし、完了と認められた段階。',
+  'Critical': '最優先。これが止まると他が進まない。',
+  'High': '最優先ではないが、早く着手すべきもの。',
+  'Medium': '通常の優先度。急がないが、順番が来たら着手する。',
+  'Low': '手が空いたときに扱うもの。'
+};
+
+/** 用語の説明を返す。知らない語なら空文字。 */
+function glossaryOf(term) {
+  var key = String(term === null || term === undefined ? '' : term).trim();
+  if (!key) return '';
+  return Object.prototype.hasOwnProperty.call(GLOSSARY, key) ? GLOSSARY[key] : '';
+}
+
+// gas/pure_sprint_options.js と、それが使う pure_grid_board.js の realSprints の写し。
+// 理由は GLOSSARY と同じ（パネルを開くたびにサーバへ往復させない）。
+// kanban_glossary.test.js が本体との結果一致を固定している。
+var SPRINT_UNASSIGNED_LABEL = '（未割り当て）';
+var ROADMAP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 日付が埋まっている（＝実在する）スプリントの行だけを、行順のまま返す。 */
+function realSprints(velocityRows) {
+  return (velocityRows || []).filter(function (v) {
+    return String(v.sprint || '').trim() !== '' &&
+      ROADMAP_DATE_RE.test(String(v.sprint_start || '').trim()) &&
+      ROADMAP_DATE_RE.test(String(v.sprint_end || '').trim());
+  });
+}
+
+/**
+ * スプリントの選択肢を返す。並び順は velocity.csv の行順に従う（行順はスプリントの
+ * 時系列そのもの）。今の値が velocity.csv に無い場合は末尾に足す（既存値を黙って
+ * 失わせないため。ラベルにその旨が出るので、追加の CSS は要らない）。
+ */
+function sprintOptions(velocityRows, currentValue) {
+  var options = [{ value: '', label: SPRINT_UNASSIGNED_LABEL, unknown: false }];
+  var seen = {};
+  realSprints(velocityRows || []).forEach(function (v) {
+    var name = String(v.sprint || '').trim();
+    if (!name || Object.prototype.hasOwnProperty.call(seen, name)) return;
+    seen[name] = true;
+    options.push({ value: name, label: name, unknown: false });
+  });
+
+  var current = String(currentValue === null || currentValue === undefined ? '' : currentValue).trim();
+  if (current && !Object.prototype.hasOwnProperty.call(seen, current)) {
+    options.push({ value: current, label: current + '（velocity.csv に無い）', unknown: true });
+  }
+  return options;
+}
+
+// 今開いている補足を閉じる関数。補足は同時に1つだけ開く（別の補足が開いたら前を閉じる）。
+// Escape はここを最初に見る（一番手前にあるものから閉じるため）。
+var openHelp = null;
+
+/** 開いている補足があれば閉じて true を返す。無ければ false。 */
+function closeOpenHelp() {
+  if (!openHelp) return false;
+  var close = openHelp;
+  close();
+  return true;
+}
+
+/**
+ * 補足を含みうる領域（#board / #table-view）の中身を空にする。
+ *
+ * 描き直しは開いている補足の要素ごと捨てるため、openHelp の記録も一緒に捨てる。
+ * 残したままにすると、Escape が「もう画面に無い補足」を閉じたことにして、
+ * その一打が通知やパネルまで届かない。
+ */
+function clearHost(el) {
+  el.innerHTML = '';
+  openHelp = null;
+}
+
+/**
+ * 用語の補足。押しても、カーソルを当てても、キーボードでも開く。
+ * 第2段階でタッチ端末に対応したので、カーソルだけに頼る形は採らない。
+ * モーダルにしない（開いている間も盤面は操作できる）。
+ */
+function makeHelp(term) {
+  var text = glossaryOf(term);
+  var wrap = document.createElement('span');
+  wrap.className = 'help';
+  if (!text) return wrap;   // 用語集に無ければ何も出さない
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '?';
+  btn.setAttribute('aria-label', term + 'とは');
+  btn.setAttribute('aria-expanded', 'false');
+
+  var body = document.createElement('div');
+  body.className = 'help-body';
+  body.textContent = text;
+  body.hidden = true;
+
+  var close = function () {
+    body.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    if (openHelp === close) openHelp = null;
+  };
+  var open = function () {
+    // 同時に2つ開かない。描き直しで消えた補足を openHelp が掴んだままにもしない。
+    if (openHelp && openHelp !== close) openHelp();
+    body.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    openHelp = close;
+  };
+
+  // 押したときの開閉は「押し始めた時点」の状態で決める。
+  //
+  // クリックは focus を伴い、タッチ端末でも合成の mouseenter を伴う。それらが先に
+  // 開いてしまうため、click の時点で「今開いているから閉じる」と判断すると、
+  // タッチでは押しても開かない（開いた直後に閉じる）ことになる。pointerdown は
+  // マウスでは mouseenter の後、タッチでは合成イベントより前に来るので、
+  // ここで控えた状態を使えばどちらでも意図どおりになる
+  // （マウス: 触れて開く → 押して閉じる、タッチ: 押して開く → もう一度押して閉じる）。
+  // pointerdown が来ない環境（古い Safari・キーボード操作）では今の状態で判定する。
+  var hiddenAtPress = null;
+  btn.addEventListener('pointerdown', function () { hiddenAtPress = body.hidden; });
+  btn.addEventListener('click', function () {
+    var wasHidden = (hiddenAtPress === null) ? body.hidden : hiddenAtPress;
+    hiddenAtPress = null;
+    if (wasHidden) open(); else close();
+  });
+  btn.addEventListener('mouseenter', open);
+  wrap.addEventListener('mouseleave', close);
+  btn.addEventListener('focus', open);
+  btn.addEventListener('blur', close);
+
+  wrap.appendChild(btn);
+  wrap.appendChild(body);
+  return wrap;
+}
+
 var dragging = null;
 // 現在描画している board。楽観的更新の基準（元の位置へ戻す先）として保持する。
 var board = null;
@@ -320,7 +510,7 @@ function setMessage(text, kind) {
 function render(b) {
   board = b;
   var root = document.getElementById('board');
-  root.innerHTML = '';
+  clearHost(root);
   b.columns.forEach(function (col) { root.appendChild(renderColumn(col)); });
 }
 
@@ -333,6 +523,7 @@ function renderColumn(col) {
   var name = document.createElement('span');
   name.textContent = col.status;
   h.appendChild(name);
+  h.appendChild(makeHelp(col.status));   // ステータス名の補足
   var count = document.createElement('span');
   count.className = 'count';
   count.textContent = String(col.cards.length);
@@ -405,6 +596,7 @@ function renderCard(card) {
   var prioText = document.createElement('span');
   prioText.textContent = card.priority || '未設定';
   prio.appendChild(prioText);
+  prio.appendChild(makeHelp(card.priority));   // 優先度の補足（未設定なら何も出ない）
   var idText = document.createElement('span');
   idText.style.marginLeft = 'auto';
   idText.textContent = card.id;
@@ -418,7 +610,7 @@ function renderCard(card) {
 
   var meta = document.createElement('div');
   meta.className = 'meta';
-  [card.size ? 'サイズ ' + card.size : '', card.sprint || '', card.updated_at || '']
+  [card.size ? card.size + ' pt' : '', card.sprint || '', card.updated_at || '']
     .filter(function (t) { return t; })
     .forEach(function (t) {
       var s = document.createElement('span');
@@ -606,6 +798,11 @@ var viewSeq = 0;
 // （表示文言を変えたときに黙って壊れるのを避ける）。
 var tableLoading = false;
 
+// パネルのスプリント欄の選択肢の元になる velocity.csv の行。盤面のビューの応答が
+// 運んでくる（パネルを開くたびにサーバへ往復させない）。載っていない応答（一覧・
+// ロードマップ等）で消さないよう、届いたときだけ入れ替える。
+var velocityRows = [];
+
 // id が null なら新規作成モード。status は新規作成時の初期ステータス。
 // fields は writeForm() が入れた直後のフォームの内容（差分送信の基準）。
 var panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
@@ -662,6 +859,23 @@ function changedFields(initial) {
   return out;
 }
 
+/**
+ * スプリントの選択肢を今の velocityRows から組み立て直す。
+ *
+ * 値を入れる前に必ず呼ぶこと。select は選択肢に無い値を受け付けない（代入しても
+ * 空になる）ため、順序を逆にすると既存のスプリントが黙って消える。
+ */
+function fillSprintSelect(current) {
+  var el = document.getElementById('f-sprint');
+  el.innerHTML = '';
+  sprintOptions(velocityRows, current).forEach(function (o) {
+    var opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = o.label;
+    el.appendChild(opt);
+  });
+}
+
 function writeForm(card, status) {
   document.getElementById('f-title').value = (card && card.title) || '';
   document.getElementById('f-description').value = (card && card.description) || '';
@@ -669,6 +883,7 @@ function writeForm(card, status) {
   document.getElementById('f-status').value = status || STATUS_OPTIONS[0];
   document.getElementById('f-priority').value = (card && card.priority) || 'Medium';
   document.getElementById('f-size').value = (card && card.size) || '';
+  fillSprintSelect((card && card.sprint) || '');
   document.getElementById('f-sprint').value = (card && card.sprint) || '';
 }
 
@@ -996,7 +1211,7 @@ function showView(viewId) {
 /** #table-view を「読み込み中」の状態にする。前のビューの表を残したまま応答を待たない。 */
 function showTableLoading() {
   var host = document.getElementById('table-view');
-  host.innerHTML = '';
+  clearHost(host);
   var loading = document.createElement('div');
   loading.className = 'table-empty';
   loading.textContent = '読み込んでいます…';
@@ -1016,7 +1231,7 @@ function showTableLoading() {
  */
 function foldTableLoading() {
   if (!tableLoading) return;
-  document.getElementById('table-view').innerHTML = '';
+  clearHost(document.getElementById('table-view'));
   tableLoading = false;
 }
 
@@ -1032,13 +1247,33 @@ function renderSummary(summary) {
     host.appendChild(span);
   }
 
+  /**
+   * スプリントゴールを1行で出す。stat() の並びには埋めない — 数値の統計と同じ
+   * 見た目にすると文章が読み飛ばされる。値はユーザー由来なので textContent で入れる。
+   */
+  function goalLine(text) {
+    var span = document.createElement('span');
+    span.className = 'goal';
+    var label = document.createElement('b');
+    label.textContent = 'ゴール: ';
+    span.appendChild(label);
+    var body = document.createElement('span');
+    body.textContent = text;
+    span.appendChild(body);
+    host.appendChild(span);
+  }
+
   // 分岐は実際に読むプロパティ（total / sprint / open）でガードする。summary.byStatus は
   // 空配列でも truthy になるため、それで分岐すると読む先（total）と食い違いうる。
   if (summary.total !== undefined) {
     // やること: 合計件数・ポイント。
     stat('合計', summary.total.count + '件 / ' + summary.total.points + 'pt');
   } else if (summary.sprint !== undefined) {
-    // スプリント: 直近スプリントの計画/完了/持ち越し。
+    // スプリント: ゴールと、直近スプリントの計画/完了/持ち越し。
+    // ゴールはそのスプリントが在る理由そのものなので先に出す。sprint_backlog.md に
+    // ゴール節が無い・読めないときは空文字で届くため、その行自体を出さない
+    // （「ゴール: 」だけが出るのを避ける）。
+    if (summary.goal) goalLine(summary.goal);
     stat('スプリント', summary.sprint);
     stat('計画', summary.planned + 'pt');
     stat('完了', summary.completed + 'pt');
@@ -1076,6 +1311,9 @@ function loadView() {
           setMessage('読み込み中に他の変更が入りました。もう一度お試しください。', 'error');
           return;
         }
+        // スプリントの選択肢の元。盤面の応答だけが運ぶため、載っているときだけ入れ替える
+        // （載っていない応答で空にすると、次に開くパネルが選択肢を失う）。
+        if (res.velocityRows) velocityRows = res.velocityRows;
         // hidden の切替と要約のクリアは showView() が発行前（クリック時点）に済ませている。
         // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
         // 操作可能な盤面や表が残ってしまう）。
@@ -1104,13 +1342,14 @@ function emptyTableRow(text) {
   return div;
 }
 
-/** ヘッダー行を作る。 */
+/** ヘッダー行を作る。列の見出しが用語集にあれば補足を添える。 */
 function tableHead(labels) {
   var thead = document.createElement('thead');
   var tr = document.createElement('tr');
   labels.forEach(function (label) {
     var th = document.createElement('th');
     th.textContent = label;
+    th.appendChild(makeHelp(label));
     tr.appendChild(th);
   });
   thead.appendChild(tr);
@@ -1179,7 +1418,7 @@ function tableSection(title, columns, rows) {
 function renderTable(view) {
   var host = document.getElementById('table-view');
   tableLoading = false;   // 実データを描くので、もう「読み込み中」ではない
-  host.innerHTML = '';
+  clearHost(host);
   if (!view) {
     var none = document.createElement('div');
     none.className = 'table-empty';
@@ -1257,6 +1496,8 @@ document.getElementById('reload').addEventListener('click', loadView);
 fillButton(document.getElementById('reload'), 'reload', '最新にする');
 fillSelect(document.getElementById('f-status'), STATUS_OPTIONS);
 fillSelect(document.getElementById('f-priority'), PRIORITY_OPTIONS);
+// パネルの入力欄は補足を押させず、常に見せる。文面は用語集を源泉にする。
+document.getElementById('f-acceptance-hint').textContent = glossaryOf('受入基準');
 document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
@@ -1266,6 +1507,8 @@ fillButton(document.getElementById('toast-undo'), 'undo', '取り消す');
 document.getElementById('panel-delete').addEventListener('click', deletePbi);
 document.addEventListener('keydown', function (ev) {
   if (ev.key !== 'Escape') return;
+  // 一番手前にあるものから閉じる。補足は通知（z-index: 10）より上（20）に出る。
+  if (closeOpenHelp()) return;
   if (!document.getElementById('toast').hidden) { hideToast(); return; }
   if (!document.getElementById('panel').hidden) closePanel();
 });
