@@ -447,6 +447,30 @@ test('スクロールすると開いている補足は閉じる', () => {
   assert.equal(help.isOpen(), false, 'スクロールしても補足が残る（指した語から離れる）');
 });
 
+test('表の中でスクロールしても開いている補足は閉じる', () => {
+  // 本文は position: fixed なので画面に貼り付く。表が枠の中で横スクロールすると、
+  // 補足だけが取り残されて別の列を指す。要素の scroll は bubble しないので、
+  // 捕捉フェーズで受けていないとここだけが黙って戻る（一番直したかった場面）。
+  const h = readyList([{ field: 'sprint', label: 'スプリント' }]);
+  const help = h.helpFor('table-view', 'スプリント');
+  help.hover();
+  assert.equal(help.isOpen(), true, '前提: 開いていない');
+  h.fireScrollIn('table-view');
+  assert.equal(help.isOpen(), false,
+    '表の中のスクロールで閉じない（捕捉フェーズで受けていない）');
+});
+
+test('下にも上にも入らない補足は、画面の上端で止まる', () => {
+  // 横向きの端末でソフトキーボードが出ている等、見えている高さが本文2つ分に満たない場合。
+  // 最後の砦が無いと、上へ回した補足が画面の上に飛び出して読めなくなる。
+  const h = readyList([{ field: 'sprint', label: 'スプリント' }]);
+  h.setViewport(375, 200);
+  const help = openPlaced(h, 'スプリント',
+    { left: 20, top: 100, width: 24, height: 24 }, { left: 0, top: 0, width: 280, height: 120 });
+  assert.equal(help.position().top, '8px',
+    '上端から飛び出している: ' + help.position().top);
+});
+
 test('画面の大きさが変わると開いている補足は閉じる', () => {
   const h = readyList([{ field: 'sprint', label: 'スプリント' }]);
   const help = h.helpFor('table-view', 'スプリント');

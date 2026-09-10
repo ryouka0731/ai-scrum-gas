@@ -320,12 +320,16 @@ function createHarness(initialColumns) {
 
   // position: fixed の補足は viewport を基準に自分で位置を決める。既定の大きさは
   // 1440×900（リードが実ブラウザで測ったのと同じ）。
+  // 捕捉フェーズ（第3引数の true）を記録する。要素の scroll は bubble しないので、
+  // 表の中のスクロールは**捕捉で登録した listener にしか届かない**。ここを区別しないと、
+  // `true` を外す退行（一番直したかった場面だけが黙って戻る）をシムが見逃す。
   const win = {
     innerWidth: 1440,
     innerHeight: 900,
     listeners: {},
-    addEventListener: function (type, fn) {
-      (this.listeners[type] || (this.listeners[type] = [])).push(fn);
+    addEventListener: function (type, fn, capture) {
+      (this.listeners[type] || (this.listeners[type] = []))
+        .push({ fn: fn, capture: capture === true });
     }
   };
 
@@ -583,9 +587,21 @@ function createHarness(initialColumns) {
       return collect(el(hostId), function (e) { return e.classList.contains('help-body'); });
     },
 
-    /** window のイベント（scroll / resize）を起こす。 */
+    /** window そのもののイベント（ページ全体のスクロール・リサイズ）を起こす。 */
     fireWindow: function (type) {
-      (win.listeners[type] || []).slice().forEach(function (fn) { fn({}); });
+      (win.listeners[type] || []).slice().forEach(function (e) { e.fn({}); });
+    },
+
+    /**
+     * hostId の中でスクロールを起こす（表は #table-view の枠の中で横スクロールする）。
+     * 要素の scroll は bubble しないため、window に**捕捉フェーズで**登録した listener
+     * にだけ届く。捕捉なしで登録していれば、ここでは何も起こらない。
+     */
+    fireScrollIn: function (hostId) {
+      el(hostId);   // 存在しない領域を指していないことだけ確かめる
+      (win.listeners.scroll || []).slice()
+        .filter(function (e) { return e.capture; })
+        .forEach(function (e) { e.fn({}); });
     },
 
     /** 実際に見えている領域の大きさを変える（resize を起こすのは別）。 */

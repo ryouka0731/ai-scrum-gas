@@ -150,3 +150,127 @@ test('選択肢を運ばない応答（一覧など）で、集めた選択肢�
   assert.deepEqual(h.optionsOf('f-sprint').map(function (o) { return o.value; }),
     ['', 'sprint002', 'sprint001', 'sprint 999'], '選択肢が失われている');
 });
+
+// ---------------------------------------------------------------------------
+// 読み込みの後に現れたスプリント
+//
+// 盤面を読み込んだ後に別の書き手（ローカルの Claude Code 等）が新しいスプリント名を
+// 付けると、その値はサーバが返した選択肢に入っていない。足さないとパネルは
+// 「（未割り当て）」と表示し、利用者はそれを信じて選び直してしまう — 値が黙って消える
+// のではなく、誤った表示を信じて自分で上書きさせる形になる。
+// ---------------------------------------------------------------------------
+
+// 選択肢が届いた後に、書き込み系の応答が運んできたカード（新しいスプリント付き）。
+const CARD_LATE = { id: 'PBI-050', title: 'あとから来た', sprint: 'sprint999', updated_at: 'T1' };
+const LATE_BOARD = cols({ New: [CARD_A, CARD_GHOST, CARD_PADDED, CARD_LATE] });
+
+/** 選択肢を受け取った後に、選択肢に無いスプリントのカードが盤面へ現れた状態を作る。 */
+function readyWithLateSprint() {
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, view: h.boardOf(INITIAL), sprintChoices: CHOICES });
+  // ドラッグの応答が、選択肢に無いスプリントを持つカードごと board を運んでくる。
+  h.drag('PBI-001', 'Ready');
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, board: h.boardOf(LATE_BOARD) });
+  return h;
+}
+
+test('選択肢に無い今の値も選択肢に足され、選ばれた状態で出る', () => {
+  const h = readyWithLateSprint();
+  h.openCard('PBI-050');
+  assert.equal(h.valueOf('f-sprint'), 'sprint999',
+    '選択肢に無い今の値が「（未割り当て）」に化けている');
+  assert.ok(h.optionsOf('f-sprint').some(function (o) { return o.value === 'sprint999'; }),
+    '今の値が選択肢に足されていない');
+});
+
+test('画面が足した選択肢のラベルは「velocity.csv に無い」と言わない', () => {
+  // 読み込みの後に足されたスプリントは velocity.csv に「ある」かもしれない。
+  // 「velocity.csv に無い」と書くと嘘になる。
+  const h = readyWithLateSprint();
+  h.openCard('PBI-050');
+  const added = h.optionsOf('f-sprint').filter(function (o) { return o.value === 'sprint999'; })[0];
+  assert.equal(added.label.indexOf('velocity.csv'), -1,
+    '確かめていないことを書いている: ' + added.label);
+  assert.notEqual(added.label, 'sprint999', '今の値であることが分からない');
+});
+
+test('サーバ由来の選択肢と、画面が足した選択肢はラベルが異なる', () => {
+  // 2つは意味が違う。サーバの unknown は「velocity.csv に無い＝ロードマップに出ない」という
+  // データの質の恒常的な情報。画面が足すほうは「この画面がまだ知らない。読み込み直せば
+  // 分かる」という一時的な状態。片方を直すときにもう片方へ揃えたくなる力が働くので、
+  // 同じ文言に収束しないようここで止める。
+  const h = readyWithLateSprint();
+  h.openCard('PBI-050');
+  const label = function (value) {
+    const hit = h.optionsOf('f-sprint').filter(function (o) { return o.value === value; });
+    assert.equal(hit.length, 1, value + ' の選択肢が ' + hit.length + ' 件');
+    return hit[0].label;
+  };
+  // 値の部分を除いた注記どうしを比べる（値そのものは当然違うため）。
+  const note = function (value) { return label(value).slice(value.length); };
+  const fromServer = note('sprint 999');   // sprintChoices が unknown 付きで返したもの
+  const fromClient = note('sprint999');    // 画面が今の値として足したもの
+  assert.notEqual(fromClient, fromServer,
+    '2つのラベルが同じ文言に揃っている（意味の違いが潰れている）: ' + fromClient);
+  assert.ok(fromServer.indexOf('velocity.csv') !== -1, '前提: サーバ側のラベルが変わっている');
+  assert.ok(fromClient.length > 0, '画面が足した選択肢に注記が無い');
+});
+
+test('選択肢に無いスプリントの行は、触らなければ保存で sprint を送らない', () => {
+  // 表示が誤っていても値は失われない、を固定する（差分送信）。
+  const h = readyWithLateSprint();
+  h.openCard('PBI-050');
+  h.setValue('f-title', 'あとから来た かいへん');
+  h.click('panel-save');
+  const fields = h.calls[h.calls.length - 1].args[1];
+  assert.equal(Object.prototype.hasOwnProperty.call(fields, 'sprint'), false,
+    '触っていないスプリントを送っている（元の値が書き換わる）');
+  assert.equal(fields.title, 'あとから来た かいへん');
+});
+
+test('選択肢に無いスプリントの行をドラッグしても、送るのはステータスだけ', () => {
+  const h = readyWithLateSprint();
+  h.drag('PBI-050', 'Review');
+  const call = h.calls[h.calls.length - 1];
+  assert.equal(call.method, 'apiUpdateStatus');
+  assert.deepEqual(call.args.slice(0, 2), ['PBI-050', 'Review']);
+});
+
+test('選択肢に無いスプリントの行でも、未割り当てへ戻す操作が届く', () => {
+  // 今の値が選択肢に無いままだと、基準が「（未割り当て）」になり、未割り当てを選び直しても
+  // 差分が出ない＝無言で無視される（表示は前後とも同じなので気づけない）。
+  const h = readyWithLateSprint();
+  h.openCard('PBI-050');
+  h.setValue('f-sprint', '');
+  h.click('panel-save');
+  const fields = h.calls[h.calls.length - 1].args[1];
+  assert.equal(Object.prototype.hasOwnProperty.call(fields, 'sprint'), true,
+    '未割り当てを選び直したのに sprint を送っていない（無言の no-op）');
+  assert.equal(fields.sprint, '');
+});
+
+test('選択肢に無いスプリントの行で、別のスプリントを選べば送られる', () => {
+  const h = readyWithLateSprint();
+  h.openCard('PBI-050');
+  h.setValue('f-sprint', 'sprint001');
+  h.click('panel-save');
+  assert.equal(h.calls[h.calls.length - 1].args[1].sprint, 'sprint001');
+});
+
+test('今の値が選択肢にあるときは、余計な選択肢を足さない', () => {
+  const h = ready(CHOICES);
+  h.openCard('PBI-001');   // sprint001 は選択肢にある
+  assert.deepEqual(h.optionsOf('f-sprint').map(function (o) { return o.value; }),
+    CHOICES.map(function (o) { return o.value; }), '選択肢が増えている');
+});
+
+test('スプリントが空のカードでは、空の選択肢を足さない', () => {
+  const empty = cols({ New: [{ id: 'PBI-060', title: 'なし', updated_at: 'T1' }] });
+  const h = createHarness(empty);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, view: h.boardOf(empty), sprintChoices: CHOICES });
+  h.openCard('PBI-060');
+  assert.equal(h.optionsOf('f-sprint').length, CHOICES.length, '空の選択肢が増えている');
+  assert.equal(h.valueOf('f-sprint'), '');
+});

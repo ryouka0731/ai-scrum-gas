@@ -922,16 +922,40 @@ function changedFields(initial) {
  *
  * 値を入れる前に必ず呼ぶこと。select は選択肢に無い値を受け付けない（代入しても
  * 空になる）ため、順序を逆にすると既存のスプリントが黙って消える。
+ *
+ * 今の値が選択肢に無いときだけ、その値の選択肢を1つ足す。盤面を読み込んだ後に
+ * 別の書き手が付けたスプリントは、サーバが返した選択肢にまだ入っていない。足さないと
+ * パネルが「（未割り当て）」と表示し、利用者はそれを信じて選び直してしまう
+ * （値が黙って消えるのではなく、誤った表示を信じて自分で上書きさせる形になる）。
+ *
+ * 足すのは**この所属判定だけ**。velocity.csv の絞り込み・日付の判定・並び順・重複排除は
+ * サーバに置いたままにする（そちらを画面へ写すと、サーバ側だけを直したときに黙ってずれ、
+ * ロードマップには出るのに選択肢には出ないスプリントのような食い違いが生まれる）。
+ *
+ * ラベルに「velocity.csv に無い」とは書かない。読み込み後に足されたスプリントは
+ * velocity.csv に**ある**かもしれず、その表示は嘘になる。サーバが付ける
+ * 「（velocity.csv に無い）」は「ロードマップに出ない」というデータの質の恒常的な情報、
+ * こちらは「この画面がまだ知らない。読み込み直せば分かる」という一時的な状態で、
+ * 意味が違う。同じ文言に揃えるとこの違いが潰れる。
  */
-function fillSprintSelect() {
+function fillSprintSelect(value) {
   var el = document.getElementById('f-sprint');
   el.innerHTML = '';
-  sprintChoices.forEach(function (o) {
+  var add = function (v, label) {
     var opt = document.createElement('option');
-    opt.value = o.value;
-    opt.textContent = o.label;
+    opt.value = v;
+    opt.textContent = label;
     el.appendChild(opt);
+  };
+
+  // value は trim 済みで渡ってくる（揃えるのは writeForm の1か所だけにする。
+  // ここでも trim すると、どちらが効いているのか分からない行が増える）。
+  var listed = false;
+  sprintChoices.forEach(function (o) {
+    if (o.value === value) listed = true;
+    add(o.value, o.label);
   });
+  if (value && !listed) add(value, value + '（選択肢に無い値）');
 }
 
 function writeForm(card, status) {
@@ -944,8 +968,9 @@ function writeForm(card, status) {
   // 選択肢の value は trim 済み（CSV 側は前後の空白を落とさない）。ここで揃えないと
   // ' sprint001 ' のような値が選択肢に一致せず、パネル上だけ「（未割り当て）」に化ける
   // （ロードマップは normalizeSprint で trim するので、画面によって違って見える）。
-  fillSprintSelect();
-  document.getElementById('f-sprint').value = String((card && card.sprint) || '').trim();
+  var sprint = String((card && card.sprint) || '').trim();
+  fillSprintSelect(sprint);
+  document.getElementById('f-sprint').value = sprint;
 }
 
 /** id が null なら新規作成。presetStatus は新規作成時の初期ステータス。 */
