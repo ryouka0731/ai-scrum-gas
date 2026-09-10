@@ -119,11 +119,13 @@ test('捨てるべき応答（別ビューへ切替済み）の失敗では、�
 // D: 盤面が隠れているとき、盤面由来の操作はどの経路からも起こらない
 // ---------------------------------------------------------------------------
 
+// 以下3件は「実ブラウザでは display: none で到達できない経路」を raw.* であえて歩く。
+// 画面側のガード（activeView !== 'board'）そのものを検査するため。
 test('盤面が隠れているとき、ドラッグしても apiUpdateStatus は飛ばない', () => {
   const h = ready();
   h.clickView('一覧');
   const before = h.calls.length;
-  h.drag('PBI-001', 'Ready');
+  h.raw.drag('PBI-001', 'Ready');
   assert.equal(h.calls.length, before, 'ドラッグで新しい呼び出しが発行された');
 });
 
@@ -131,7 +133,7 @@ test('盤面が隠れているとき、カードの click でパネルが開か�
   const h = ready();
   h.clickView('一覧');
   const before = h.calls.length;
-  h.openCard('PBI-001');
+  h.raw.openCard('PBI-001');
   assert.equal(h.hiddenOf('panel'), true, '隠れた盤面のカードでパネルが開いてしまう');
   assert.equal(h.calls.length, before, 'カードの click で新しい呼び出しが発行された');
 });
@@ -140,7 +142,7 @@ test('盤面が隠れているとき、「追加」ボタンでパネルが開�
   const h = ready();
   h.clickView('一覧');
   const before = h.calls.length;
-  h.clickAdd('New');
+  h.raw.clickAdd('New');
   assert.equal(h.hiddenOf('panel'), true, '隠れた盤面の「追加」ボタンでパネルが開いてしまう');
   assert.equal(h.calls.length, before, '「追加」ボタンで新しい呼び出しが発行された');
 });

@@ -183,6 +183,22 @@ function fire(el, type, ev) {
   if (type === 'click' && typeof el.onclick === 'function') el.onclick.call(el, ev || {});
 }
 
+/**
+ * 利用者の操作としてイベントを起こす。隠れている（自分か祖先に hidden がある）要素は
+ * 実ブラウザでは触れないため、黙って何もせず**例外にする**。
+ *
+ * 黙って無視すると、そのつもりで書いた検査が「何も起きなかったので期待どおり」と
+ * 誤って通ってしまう。到達できない経路を歩いている検査は、その場で気づけるほうがよい。
+ * 画面側のガードそのものを検査したいときだけ raw.* を使う。
+ */
+function fireVisible(el, type, ev, what) {
+  if (isHidden(el)) {
+    throw new Error(what + ' は隠れている（自分か祖先に hidden がある）ため、実ブラウザでは操作できません。'
+      + '画面側のガードを検査したいときは raw.* を使ってください');
+  }
+  fire(el, type, ev);
+}
+
 /** el を根に、条件に合う要素を深さ優先で集める。 */
 function collect(el, pred, out) {
   out = out || [];
@@ -193,33 +209,74 @@ function collect(el, pred, out) {
   return out;
 }
 
+// 中身を持たない要素。開始タグだけで閉じるため、入れ子の深さを進めない。
+const VOID_TAGS = { input: true, img: true, br: true, hr: true, meta: true, link: true };
+
 /**
  * <body> にある id 付きの要素を作る。HTML 側に id を足したらシムにも自動で載る。
  * <script> 以降は走査しない（JS 本文をタグとして誤認しないため）。
+ *
+ * 入れ子も辿れるようにする（`#panel` が隠れているなら、その中の「保存」も押せない、
+ * という実ブラウザの判定に要る）。ただし親子は parentNode だけで結び、children には
+ * 積まない — 積むと `clearHost()` の innerHTML = '' が静的な子まで消してしまう。
  */
 function buildStaticElements() {
   const source = html();
   const from = source.indexOf('<body>');
   const to = source.indexOf('<script>');
   if (from === -1 || to === -1 || to < from) throw new Error('kanban.html の <body> を切り出せません');
-  const body = source.slice(from, to);
+  // コメント中の文字列をタグとして拾わないよう、先に落とす。
+  const body = source.slice(from, to).replace(/<!--[\s\S]*?-->/g, '');
   const byId = {};
-  const re = /<([a-zA-Z][\w-]*)\b([^>]*)>/g;
+  // 開始タグと終了タグの両方を拾い、id を持つ祖先だけを積んだスタックで親を決める。
+  const re = /<(\/?)([a-zA-Z][\w-]*)\b([^>]*)>/g;
+  const stack = [];   // [{ tag, el }]  el は id を持たない要素では null
   let m;
   while ((m = re.exec(body)) !== null) {
-    const attrs = m[2];
+    const closing = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    const attrs = m[3];
+    if (closing) {
+      // 対応する開始タグまで畳む（閉じ忘れがあっても崩れないように）。
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].tag === tag) { stack.length = i; break; }
+      }
+      continue;
+    }
+    const selfClosing = /\/$/.test(attrs.trim()) || Object.prototype.hasOwnProperty.call(VOID_TAGS, tag);
     const idm = attrs.match(/\bid="([^"]+)"/);
-    if (!idm) continue;
-    const el = new Element(m[1].toLowerCase());
-    // aria-hidden を hidden 属性と取り違えないよう、直前が空白のものだけを見る。
-    el.hidden = /\shidden(\s|=|$)/.test(attrs);
-    el.id = idm[1];
-    // class は CSS の突き合わせ（#table-view の .table-wrap 等）に要る。
-    const cls = attrs.match(/\bclass="([^"]*)"/);
-    if (cls) el.className = cls[1];
-    byId[idm[1]] = el;
+    let el = null;
+    if (idm) {
+      el = new Element(tag);
+      // aria-hidden を hidden 属性と取り違えないよう、直前が空白のものだけを見る。
+      el.hidden = /\shidden(\s|=|$)/.test(attrs);
+      el.id = idm[1];
+      // class は CSS の突き合わせ（#table-view の .table-wrap 等）に要る。
+      const cls = attrs.match(/\bclass="([^"]*)"/);
+      if (cls) el.className = cls[1];
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].el) { el.parentNode = stack[i].el; break; }
+      }
+      byId[idm[1]] = el;
+    }
+    if (!selfClosing) stack.push({ tag: tag, el: el });
   }
   return byId;
+}
+
+/**
+ * 実ブラウザで見えているか。hidden は `display: none` になるため、自分か祖先の
+ * どれか1つでも hidden なら、その要素はクリックもドラッグもできない。
+ *
+ * シムは CSS を評価しないので、これが無いと「実ブラウザでは到達できない経路」を
+ * 検査が歩いてしまう（この画面では実際に、隠れた盤面のカードからシム経由でだけ
+ * 書き込みが飛ぶ状態が Task 7 の再レビューで見つかっている）。
+ */
+function isHidden(el) {
+  for (let node = el; node; node = node.parentNode) {
+    if (node.hidden) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +430,32 @@ function createHarness(initialColumns) {
     return found;
   };
 
+  // 操作の中身。イベントの起こし方（見えているか見るか否か）だけを差し替える。
+  const rawDrag = function (id, toStatus, emit) {
+    const card = cardElement(id);
+    const zones = inBoard(function (e) {
+      return e.classList.contains('dropzone') && e.dataset.status === toStatus;
+    });
+    if (zones.length !== 1) throw new Error('列 ' + toStatus + ' が ' + zones.length + ' 件見つかりました');
+    const data = {};
+    const dataTransfer = {
+      setData: function (k, v) { data[k] = String(v); },
+      getData: function (k) { return data[k] || ''; }
+    };
+    const noop = function () {};
+    emit(card, 'dragstart', { dataTransfer: dataTransfer, preventDefault: noop }, 'カード ' + id);
+    emit(zones[0], 'dragover', { preventDefault: noop }, '列 ' + toStatus);
+    emit(zones[0], 'drop', { preventDefault: noop }, '列 ' + toStatus);
+    emit(card, 'dragend', {}, 'カード ' + id);
+  };
+  const rawClickAdd = function (status, emit) {
+    const cols = byId.board.children.filter(function (c) { return c.dataset.status === status; });
+    if (cols.length !== 1) throw new Error('列 ' + status + ' が ' + cols.length + ' 件見つかりました');
+    const adds = collect(cols[0], function (e) { return e.classList.contains('add'); });
+    if (adds.length !== 1) throw new Error('列 ' + status + ' の追加ボタンが見つかりません');
+    emit(adds[0], 'click', {}, '列 ' + status + ' の追加ボタン');
+  };
+
   return {
     sandbox: sandbox,
     calls: calls,
@@ -389,42 +472,38 @@ function createHarness(initialColumns) {
     },
 
     /** 実ハンドラ経由で dragstart → dragover → drop → dragend を起こす。 */
-    drag: function (id, toStatus) {
-      const card = cardElement(id);
-      const zones = inBoard(function (e) {
-        return e.classList.contains('dropzone') && e.dataset.status === toStatus;
-      });
-      if (zones.length !== 1) throw new Error('列 ' + toStatus + ' が ' + zones.length + ' 件見つかりました');
-      const data = {};
-      const dataTransfer = {
-        setData: function (k, v) { data[k] = String(v); },
-        getData: function (k) { return data[k] || ''; }
-      };
-      const noop = function () {};
-      fire(card, 'dragstart', { dataTransfer: dataTransfer, preventDefault: noop });
-      fire(zones[0], 'dragover', { preventDefault: noop });
-      fire(zones[0], 'drop', { preventDefault: noop });
-      fire(card, 'dragend', {});
-    },
+    drag: function (id, toStatus) { rawDrag(id, toStatus, fireVisible); },
 
     /** 静的な要素の click を起こす。disabled なら実ブラウザ同様に何も起きない。 */
     click: function (elementId) {
       const target = el(elementId);
       if (target.disabled) return;
-      fire(target, 'click', {});
+      fireVisible(target, 'click', {}, '#' + elementId);
     },
 
     /** その列の「追加」ボタンを押す。 */
-    clickAdd: function (status) {
-      const cols = byId.board.children.filter(function (c) { return c.dataset.status === status; });
-      if (cols.length !== 1) throw new Error('列 ' + status + ' が ' + cols.length + ' 件見つかりました');
-      const adds = collect(cols[0], function (e) { return e.classList.contains('add'); });
-      if (adds.length !== 1) throw new Error('列 ' + status + ' の追加ボタンが見つかりません');
-      fire(adds[0], 'click', {});
-    },
+    clickAdd: function (status) { rawClickAdd(status, fireVisible); },
 
     /** 描画済みカードの click を起こす。 */
-    openCard: function (id) { fire(cardElement(id), 'click', {}); },
+    openCard: function (id) { fireVisible(cardElement(id), 'click', {}, 'カード ' + id); },
+
+    /**
+     * 実ブラウザでは display: none で到達できない経路を、あえて歩く手段。
+     *
+     * 画面側のガード（`activeView !== 'board'` で書き込みを止める等）そのものを
+     * 検査するためだけに使う。ここを普段の操作に使うと、実際には起こりえない
+     * 経路を歩いた誤った判定に戻ってしまう。
+     */
+    raw: {
+      click: function (elementId) {
+        const target = el(elementId);
+        if (target.disabled) return;
+        fire(target, 'click', {});
+      },
+      drag: function (id, toStatus) { rawDrag(id, toStatus, fire); },
+      clickAdd: function (status) { rawClickAdd(status, fire); },
+      openCard: function (id) { fire(cardElement(id), 'click', {}); }
+    },
 
     /** 描画済みカードのタイトルを DOM から読む（内部変数ではなく画面を見るため）。 */
     cardTitleOf: function (id) {
@@ -432,6 +511,14 @@ function createHarness(initialColumns) {
       if (hit.length !== 1) throw new Error('カード ' + id + ' のタイトルが ' + hit.length + ' 件見つかりました');
       return hit[0].textContent;
     },
+
+    /**
+     * 描画済みカードの class（'selected' / 'pending' 等）。renderCard() が
+     * panelState / pendingIds から都度組み立てる値で、盤面の再描画（render()）を
+     * 経ないと更新されない。closePanel() の render(board) が担う「選択中の印を消す」を
+     * 検査するために要る。
+     */
+    cardClassOf: function (id) { return cardElement(id).className; },
 
     /** 溜まっている setTimeout をすべて発火させる（時間経過を進める）。 */
     flushTimers: function () {
@@ -449,6 +536,21 @@ function createHarness(initialColumns) {
     setValue: function (fieldId, value) { el(fieldId).value = value; },
     valueOf: function (fieldId) { return el(fieldId).value; },
     hiddenOf: function (id) { return !!el(id).hidden; },
+
+    /**
+     * その要素の class（#message / #panel-message は setMessage が info / error を
+     * 入れる）。文面そのものを照合すると、言い回しを変えただけで検査が黙って壊れる。
+     */
+    classOf: function (id) { return el(id).className; },
+
+    /**
+     * その要素の直下の子の class を並びのまま返す。#table-view が
+     * 「読み込み中の placeholder」「まだありません。」「実データの表」のどれを
+     * 出しているかを、文面ではなく形で見分けるために使う。
+     */
+    childClassesOf: function (hostId) {
+      return el(hostId).children.map(function (c) { return c.className; });
+    },
     disabledOf: function (id) { return !!el(id).disabled; },
     textOf: function (id) { return el(id).textContent; },
 
@@ -471,14 +573,14 @@ function createHarness(initialColumns) {
     clickTab: function (label) {
       const hit = byId.tabs.children.filter(function (b) { return b.textContent === label; });
       if (hit.length !== 1) throw new Error('タブ「' + label + '」が ' + hit.length + ' 件見つかりました');
-      fire(hit[0], 'click', {});
+      fireVisible(hit[0], 'click', {}, 'タブ「' + label + '」');
     },
 
     /** #views の中から、そのラベルのビューボタンの click を起こす。 */
     clickView: function (label) {
       const hit = byId.views.children.filter(function (b) { return b.textContent === label; });
       if (hit.length !== 1) throw new Error('ビュー「' + label + '」が ' + hit.length + ' 件見つかりました');
-      fire(hit[0], 'click', {});
+      fireVisible(hit[0], 'click', {}, 'ビュー「' + label + '」');
     },
 
     /** #tabs / #views のボタンのラベルと選択状態（aria-selected）を DOM から読む。 */
@@ -540,13 +642,13 @@ function createHarness(initialColumns) {
             describedBy: function () { return btn.getAttribute('aria-describedby'); },
             bodyId: function () { return body.id; },
             bodyTag: function () { return body.tagName; },
-            press: function () { fire(btn, 'click', {}); },
+            press: function () { fireVisible(btn, 'click', {}, '補足の ? ボタン'); },
             /**
              * タッチ端末での1回のタップ。ブラウザが出す順に起こす:
              * pointerdown が先、そのあとに互換のための mouseenter と focus、最後に click。
              */
             tap: function () {
-              fire(btn, 'pointerdown', {});
+              fireVisible(btn, 'pointerdown', {}, '補足の ? ボタン');
               fire(btn, 'mouseenter', {});
               fire(btn, 'focus', {});
               fire(btn, 'click', {});
@@ -555,13 +657,13 @@ function createHarness(initialColumns) {
              * マウスでの1回のクリック。カーソルが乗るのが先で、pointerdown はその後。
              */
             mouseClick: function () {
-              fire(btn, 'mouseenter', {});
+              fireVisible(btn, 'mouseenter', {}, '補足の ? ボタン');
               fire(btn, 'pointerdown', {});
               fire(btn, 'click', {});
             },
-            hover: function () { fire(btn, 'mouseenter', {}); },
+            hover: function () { fireVisible(btn, 'mouseenter', {}, '補足の ? ボタン'); },
             leave: function () { fire(wrap, 'mouseleave', {}); },
-            focus: function () { fire(btn, 'focus', {}); },
+            focus: function () { fireVisible(btn, 'focus', {}, '補足の ? ボタン'); },
             blur: function () { fire(btn, 'blur', {}); },
             isOpen: function () { return !body.hidden; },
             expanded: function () { return btn.getAttribute('aria-expanded'); },

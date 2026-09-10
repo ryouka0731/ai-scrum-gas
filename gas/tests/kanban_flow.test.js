@@ -809,7 +809,9 @@ test('期限が過ぎた通知からは取り消せない', () => {
   const h = deleted();
   h.flushTimers();
   const before = h.calls.length;
-  h.click('toast-undo');
+  // 実ブラウザでは #toast[hidden] が display: none なのでボタンへ届かない。ここでは
+  // その手前の守り（onclick を外していること）を見たいので、あえて raw で押す。
+  h.raw.click('toast-undo');
   assert.equal(h.calls.length, before, '期限切れの通知から取り消せてしまう');
 });
 

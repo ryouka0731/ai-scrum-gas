@@ -53,7 +53,8 @@ test('タブ切替の読み取りが ok:false でも、選んだタブ側が表�
   assert.equal(h.hiddenOf('table-view'), false, '選んだタブ側（表）が出ていない');
 
   const before = h.calls.length;
-  h.drag('PBI-001', 'Ready');
+  // 実ブラウザでは隠れた盤面に触れない。ここは画面側のガードそのものを見たいので raw。
+  h.raw.drag('PBI-001', 'Ready');
   assert.equal(h.calls.length, before, '隠れた盤面をドラッグしたら送信されてしまった');
 });
 
@@ -67,7 +68,7 @@ test('タブ切替の読み取りが通信断（withFailureHandler）でも、�
   assert.equal(h.hiddenOf('table-view'), false, '選んだタブ側（表）が出ていない');
 
   const before = h.calls.length;
-  h.drag('PBI-001', 'Ready');
+  h.raw.drag('PBI-001', 'Ready');
   assert.equal(h.calls.length, before, '隠れた盤面をドラッグしたら送信されてしまった');
 });
 

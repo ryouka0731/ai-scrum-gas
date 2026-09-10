@@ -5,6 +5,9 @@ const { sprintOptions, sprintChoices } = require('../pure_sprint_options.js');
 const VEL = [
   { sprint: 'sprint002', sprint_start: '2026-09-01', sprint_end: '2026-09-14' },
   { sprint: 'sprint001', sprint_start: '2026-08-18', sprint_end: '2026-08-31' },
+  // 手書きの CSV では前後に空白が残る。選択肢は trim 済みの名前で出す
+  // （揃えないと、PBI 側の trim 済みの値と一致せず選択肢が2つに割れる）。
+  { sprint: ' sprint003 ', sprint_start: '2026-09-15', sprint_end: '2026-09-28' },
   { sprint: '（未設定）', sprint_start: 'YYYY-MM-DD', sprint_end: 'YYYY-MM-DD' },
 ];
 
@@ -18,7 +21,7 @@ test('先頭は必ず未割り当て（空文字）', () => {
 test('velocity.csv の行順に従う（名前で並べ替えない）', () => {
   // realSprints は絞り込むだけで並べ替えない。行順はスプリントの時系列そのもの。
   const o = sprintOptions(VEL);
-  assert.deepEqual(o.slice(1).map((x) => x.value), ['sprint002', 'sprint001']);
+  assert.deepEqual(o.slice(1).map((x) => x.value), ['sprint002', 'sprint001', 'sprint003']);
 });
 
 test('日付が埋まっていない雛形行は選択肢に出ない', () => {
@@ -47,9 +50,9 @@ const ROWS = [
 
 test('sprintChoices は velocity.csv の選択肢に、PBI 側の未知のスプリントを足す', () => {
   const o = sprintChoices(VEL, ROWS);
-  assert.deepEqual(o.map((x) => x.value), ['', 'sprint002', 'sprint001', 'ゆうれい']);
-  assert.deepEqual(o.map((x) => x.unknown), [false, false, false, true]);
-  assert.ok(o[3].label.indexOf('velocity.csv に無い') !== -1);
+  assert.deepEqual(o.map((x) => x.value), ['', 'sprint002', 'sprint001', 'sprint003', 'ゆうれい']);
+  assert.deepEqual(o.map((x) => x.unknown), [false, false, false, false, true]);
+  assert.ok(o[4].label.indexOf('velocity.csv に無い') !== -1);
 });
 
 test('sprintChoices は同じ未知のスプリントを1度だけ足す', () => {
@@ -67,8 +70,8 @@ test('sprintChoices は雛形の行を選択肢にしない', () => {
 });
 
 test('sprintChoices は PBI が無くても未割り当てと velocity.csv の分を返す', () => {
-  assert.deepEqual(sprintChoices(VEL, []).map((x) => x.value), ['', 'sprint002', 'sprint001']);
-  assert.deepEqual(sprintChoices(VEL, null).map((x) => x.value), ['', 'sprint002', 'sprint001']);
+  assert.deepEqual(sprintChoices(VEL, []).map((x) => x.value), ['', 'sprint002', 'sprint001', 'sprint003']);
+  assert.deepEqual(sprintChoices(VEL, null).map((x) => x.value), ['', 'sprint002', 'sprint001', 'sprint003']);
 });
 
 test('sprintChoices は velocity.csv が空でも PBI 側の名前を拾う', () => {
@@ -89,4 +92,14 @@ test('日付が YYYY-MM-DD でない行は選択肢に出ない（ロードマ�
   const slashed = [{ sprint: 'sprint003', sprint_start: '2026/09/15', sprint_end: '2026/09/28' }];
   assert.deepEqual(sprintOptions(slashed).map((x) => x.value), ['']);
   assert.deepEqual(sprintChoices(slashed, []).map((x) => x.value), ['']);
+});
+
+test('velocity.csv の名前に前後の空白があっても、PBI 側の同じ名前と1つにまとまる', () => {
+  // 揃えないと、velocity.csv 側の 'sprint001 ' と PBI 側の 'sprint001' が別物になり、
+  // 「sprint001 」と「sprint001（velocity.csv に無い）」の2つがパネルに並ぶ
+  // （後者は嘘の注記。その PBI は実際にはロードマップに出る）。
+  const vel = [{ sprint: 'sprint001 ', sprint_start: '2026-08-18', sprint_end: '2026-08-31' }];
+  const rows = [{ id: 'PBI-001', title: 'A', sprint: 'sprint001' }];
+  assert.deepEqual(sprintChoices(vel, rows).map((x) => x.value), ['', 'sprint001']);
+  assert.deepEqual(sprintChoices(vel, rows).map((x) => x.unknown), [false, false]);
 });
