@@ -31,11 +31,24 @@ const GLOSSARY = {
   'Low': '手が空いたときに扱うもの。',
 };
 
-/** 用語の説明を返す。知らない語なら空文字。 */
+/**
+ * 画面の見出し語 → 用語集のキー。
+ *
+ * label は UI の文言なので変わりうる（「ポイント」→「見積り」等）。突き合わせを label
+ * そのものに縛ると、文言を変えるたびに補足が黙って消える。別名で繋ぐと、見出しでも
+ * 入力欄の補足でも同じ説明に届く（一覧の列見出しは「ポイント」、用語集のキーは
+ * 「ストーリーポイント」）。
+ */
+const GLOSSARY_ALIASES = {
+  'ポイント': 'ストーリーポイント',
+};
+
+/** 用語の説明を返す。別名も解決する。知らない語なら空文字。 */
 function glossaryOf(term) {
-  const key = String(term === null || term === undefined ? '' : term).trim();
+  let key = String(term === null || term === undefined ? '' : term).trim();
   if (!key) return '';
+  if (Object.prototype.hasOwnProperty.call(GLOSSARY_ALIASES, key)) key = GLOSSARY_ALIASES[key];
   return Object.prototype.hasOwnProperty.call(GLOSSARY, key) ? GLOSSARY[key] : '';
 }
 
-if (typeof module !== 'undefined') { module.exports = { GLOSSARY, glossaryOf }; }
+if (typeof module !== 'undefined') { module.exports = { GLOSSARY, GLOSSARY_ALIASES, glossaryOf }; }

@@ -426,27 +426,33 @@ test('apiGetView は読み取りに失敗したビューが他を巻き添えに
   assert.equal(velocity.view.table.rows.length, 0);
 });
 
-test('apiGetView(board) は velocity.csv の行を一緒に返す（パネルのスプリント欄の選択肢）', () => {
+test('apiGetView(board) は完成した選択肢を返す（パネルのスプリント欄）', () => {
   // パネルは盤面でしか開かない。開くたびにサーバへ往復させないよう、盤面の応答に載せる。
+  // 組み立ての規則を画面へ写さないため、「完成した形」で渡す。
   const { ctx } = createTestContext({
-    'product_backlog.csv': headerOnlyCsv(),
+    'product_backlog.csv': headerOnlyCsv() +
+      csvRow({ id: 'PBI-001', title: 'A', status: 'New', sprint: 'sprint001' }) + '\n' +
+      csvRow({ id: 'PBI-002', title: 'B', status: 'New', sprint: 'ゆうれい' }) + '\n',
     'velocity.csv': 'sprint,planned_points,completed_points,carried_over_points,sprint_start,sprint_end,notes\n' +
       'sprint001,10,8,2,2026-01-01,2026-01-14,\n',
   });
   const board = ctx.apiGetView('board');
   assert.equal(board.ok, true, JSON.stringify(board));
-  assert.ok(Array.isArray(board.velocityRows), 'velocityRows が配列で返っていない');
-  assert.equal(board.velocityRows.length, 1);
-  assert.equal(board.velocityRows[0].sprint, 'sprint001');
-  assert.equal(board.velocityRows[0].sprint_start, '2026-01-01');
+  assert.ok(Array.isArray(board.sprintChoices), 'sprintChoices が配列で返っていない');
+  const values = [];
+  board.sprintChoices.forEach(function (o) { values.push(o.value); });
+  assert.deepEqual(values, ['', 'sprint001', 'ゆうれい'],
+    'velocity.csv に無い PBI 側のスプリントが選択肢に入っていない: ' + JSON.stringify(values));
+  assert.equal(board.sprintChoices[2].unknown, true);
 });
 
-test('velocity.csv が無くても盤面は読め、選択肢は空配列で返る', () => {
+test('velocity.csv が無くても盤面は読め、選択肢は未割り当てだけになる', () => {
   const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
   const board = ctx.apiGetView('board');
   assert.equal(board.ok, true);
-  assert.ok(Array.isArray(board.velocityRows), 'velocityRows が配列で返っていない');
-  assert.equal(board.velocityRows.length, 0);
+  assert.ok(Array.isArray(board.sprintChoices), 'sprintChoices が配列で返っていない');
+  assert.equal(board.sprintChoices.length, 1);
+  assert.equal(board.sprintChoices[0].value, '');
 });
 
 test('readCsvRowsBestEffort_ は Drive が例外を投げても空配列にする（ファイル不在とは別の経路）', () => {

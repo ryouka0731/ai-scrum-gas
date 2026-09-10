@@ -123,8 +123,12 @@ function apiGetView(name) {
       const out = { ok: true, name: key, view: view, summary: summary };
       // パネルのスプリント欄は velocity.csv から選ばせる。パネルは盤面でしか開かない
       // ので、盤面の応答に載せて渡す（パネルを開くたびに往復させない）。
-      // velocity.csv が無くても盤面は読める（空配列＝未割り当てだけが選べる）。
-      if (key === 'board') out.velocityRows = readCsvRowsBestEffort_(VELOCITY_CSV_NAME);
+      // 選択肢は「完成した形」で渡す — 組み立ての規則を画面側に写すと、サーバ側だけを
+      // 直したときに黙ってずれる（ロードマップには出るのに選択肢には出ないスプリント等）。
+      // velocity.csv が無くても盤面は読める（未割り当て＋PBI に付いている名前だけになる）。
+      if (key === 'board') {
+        out.sprintChoices = sprintChoices(readCsvRowsBestEffort_(VELOCITY_CSV_NAME), rows);
+      }
       return out;
     }
     if (key === 'done') {

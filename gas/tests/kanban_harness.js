@@ -90,6 +90,9 @@ function Element(tagName) {
   this.tagName = tagName;
   this.children = [];
   this.parentNode = null;
+  // 静的な要素は markup から入る。動的な要素は実装が入れたものがそのまま載る
+  // （aria-describedby の紐付け先など）。CSS の突き合わせにも使う。
+  this.id = '';
   this.attributes = {};
   this.dataset = {};
   this.style = {};
@@ -161,6 +164,18 @@ Element.prototype.addEventListener = function (type, fn) {
 };
 Element.prototype.focus = function () { this.focusCount++; };
 
+/**
+ * 位置と大きさ。シムはレイアウトしないので、既定は原点の 0×0。
+ * 位置決めを検査したいときはテスト側が setRect() で入れる。
+ */
+Element.prototype.getBoundingClientRect = function () {
+  const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
+  return {
+    left: r.left, top: r.top, width: r.width, height: r.height,
+    right: r.left + r.width, bottom: r.top + r.height
+  };
+};
+
 /** 要素に type のイベントを起こす。click は onclick も呼ぶ（実ブラウザと同じ）。 */
 function fire(el, type, ev) {
   const list = (el.listeners[type] || []).slice();
@@ -198,6 +213,10 @@ function buildStaticElements() {
     const el = new Element(m[1].toLowerCase());
     // aria-hidden を hidden 属性と取り違えないよう、直前が空白のものだけを見る。
     el.hidden = /\shidden(\s|=|$)/.test(attrs);
+    el.id = idm[1];
+    // class は CSS の突き合わせ（#table-view の .table-wrap 等）に要る。
+    const cls = attrs.match(/\bclass="([^"]*)"/);
+    if (cls) el.className = cls[1];
     byId[idm[1]] = el;
   }
   return byId;
@@ -290,8 +309,20 @@ function createHarness(initialColumns) {
     }
   };
 
+  // position: fixed の補足は viewport を基準に自分で位置を決める。既定の大きさは
+  // 1440×900（リードが実ブラウザで測ったのと同じ）。
+  const win = {
+    innerWidth: 1440,
+    innerHeight: 900,
+    listeners: {},
+    addEventListener: function (type, fn) {
+      (this.listeners[type] || (this.listeners[type] = [])).push(fn);
+    }
+  };
+
   const sandbox = {
     document: document,
+    window: win,
     google: makeGoogle(calls),
     setTimeout: function (fn, ms) {
       timerSeq++;
@@ -486,6 +517,16 @@ function createHarness(initialColumns) {
           if (!btn || !body) return null;
           return {
             term: String(btn.getAttribute('aria-label') || '').replace(/とは$/, ''),
+            /** ? ボタンと本文の位置・大きさを与える（シムはレイアウトしないため）。 */
+            setRects: function (btnRect, bodyRect) {
+              btn._rect = btnRect;
+              body._rect = bodyRect;
+            },
+            /** 本文の位置（style に入った値）。position: fixed なので viewport 座標。 */
+            position: function () { return { left: body.style.left, top: body.style.top }; },
+            describedBy: function () { return btn.getAttribute('aria-describedby'); },
+            bodyId: function () { return body.id; },
+            bodyTag: function () { return body.tagName; },
             press: function () { fire(btn, 'click', {}); },
             /**
              * タッチ端末での1回のタップ。ブラウザが出す順に起こす:
@@ -515,6 +556,33 @@ function createHarness(initialColumns) {
           };
         })
         .filter(Boolean);
+    },
+
+    /**
+     * hostId の下にある `.help` の入れ物をすべて返す（用語集に無い語で作られた
+     * 空のものも含む）。「何も作らない」ことを確かめるために要る。
+     */
+    helpWrapsIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.classList.contains('help'); });
+    },
+
+    /**
+     * hostId の下にある補足の本文の要素そのものを返す。切り取る祖先がいないことを
+     * parentNode で辿って確かめる静的検査で使う。
+     */
+    helpBodiesIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.classList.contains('help-body'); });
+    },
+
+    /** window のイベント（scroll / resize）を起こす。 */
+    fireWindow: function (type) {
+      (win.listeners[type] || []).slice().forEach(function (fn) { fn({}); });
+    },
+
+    /** viewport の大きさを変える（resize を起こすのは別）。 */
+    setViewport: function (width, height) {
+      win.innerWidth = width;
+      win.innerHeight = height;
     },
 
     /** hostId の下にある、その用語の補足をひとつ返す（無ければ例外）。 */

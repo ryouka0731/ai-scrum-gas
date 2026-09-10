@@ -180,19 +180,34 @@
   #summary .goal { flex-basis: 100%; color: var(--ink); overflow-wrap: anywhere; }
 
   /* 用語の補足。モーダルにしない（開いている間も盤面を操作できる）。 */
-  .help { position: relative; display: inline-flex; }
+  /* 本文は position: fixed（下記）なので、ここに position は要らない。置くと
+     「本文はこの中に収まる」と読めてしまうため、あえて持たせない。 */
+  .help { display: inline-flex; }
+  /* 見た目の ? は 11px のままでよいが、当たり判定は 24×24 以上にする（WCAG 2.5.8）。
+     指で当てられない補足は、タッチ端末では無いのと同じ。負のブロックマージンで
+     広げた分を打ち消し、列の見出し・カード・表の行の高さを変えない。 */
   .help > button {
     border: none; background: transparent; color: var(--ink-2);
     padding: 0 var(--sp-1); font-size: 11px; line-height: 1;
+    min-width: 24px; min-height: 24px; justify-content: center;
+    margin-top: -6px; margin-bottom: -6px;
   }
   .help > button:hover, .help > button:focus-visible { color: var(--accent); }
+  /* position: fixed。absolute だと、overflow を持つ祖先（#table-view。.table-wrap の
+     overflow-x: auto は overflow-y: visible を auto に格上げするので両軸のクリップ箱に
+     なる）に切り取られ、表のヘッダーの補足が枠で切れる（実測で 17px 欠けていた）。
+     fixed は overflow では切られないので枠から逃げられる。位置は open() が
+     getBoundingClientRect() から入れる（top / left をここに書かないのはそのため）。
+     white-space は th の nowrap を継承するため、必ずここで戻す — 戻さないと
+     50 字前後の本文が1行に潰れて 280px の枠を突き抜ける（切り取りとは別の不具合）。 */
   .help-body {
-    position: absolute; top: 100%; left: 0; z-index: 20;
+    position: fixed; z-index: 20;
     width: max-content; max-width: min(280px, 80vw);
     background: var(--card); color: var(--ink);
     border: 1px solid var(--line); border-radius: 8px;
     box-shadow: var(--shadow-2); padding: var(--sp-3);
     font-size: 12px; line-height: 1.7; font-weight: normal; text-align: left;
+    white-space: normal;
   }
 
   .table-wrap { overflow-x: auto; }
@@ -256,7 +271,9 @@
         <!-- 入力欄の id と CSV の列名は size のまま（列名は変えない）。 -->
         <label for="f-size">ポイント</label>
         <input id="f-size" type="text" inputmode="numeric">
-        <span class="hint">相対見積り。ベロシティは完了したポイントの合計</span>
+        <!-- 文面は用語集から入れる（glossaryOf('ポイント')）。直書きすると、同じ語の
+             説明が用語集と画面で2通りになる。 -->
+        <span id="f-size-hint" class="hint"></span>
       </div>
       <div class="field">
         <label for="f-sprint">スプリント</label>
@@ -354,48 +371,22 @@ var GLOSSARY = {
   'Low': '手が空いたときに扱うもの。'
 };
 
-/** 用語の説明を返す。知らない語なら空文字。 */
+/**
+ * 画面の見出し語 → 用語集のキー。gas/pure_glossary.js の写し。
+ *
+ * 一覧の列見出しは「ポイント」、用語集のキーは「ストーリーポイント」。label は UI の
+ * 文言なので変わりうるため、突き合わせを label そのものに縛らない。
+ */
+var GLOSSARY_ALIASES = {
+  'ポイント': 'ストーリーポイント'
+};
+
+/** 用語の説明を返す。別名も解決する。知らない語なら空文字。 */
 function glossaryOf(term) {
   var key = String(term === null || term === undefined ? '' : term).trim();
   if (!key) return '';
+  if (Object.prototype.hasOwnProperty.call(GLOSSARY_ALIASES, key)) key = GLOSSARY_ALIASES[key];
   return Object.prototype.hasOwnProperty.call(GLOSSARY, key) ? GLOSSARY[key] : '';
-}
-
-// gas/pure_sprint_options.js と、それが使う pure_grid_board.js の realSprints の写し。
-// 理由は GLOSSARY と同じ（パネルを開くたびにサーバへ往復させない）。
-// kanban_glossary.test.js が本体との結果一致を固定している。
-var SPRINT_UNASSIGNED_LABEL = '（未割り当て）';
-var ROADMAP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** 日付が埋まっている（＝実在する）スプリントの行だけを、行順のまま返す。 */
-function realSprints(velocityRows) {
-  return (velocityRows || []).filter(function (v) {
-    return String(v.sprint || '').trim() !== '' &&
-      ROADMAP_DATE_RE.test(String(v.sprint_start || '').trim()) &&
-      ROADMAP_DATE_RE.test(String(v.sprint_end || '').trim());
-  });
-}
-
-/**
- * スプリントの選択肢を返す。並び順は velocity.csv の行順に従う（行順はスプリントの
- * 時系列そのもの）。今の値が velocity.csv に無い場合は末尾に足す（既存値を黙って
- * 失わせないため。ラベルにその旨が出るので、追加の CSS は要らない）。
- */
-function sprintOptions(velocityRows, currentValue) {
-  var options = [{ value: '', label: SPRINT_UNASSIGNED_LABEL, unknown: false }];
-  var seen = {};
-  realSprints(velocityRows || []).forEach(function (v) {
-    var name = String(v.sprint || '').trim();
-    if (!name || Object.prototype.hasOwnProperty.call(seen, name)) return;
-    seen[name] = true;
-    options.push({ value: name, label: name, unknown: false });
-  });
-
-  var current = String(currentValue === null || currentValue === undefined ? '' : currentValue).trim();
-  if (current && !Object.prototype.hasOwnProperty.call(seen, current)) {
-    options.push({ value: current, label: current + '（velocity.csv に無い）', unknown: true });
-  }
-  return options;
 }
 
 // 今開いている補足を閉じる関数。補足は同時に1つだけ開く（別の補足が開いたら前を閉じる）。
@@ -411,27 +402,61 @@ function closeOpenHelp() {
 }
 
 /**
- * 補足を含みうる領域（#board / #table-view）の中身を空にする。
+ * 補足を含みうる領域（#board / #table-view / #summary）の中身を空にする。
  *
- * 描き直しは開いている補足の要素ごと捨てるため、openHelp の記録も一緒に捨てる。
- * 残したままにすると、Escape が「もう画面に無い補足」を閉じたことにして、
- * その一打が通知やパネルまで届かない。
+ * 空にする前に、開いている補足を閉じる。
+ * - 記録（openHelp）だけ残ると、Escape が「もう画面に無い補足」を閉じたことにして、
+ *   その一打が通知やパネルまで届かない。
+ * - 閉じずに記録だけ捨てると、消えない領域（盤面へ切り替えたあとの #table-view は
+ *   hidden になるだけで中身が残る）に開いたままの補足が置き去りになる。
  */
 function clearHost(el) {
+  closeOpenHelp();
   el.innerHTML = '';
-  openHelp = null;
+}
+
+// 補足の本文と画面の端との余白。position: fixed で自分で位置を決めるので、
+// 画面外へはみ出さないようここで詰める。
+var HELP_MARGIN = 8;
+
+// 本文に振る id の通し番号。aria-describedby で ? ボタンと紐付けるために要る。
+var helpSeq = 0;
+
+/**
+ * 補足の本文を画面内に収める位置（viewport 座標）を返す。
+ *
+ * position: fixed なので、基準は ? ボタンの画面上の位置。右や下がはみ出すときは
+ * 内側へ寄せる（右端の列の補足が画面の外に出ると、そもそも読めない）。
+ */
+function helpBodyPosition(btnRect, bodyRect, viewWidth, viewHeight) {
+  var left = btnRect.left;
+  var maxLeft = viewWidth - bodyRect.width - HELP_MARGIN;
+  if (left > maxLeft) left = maxLeft;
+  if (left < HELP_MARGIN) left = HELP_MARGIN;
+
+  var top = btnRect.bottom + HELP_MARGIN;
+  if (top + bodyRect.height > viewHeight - HELP_MARGIN) {
+    // 下に入らなければ上に出す。上にも入らなければ上端に貼る。
+    top = btnRect.top - bodyRect.height - HELP_MARGIN;
+    if (top < HELP_MARGIN) top = HELP_MARGIN;
+  }
+  return { left: left, top: top };
 }
 
 /**
  * 用語の補足。押しても、カーソルを当てても、キーボードでも開く。
  * 第2段階でタッチ端末に対応したので、カーソルだけに頼る形は採らない。
  * モーダルにしない（開いている間も盤面は操作できる）。
+ *
+ * 用語集に無い語では**何も作らない**（null を返す）。空の要素を置くと、当たり判定を
+ * 広げた分だけ幽霊の隙間が出る（一覧のヘッダーは6列が用語集に無い）。
  */
 function makeHelp(term) {
   var text = glossaryOf(term);
+  if (!text) return null;
+
   var wrap = document.createElement('span');
   wrap.className = 'help';
-  if (!text) return wrap;   // 用語集に無ければ何も出さない
 
   var btn = document.createElement('button');
   btn.type = 'button';
@@ -439,10 +464,17 @@ function makeHelp(term) {
   btn.setAttribute('aria-label', term + 'とは');
   btn.setAttribute('aria-expanded', 'false');
 
-  var body = document.createElement('div');
+  // 本文は span。列の見出し（h2）の中にも置くため、div だと content model 違反になる。
+  // position: fixed は display を block 化するので、span でも箱として振る舞う。
+  var body = document.createElement('span');
   body.className = 'help-body';
   body.textContent = text;
   body.hidden = true;
+  helpSeq++;
+  body.id = 'help-body-' + helpSeq;
+  // フォーカスしただけで本文が読み上げられるようにする（aria-expanded だけだと、
+  // 開いたことは伝わっても中身が届かない。blur で閉じるので中へ入る手段も無い）。
+  btn.setAttribute('aria-describedby', body.id);
 
   var close = function () {
     body.hidden = true;
@@ -454,6 +486,14 @@ function makeHelp(term) {
     if (openHelp && openHelp !== close) openHelp();
     body.hidden = false;
     btn.setAttribute('aria-expanded', 'true');
+    // 位置は開くたびに計算する。表は横スクロールし、盤面は縦に伸びるので、
+    // 作った時点の位置は当てにならない。表示してから測る（隠れた要素は測れない）。
+    var pos = helpBodyPosition(
+      btn.getBoundingClientRect(), body.getBoundingClientRect(),
+      window.innerWidth, window.innerHeight
+    );
+    body.style.left = pos.left + 'px';
+    body.style.top = pos.top + 'px';
     openHelp = close;
   };
 
@@ -481,6 +521,12 @@ function makeHelp(term) {
   wrap.appendChild(btn);
   wrap.appendChild(body);
   return wrap;
+}
+
+/** 用語の補足を parent に足す。用語集に無い語では何も足さない。 */
+function appendHelp(parent, term) {
+  var help = makeHelp(term);
+  if (help) parent.appendChild(help);
 }
 
 var dragging = null;
@@ -523,7 +569,7 @@ function renderColumn(col) {
   var name = document.createElement('span');
   name.textContent = col.status;
   h.appendChild(name);
-  h.appendChild(makeHelp(col.status));   // ステータス名の補足
+  appendHelp(h, col.status);   // ステータス名の補足
   var count = document.createElement('span');
   count.className = 'count';
   count.textContent = String(col.cards.length);
@@ -596,7 +642,7 @@ function renderCard(card) {
   var prioText = document.createElement('span');
   prioText.textContent = card.priority || '未設定';
   prio.appendChild(prioText);
-  prio.appendChild(makeHelp(card.priority));   // 優先度の補足（未設定なら何も出ない）
+  appendHelp(prio, card.priority);   // 優先度の補足（未設定なら何も出ない）
   var idText = document.createElement('span');
   idText.style.marginLeft = 'auto';
   idText.textContent = card.id;
@@ -798,10 +844,12 @@ var viewSeq = 0;
 // （表示文言を変えたときに黙って壊れるのを避ける）。
 var tableLoading = false;
 
-// パネルのスプリント欄の選択肢の元になる velocity.csv の行。盤面のビューの応答が
-// 運んでくる（パネルを開くたびにサーバへ往復させない）。載っていない応答（一覧・
-// ロードマップ等）で消さないよう、届いたときだけ入れ替える。
-var velocityRows = [];
+// パネルのスプリント欄の選択肢 [{value, label, unknown}]。盤面のビューの応答が
+// 完成した形で運んでくる（パネルを開くたびにサーバへ往復させない）。組み立ての規則を
+// ここに写すと、サーバ側だけを直したときに黙ってずれる（velocity.csv の日付判定を
+// 緩めると、ロードマップには出るのに選択肢には出ないスプリントが生まれる等）。
+// 載っていない応答（一覧・ロードマップ等）で消さないよう、届いたときだけ入れ替える。
+var sprintChoices = [];
 
 // id が null なら新規作成モード。status は新規作成時の初期ステータス。
 // fields は writeForm() が入れた直後のフォームの内容（差分送信の基準）。
@@ -860,15 +908,15 @@ function changedFields(initial) {
 }
 
 /**
- * スプリントの選択肢を今の velocityRows から組み立て直す。
+ * スプリントの選択肢を並べ直す。中身はサーバが完成させたものをそのまま出す。
  *
  * 値を入れる前に必ず呼ぶこと。select は選択肢に無い値を受け付けない（代入しても
  * 空になる）ため、順序を逆にすると既存のスプリントが黙って消える。
  */
-function fillSprintSelect(current) {
+function fillSprintSelect() {
   var el = document.getElementById('f-sprint');
   el.innerHTML = '';
-  sprintOptions(velocityRows, current).forEach(function (o) {
+  sprintChoices.forEach(function (o) {
     var opt = document.createElement('option');
     opt.value = o.value;
     opt.textContent = o.label;
@@ -883,8 +931,11 @@ function writeForm(card, status) {
   document.getElementById('f-status').value = status || STATUS_OPTIONS[0];
   document.getElementById('f-priority').value = (card && card.priority) || 'Medium';
   document.getElementById('f-size').value = (card && card.size) || '';
-  fillSprintSelect((card && card.sprint) || '');
-  document.getElementById('f-sprint').value = (card && card.sprint) || '';
+  // 選択肢の value は trim 済み（CSV 側は前後の空白を落とさない）。ここで揃えないと
+  // ' sprint001 ' のような値が選択肢に一致せず、パネル上だけ「（未割り当て）」に化ける
+  // （ロードマップは normalizeSprint で trim するので、画面によって違って見える）。
+  fillSprintSelect();
+  document.getElementById('f-sprint').value = String((card && card.sprint) || '').trim();
 }
 
 /** id が null なら新規作成。presetStatus は新規作成時の初期ステータス。 */
@@ -1238,7 +1289,7 @@ function foldTableLoading() {
 /** 要約を描く。summary の形はタブごとに違う（無ければ何も出さない）。 */
 function renderSummary(summary) {
   var host = document.getElementById('summary');
-  host.innerHTML = '';
+  clearHost(host);
   if (!summary) return;
 
   function stat(label, value) {
@@ -1311,9 +1362,9 @@ function loadView() {
           setMessage('読み込み中に他の変更が入りました。もう一度お試しください。', 'error');
           return;
         }
-        // スプリントの選択肢の元。盤面の応答だけが運ぶため、載っているときだけ入れ替える
+        // スプリントの選択肢。盤面の応答だけが運ぶため、載っているときだけ入れ替える
         // （載っていない応答で空にすると、次に開くパネルが選択肢を失う）。
-        if (res.velocityRows) velocityRows = res.velocityRows;
+        if (res.sprintChoices) sprintChoices = res.sprintChoices;
         // hidden の切替と要約のクリアは showView() が発行前（クリック時点）に済ませている。
         // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
         // 操作可能な盤面や表が残ってしまう）。
@@ -1349,7 +1400,7 @@ function tableHead(labels) {
   labels.forEach(function (label) {
     var th = document.createElement('th');
     th.textContent = label;
-    th.appendChild(makeHelp(label));
+    appendHelp(th, label);
     tr.appendChild(th);
   });
   thead.appendChild(tr);
@@ -1498,6 +1549,12 @@ fillSelect(document.getElementById('f-status'), STATUS_OPTIONS);
 fillSelect(document.getElementById('f-priority'), PRIORITY_OPTIONS);
 // パネルの入力欄は補足を押させず、常に見せる。文面は用語集を源泉にする。
 document.getElementById('f-acceptance-hint').textContent = glossaryOf('受入基準');
+document.getElementById('f-size-hint').textContent = glossaryOf('ポイント');
+// 補足の本文は position: fixed で、開いた時点の ? の位置に置く。画面が動くと位置が
+// ずれたまま残るので閉じる。スクロールは要素からは上がってこない（bubble しない）ため、
+// 捕捉フェーズで受ける（表は #table-view の中でスクロールする）。
+window.addEventListener('scroll', function () { closeOpenHelp(); }, true);
+window.addEventListener('resize', function () { closeOpenHelp(); });
 document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
