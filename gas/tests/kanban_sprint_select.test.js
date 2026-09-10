@@ -184,6 +184,16 @@ test('選択肢に無い今の値も選択肢に足され、選ばれた状態�
     '今の値が選択肢に足されていない');
 });
 
+test('画面が足した選択肢は末尾に付く（サーバが返した並びを崩さない）', () => {
+  // 並びは velocity.csv の行順＝スプリントの時系列で、そこに割り込ませない。
+  // 先頭に置くと「（未割り当て）」より前に出て、初期値の位置も変わる。
+  const h = readyWithLateSprint();
+  h.openCard('PBI-050');
+  assert.deepEqual(h.optionsOf('f-sprint').map(function (o) { return o.value; }),
+    CHOICES.map(function (o) { return o.value; }).concat(['sprint999']),
+    'サーバが返した並びの末尾に付いていない');
+});
+
 test('画面が足した選択肢のラベルは「velocity.csv に無い」と言わない', () => {
   // 読み込みの後に足されたスプリントは velocity.csv に「ある」かもしれない。
   // 「velocity.csv に無い」と書くと嘘になる。

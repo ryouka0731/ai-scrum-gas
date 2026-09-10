@@ -22,12 +22,15 @@ function unknownSprintOption(name) {
 }
 
 /**
- * 選択肢を返す。並び順は velocity.csv の行順に従う（realSprints は絞り込むだけで
- * 並べ替えない。行順はスプリントの時系列そのものなので、そのほうが読みやすい）。
+ * velocity.csv から作る選択肢。並び順は velocity.csv の行順に従う（realSprints は
+ * 絞り込むだけで並べ替えない。行順はスプリントの時系列そのものなので、そのほうが読みやすい）。
  *
- * 今の値が velocity.csv に無い場合は末尾に足す。既存値を黙って失わせないため。
+ * 「今の値が無ければ足す」規則はここには持たない。今の値を知っているのは画面だけで、
+ * ここで足せるのは「サーバが読んだ時点の値」に限られる（読み込みの後に別の書き手が
+ * 付けたスプリントには届かない）。今そこに在る値を足すのは画面側の仕事とし、
+ * サーバは「PBI 側に付いている値も含めて完成させる」責任だけを持つ（sprintChoices）。
  */
-function sprintOptions(velocityRows, currentValue) {
+function sprintOptions(velocityRows) {
   const options = [{ value: '', label: SPRINT_UNASSIGNED_LABEL, unknown: false }];
   const seen = {};
   realSprints(velocityRows || []).forEach(function (v) {
@@ -36,11 +39,6 @@ function sprintOptions(velocityRows, currentValue) {
     seen[name] = true;
     options.push({ value: name, label: name, unknown: false });
   });
-
-  const current = String(currentValue === null || currentValue === undefined ? '' : currentValue).trim();
-  if (current && !Object.prototype.hasOwnProperty.call(seen, current)) {
-    options.push(unknownSprintOption(current));
-  }
   return options;
 }
 
@@ -48,17 +46,23 @@ function sprintOptions(velocityRows, currentValue) {
  * パネルが出す選択肢を、サーバ側で完成させたもの。
  *
  * velocity.csv に無いスプリントが PBI 側に付いていることがある（ローカルの Claude Code が
- * 直接 CSV に書いた等）。それも unknown 付きで含めておく。
+ * 直接 CSV に書いた等）。それも unknown 付きで含めておく。unknown は
+ * 「velocity.csv に無い ＝ ロードマップに出ない」というデータの質の話で、恒常的な情報。
  *
- * 「今の値が選択肢に無ければ足す」規則を画面側に残すと、その分だけ規則の写しが
- * ブラウザに残る。写しはサーバ側だけを直したときに黙ってずれる（例: ROADMAP_DATE_RE を
- * 緩めると、ロードマップには出るのに選択肢には出ないスプリントが生まれ、プルダウンに
- * した目的が裏返る）。ここで完成させ、画面は並べて選ぶだけにする。
+ * **組み立ての規則はここだけに置く。** 画面へ写すと、サーバ側だけを直したときに黙って
+ * ずれる（例: ROADMAP_DATE_RE を緩めると、ロードマップには出るのに選択肢には出ない
+ * スプリントが生まれ、プルダウンにした目的が裏返る）。絞り込み・日付の判定・並び順・
+ * 重複排除・unknown の判定は、すべてここで済ませる。
+ *
+ * ただし「今そこに在る値が選択肢に無ければ足す」だけは画面側にある。ここで足せるのは
+ * サーバが読んだ時点の値までで、読み込みの後に別の書き手が付けたスプリントには届かない。
+ * 画面が足すほうは「この画面がまだ知らない」という一時的な状態で、意味が違うため
+ * ラベルも分けてある（画面側は「（選択肢に無い値）」）。
  *
  * value は trim 済み。CSV 側は前後の空白を落とさないため、画面はこの値に揃える。
  */
 function sprintChoices(velocityRows, backlogRows) {
-  const options = sprintOptions(velocityRows, '');
+  const options = sprintOptions(velocityRows);
   const seen = {};
   options.forEach(function (o) { seen[o.value] = true; });
 
