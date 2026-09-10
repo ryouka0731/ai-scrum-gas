@@ -54,6 +54,32 @@ function assertHelpIsReadable(h, where) {
     + h.scrollWidth + ' > clientWidth ' + h.clientWidth + '）');
 }
 
+/** 通知は狭い画面では上端、広い画面では下端に出る（`@media (max-width: 900px)` の境目）。 */
+const NARROW_MAX = 900;
+
+/** 補足を押した結果1件の判定。押した先が違っても、振る舞いは同じでなければならない。 */
+function assertPressOpensOnlyTheHelp(r, where) {
+  const at = where + ' の ' + r.where + ' の ?';
+  assert.equal(r.before.panelHidden, true, at + ': 押す前からパネルが開いている（前提が崩れた）');
+  assert.equal(r.before.bodyHidden, true, at + ': 押す前から補足が開いている（前提が崩れた）');
+  assert.equal(r.first.stillAttached, true,
+    at + ': 押したら補足が DOM から消えた（周りが描き直された）');
+  assert.equal(r.first.opened, true, at + ': 押しても補足が開かない');
+  assert.equal(r.first.expanded, 'true', at + ': aria-expanded が開いた状態になっていない');
+  assert.equal(r.first.visibleRatio, 1, at + ': 開いた補足が見えていない');
+  // 押したのは補足。周りは動いてはいけない。
+  assert.equal(r.first.panelHidden, true,
+    at + ': 押したら編集パネルまで開いた（click が親へ上がっている。開いたのは '
+    + r.first.panelTitle + '）');
+  if (r.first.cardSelected !== null) {
+    assert.equal(r.first.cardSelected, false, at + ': 押したらそのカードが選択状態になった');
+  }
+  assert.ok(r.second, at + ': 2回目が測れていない（1回目で周りが描き直された）');
+  assert.equal(r.second.opened, false, at + ': もう一度押しても閉じない');
+  assert.equal(r.second.expanded, 'false', at + ': aria-expanded が閉じた状態になっていない');
+  assert.equal(r.second.panelHidden, true, at + ': 2回目でパネルが開いた');
+}
+
 describe('実ブラウザでの検査', { skip: SKIP }, () => {
   /** @type {Record<string, object>} 条件ごとの測定結果。before で1回だけ集める。 */
   const measured = {};
@@ -108,6 +134,20 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
         });
 
         test('表は枠の中で横スクロールし、ページを横に伸ばさない', () => {
+          // 盤面のほうも見る。長いタイトルや列の最小幅でカードがはみ出せば、
+          // 表と同じようにページごと横に伸びる。
+          const b = measured[where].board.overflow;
+          assert.equal(b.board.hidden, false, where + ': 盤面が出ていない前提が崩れた');
+          assert.ok(b.board.clientWidth <= b.rootClientWidth,
+            where + ': #board の幅 ' + b.board.clientWidth
+            + 'px が画面の幅 ' + b.rootClientWidth + 'px を超えた');
+          assert.ok(b.bodyScrollWidth <= b.rootClientWidth,
+            where + ': 盤面でページが横に伸びた（body.scrollWidth ' + b.bodyScrollWidth
+            + 'px > ' + b.rootClientWidth + 'px）');
+          assert.ok(b.rootScrollWidth <= b.rootClientWidth,
+            where + ': 盤面でページが横に伸びた（documentElement.scrollWidth ' + b.rootScrollWidth
+            + 'px > ' + b.rootClientWidth + 'px）');
+
           const o = measured[where].table.overflow;
           assert.equal(o.tableView.hidden, false, where + ': 表が出ていない前提が崩れた');
           assert.ok(o.tableView.clientWidth <= o.rootClientWidth,
@@ -153,6 +193,63 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
               assert.deepEqual(c.failures, [], where + ' の' + label + ': 4.5:1 未満の文字がある');
             });
         });
+
+        test('補足の ? を押すと補足だけが開き、周りは動かない', () => {
+          // click は bubble する。カードの中に置いた ? は、止めないとカードの click まで
+          // 届いてそのカードの編集パネルを開いてしまう（実際にそうなっていた）。
+          // シムは bubble を再現しないので、ここでしか見えない。
+          const m = measured[where];
+          assertPressOpensOnlyTheHelp(m.board.pressColumnHeaderHelp, where);
+          assertPressOpensOnlyTheHelp(m.board.pressCardHelp, where);
+          assertPressOpensOnlyTheHelp(m.table.pressTableHeaderHelp, where);
+        });
+
+        test('通知は画面に収まり、重なった相手より手前に来て、取り消せる', () => {
+          const t = measured[where].toast;
+          assert.equal(t.panelHidden, false, where + ': 通知の最中にパネルが開いていない（前提が崩れた）');
+          assert.equal(t.toast.hidden, false, where + ': 通知が出ていない');
+          assert.equal(t.toast.rects, 1, where + ': 通知が描かれていない');
+          assert.equal(t.toast.insideViewport, true,
+            where + ': 通知が画面からはみ出している: ' + JSON.stringify(t.toast.rect));
+          // 通知が重なった相手に負けて読めないなら、出ていないのと同じ（z-index を明示した理由）。
+          assert.equal(t.toast.visibleRatio, 1,
+            where + ': 通知が他の要素に隠れている（重なり順に負けている）');
+          assert.equal(t.undoVisibleRatio, 1, where + ': 「取り消す」が隠れていて押せない');
+          // 今は DOM 順で最前面になっているだけなので、z-index を消しても見た目は変わらない。
+          // あとで position を持つ要素が足された瞬間に通知が黙って隠れるので、
+          // 「重なり順を明示してある」ことそのものを固定しておく。
+          assert.notEqual(t.toast.zIndex, 'auto',
+            where + ': 通知の重なり順が明示されていない（DOM 順に頼っている）');
+          assert.ok(t.toast.undo.width >= 24 - 0.01 && t.toast.undo.height >= 24 - 0.01,
+            where + ': 「取り消す」の当たり判定が 24×24 未満: ' + JSON.stringify(t.toast.undo));
+        });
+
+        if (width <= NARROW_MAX) {
+          test('狭い画面では、通知がパネルの操作部を覆わない', () => {
+            // 通知を下端に置いたままだと、全幅で縦に積まれたパネルの入力欄・保存ボタンを
+            // 10 秒間覆う。`@media (max-width: 900px)` で上端へ寄せたのがその対処。
+            const t = measured[where].toast;
+            assert.ok(t.controls.length >= 8,
+              where + ': パネルの操作部が ' + t.controls.length + ' 件しか測れていない');
+            assert.deepEqual(t.covered.map(function (c) { return c.what; }), [],
+              where + ': 通知がパネルの操作部を覆っている');
+          });
+        } else {
+          test('広い画面でも、通知は保存・削除・取り消すを覆わない', () => {
+            // 広い画面では通知が下端に出るため、パネルの入力欄と重なる帯が残っている
+            // （第2段階で park された既知の欠陥。task-9b-report.md に実測を載せた）。
+            // 覆われるのが入力欄までに留まり、押せないと作業が止まるものへ広がらないことを
+            // ここで固定する。直したら、上の狭い画面と同じ「1件も覆わない」に締め直すこと。
+            const t = measured[where].toast;
+            assert.ok(t.controls.length >= 8,
+              where + ': パネルの操作部が ' + t.controls.length + ' 件しか測れていない');
+            const blocking = t.covered.filter(function (c) {
+              return /^button#panel-(save|delete)/.test(c.what);
+            });
+            assert.deepEqual(blocking.map(function (c) { return c.what; }), [],
+              where + ': 通知が保存／削除ボタンを覆っている（10 秒間その作業が止まる）');
+          });
+        }
       });
     });
   });

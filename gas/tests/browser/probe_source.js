@@ -272,6 +272,140 @@
       return out;
     },
 
+    /**
+     * 補足の ? を「指で1回タップした」ように押して、その結果を返す。
+     *
+     * click は bubble するので、補足が置かれた先（カードなど）の click ハンドラにも
+     * 届きうる。届いてしまうと、押したのは補足なのに関係のないものが起こる。
+     * ここで見たいのはまさにそれなので、開いたかどうかと**周りが動いていないか**の
+     * 両方を返す。もう一度押して閉じることも併せて見る（止めたせいで開閉が壊れていないか）。
+     *
+     * @param {string} wrapSelector 補足の入れ物（.help）を指すセレクタ
+     */
+    pressHelp: async function (wrapSelector) {
+      var wrap = document.querySelector(wrapSelector);
+      if (!wrap) throw new Error(wrapSelector + ' に補足がありません');
+      var btn = wrap.querySelector('button');
+      var body = wrap.querySelector('.help-body');
+      if (!btn || !body) throw new Error(wrapSelector + ' の補足に ? か本文がありません');
+      var panel = document.getElementById('panel');
+      var cardOf = function (el) { return el.closest ? el.closest('.card') : null; };
+      var card = cardOf(wrap);
+
+      btn.scrollIntoView({ block: 'center', inline: 'center' });
+      await frame();
+      await sleep(60);   // スクロールの通知で閉じられてから押す
+
+      var before = { panelHidden: panel.hidden, bodyHidden: body.hidden };
+
+      // タッチ端末での1タップ。カーソルが無いので合成の mouseenter は来ない。
+      var tap = async function () {
+        btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        btn.click();
+        await frame();
+      };
+
+      await tap();
+      var first = {
+        stillAttached: document.contains(body),
+        opened: !body.hidden && getComputedStyle(body).display !== 'none',
+        expanded: btn.getAttribute('aria-expanded'),
+        visibleRatio: document.contains(body) ? Math.round(visibleRatio(body) * 1000) / 1000 : 0,
+        panelHidden: panel.hidden,
+        panelTitle: txt(document.getElementById('panel-title')),
+        cardSelected: card ? /(^|\s)selected(\s|$)/.test(card.className) : null,
+      };
+
+      // 描き直されていたら2回目は測れない。1回目の結果だけ返す。
+      if (!document.contains(body)) return { where: wrapSelector, before: before, first: first, second: null };
+
+      await tap();
+      var second = {
+        opened: !body.hidden && getComputedStyle(body).display !== 'none',
+        expanded: btn.getAttribute('aria-expanded'),
+        panelHidden: panel.hidden,
+      };
+      return { where: wrapSelector, before: before, first: first, second: second };
+    },
+
+    /**
+     * 通知（#toast）が出ている最中にパネルを開き、通知がパネルの操作を覆っていないか測る。
+     *
+     * 第2段階で実際に苦しんだ組み合わせ（通知が下端にあると、狭い画面で全幅に積まれた
+     * パネルの入力欄・保存ボタンを 10 秒間覆う）。`@media (max-width: 900px)` で通知を
+     * 上端へ寄せたのがその対処で、`z-index` を明示したのも同じ場面のため。
+     *
+     * 手順は実際の道筋のとおり: 1件消して通知を出し、消えないうちに別のカードを開く。
+     */
+    toastOverPanel: async function () {
+      var firstCard = document.querySelector('#board .card');
+      if (!firstCard) throw new Error('盤面にカードがありません');
+      firstCard.click();                                  // パネルが開く
+      await frame();
+      document.getElementById('panel-delete').click();    // 削除 → 応答で通知が出る
+      var until = Date.now() + 3000;
+      while (document.getElementById('toast').hidden && Date.now() < until) await sleep(20);
+      var toast = document.getElementById('toast');
+      if (toast.hidden) throw new Error('削除しても通知が出ませんでした');
+
+      // 通知が消えないうちに、別のカードのパネルを開く。
+      var cards = list('#board .card');
+      var next = cards[1] || cards[0];
+      if (!next) throw new Error('盤面にカードが残っていません');
+      next.click();
+      await frame();
+      var panel = document.getElementById('panel');
+      if (panel.hidden) throw new Error('パネルが開きませんでした');
+
+      var tr = toast.getBoundingClientRect();
+      var intersects = function (a, b) {
+        return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+      };
+      var view = { left: 0, top: 0, right: root.clientWidth, bottom: root.clientHeight };
+
+      // パネルの中で人が触るもの。通知に覆われたら 10 秒間さわれない。
+      // 画面の外にあるだけ（スクロールすれば届く）は「覆われた」に数えない
+      // ——数えると、長いパネルではスクロール位置の話が混ざって判定が意味を失う。
+      var controls = list('input, textarea, select, button', panel)
+        .filter(isVisible)
+        .map(function (el) {
+          var r = el.getBoundingClientRect();
+          return {
+            what: describe(el),
+            rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+            inViewport: intersects(r, view),
+            overlappedByToast: intersects(r, tr),
+            visibleRatio: Math.round(visibleRatio(el) * 1000) / 1000,
+          };
+        });
+
+      var undo = document.getElementById('toast-undo');
+      var ur = undo.getBoundingClientRect();
+      return {
+        toast: {
+          hidden: toast.hidden,
+          rects: toast.getClientRects().length,
+          rect: rectOf(toast),
+          // 重なり順を明示しているか。今は DOM 順で最前面になっているだけなので、
+          // これを消しても見た目は変わらない（＝測定では捕まえられない）。
+          // 「あとで position を持つ要素が足されたときに黙って隠れない」ための備えなので、
+          // 備えが在ることそのものを見る。
+          zIndex: getComputedStyle(toast).zIndex,
+          insideViewport: tr.left >= -0.5 && tr.top >= -0.5
+            && tr.right <= root.clientWidth + 0.5 && tr.bottom <= root.clientHeight + 0.5,
+          // 通知は「今起きたことを伝えるもの」。重なった相手に負けて読めないなら意味が無い。
+          visibleRatio: Math.round(visibleRatio(toast) * 1000) / 1000,
+          undo: { width: Math.round(ur.width * 100) / 100, height: Math.round(ur.height * 100) / 100 },
+        },
+        panelHidden: panel.hidden,
+        controls: controls,
+        // 通知の矩形と重なっている操作部。重なりは幾何で決める（可視率は境界の
+        // 標本点が親に当たって 1 を僅かに割ることがあり、覆いの判定には向かない）。
+        covered: controls.filter(function (c) { return c.inViewport && c.overlappedByToast; }),
+        undoVisibleRatio: Math.round(visibleRatio(undo) * 1000) / 1000,
+      };
+    },
+
     /** #tabs / #views のボタンをラベルで押す。 */
     clickIn: function (hostId, label) {
       var b = list('button', document.getElementById(hostId)).filter(function (x) { return txt(x) === label; })[0];

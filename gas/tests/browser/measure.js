@@ -22,6 +22,18 @@ const HEIGHT = 800;
 
 /** 表のビュー（#table-view を使うもの）のうち、代表として測るビューのラベル。 */
 const TABLE_VIEW_LABEL = '一覧';
+/** 盤面へ戻るときのビューのラベル。 */
+const BOARD_VIEW_LABEL = '盤面';
+
+/**
+ * 補足の ? を押す場所。置かれた先が違えば、押した click の行き先も違う。
+ * カードの中の ? は click が .card まで上がりうるので、必ず含める。
+ */
+const HELP_PRESS_SPOTS = {
+  columnHeader: '#board .column > h2 .help',
+  card: '#board .card .help',
+  tableHeader: '#table-view th .help',
+};
 
 async function installProbe(session) {
   const ok = await session.evaluate(PROBE_SOURCE + '\nreturn !!(window.__probe);');
@@ -44,6 +56,10 @@ async function measureOne(session, html, spec) {
     tap: await session.evaluate('return window.__probe.tapTargets();'),
     contrast: await session.evaluate('return window.__probe.contrastAudit();'),
     helps: await session.evaluate('return window.__probe.helpAudit("board");'),
+    pressColumnHeaderHelp: await session.evaluate(
+      'return window.__probe.pressHelp(' + JSON.stringify(HELP_PRESS_SPOTS.columnHeader) + ');'),
+    pressCardHelp: await session.evaluate(
+      'return window.__probe.pressHelp(' + JSON.stringify(HELP_PRESS_SPOTS.card) + ');'),
   };
 
   await session.evaluate('window.scrollTo(0, 0); return 1;');
@@ -56,12 +72,21 @@ async function measureOne(session, html, spec) {
     tap: await session.evaluate('return window.__probe.tapTargets();'),
     contrast: await session.evaluate('return window.__probe.contrastAudit();'),
     helps: await session.evaluate('return window.__probe.helpAudit("table-view");'),
+    pressTableHeaderHelp: await session.evaluate(
+      'return window.__probe.pressHelp(' + JSON.stringify(HELP_PRESS_SPOTS.tableHeader) + ');'),
   };
+
+  // 通知とパネルの重なりは盤面で見る（削除も新しいパネルも盤面から起こる）。
+  // 画面の状態を変えるので、他の測定がすべて終わってから最後に行う。
+  await session.evaluate('window.scrollTo(0, 0); return 1;');
+  await session.evaluate('return window.__probe.clickIn("views", ' + JSON.stringify(BOARD_VIEW_LABEL) + ');');
+  await session.waitFor('return window.__probe.boardReady() ? 1 : 0', where + ' の盤面への戻り');
+  const toast = await session.evaluate('return window.__probe.toastOverPanel();');
 
   return {
     width: spec.width, height: spec.height || HEIGHT, scheme: spec.scheme,
     where: where, token: opened.token, actualViewport: opened.viewport,
-    board: board, table: table,
+    board: board, table: table, toast: toast,
   };
 }
 
@@ -100,6 +125,8 @@ module.exports = {
   SCHEMES: SCHEMES,
   HEIGHT: HEIGHT,
   TABLE_VIEW_LABEL: TABLE_VIEW_LABEL,
+  BOARD_VIEW_LABEL: BOARD_VIEW_LABEL,
+  HELP_PRESS_SPOTS: HELP_PRESS_SPOTS,
 };
 
 if (require.main === module) {

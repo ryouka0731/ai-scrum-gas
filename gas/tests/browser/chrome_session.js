@@ -135,15 +135,15 @@ async function launch(opts) {
   let exited = null;
   proc.on('exit', function (code) { exited = code; });
 
+  const rmDirs = function () {
+    [userDataDir, pageDir].forEach(function (dir) {
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); } catch (_) {}
+    });
+  };
+  /** 最後の手段（同期）。プロセスが終わる瞬間にしか呼ばれない。 */
   const cleanup = function () {
     try { proc.kill('SIGKILL'); } catch (_) { /* 既に終わっている */ }
-    // SIGKILL は非同期に届く。直後の削除は Chrome がまだ書いている最中に当たるため、
-    // 数回まで待って消し直す（消し残すと、次の実行がそれを見つけて紛らわしい）。
-    const rm = function (dir) {
-      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); } catch (_) {}
-    };
-    rm(userDataDir);
-    rm(pageDir);
+    rmDirs();
   };
   // close() を呼べずに終わる道（before フックが落ちる等）でも Chrome と一時ディレクトリを
   // 残さない。残った Chrome は次の実行に紛れ込みうるので、確実に始末する。
@@ -266,7 +266,17 @@ async function launch(opts) {
     close: async function () {
       try { ws.close(); } catch (_) {}
       process.removeListener('exit', cleanup);
-      cleanup();
+      try { proc.kill('SIGKILL'); } catch (_) { /* 既に終わっている */ }
+      // SIGKILL は非同期に届く。**終わったことを見届けてから**消す。
+      // 死ぬ前に消すと、Chrome が終了処理でプロファイルを書き直して復活し、
+      // 消したつもりのディレクトリが残る（残骸は次の実行を紛らわしくする）。
+      if (exited === null) {
+        await new Promise(function (resolve) {
+          proc.once('exit', resolve);
+          setTimeout(resolve, 3000).unref();
+        });
+      }
+      rmDirs();
     },
   };
 }

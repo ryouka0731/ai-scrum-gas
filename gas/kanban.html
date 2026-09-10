@@ -518,7 +518,14 @@ function makeHelp(term) {
   // pointerdown が来ない環境（古い Safari・キーボード操作）では今の状態で判定する。
   var hiddenAtPress = null;
   btn.addEventListener('pointerdown', function () { hiddenAtPress = body.hidden; });
-  btn.addEventListener('click', function () {
+  btn.addEventListener('click', function (ev) {
+    // 補足は「どこに置かれても同じように振る舞う部品」にする。ここで止めないと、
+    // カードの中に置いた ? の click が .card まで上がり、そのカードの編集パネルが
+    // 開いてしまう（openPanel → render(board) で盤面ごと描き直され、たった今開いた
+    // 補足は要素ごと捨てられる）。押しても補足が出ず、代わりに関係のないパネルが
+    // 開くうえ、カーソルの無いタッチ端末ではカードの補足に到達する手が無くなる。
+    // 置かれた先の親に気を配らせる形にすると、次に別の場所へ置いた人が同じ穴を開ける。
+    ev.stopPropagation();
     var wasHidden = (hiddenAtPress === null) ? body.hidden : hiddenAtPress;
     hiddenAtPress = null;
     if (wasHidden) open(); else close();

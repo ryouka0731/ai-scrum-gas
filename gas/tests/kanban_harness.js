@@ -178,9 +178,14 @@ Element.prototype.getBoundingClientRect = function () {
 
 /** 要素に type のイベントを起こす。click は onclick も呼ぶ（実ブラウザと同じ）。 */
 function fire(el, type, ev) {
+  const event = ev || {};
+  // 実ブラウザのイベントが必ず持っているものを補う。無いと、画面側が呼んだ時点で
+  // TypeError になる。シムは bubble を再現しないので stopPropagation() 自体は何もしない
+  // （＝「止め忘れ」はここでは検出できない。それは gas/tests/browser/ の実ブラウザ側で見る）。
+  if (typeof event.stopPropagation !== 'function') event.stopPropagation = function () {};
   const list = (el.listeners[type] || []).slice();
-  list.forEach(function (fn) { fn.call(el, ev || {}); });
-  if (type === 'click' && typeof el.onclick === 'function') el.onclick.call(el, ev || {});
+  list.forEach(function (fn) { fn.call(el, event); });
+  if (type === 'click' && typeof el.onclick === 'function') el.onclick.call(el, event);
 }
 
 /**
