@@ -39,6 +39,77 @@ function latest(h) {
 }
 
 // ---------------------------------------------------------------------------
+// 0. 初回の応答が届く前に操作する
+//
+// apiGetView('board') の初回応答が届く前（board がまだ null）にタブ／ビューを押すと、
+// closePanel() → render(board) が board=null のまま b.columns を読んで例外になる。
+// switchTab()/switchView() は activeTab/activeView を書き換えた**後**に closePanel() を
+// 呼ぶため、例外が起きると renderTabs()/showView()/loadView() が実行されないまま止まり、
+// タブの表示と内部状態が食い違った状態で固定される。Apps Script の初回往復は1〜3秒あり、
+// 実ブラウザで日常的に踏む経路（ready() は必ず初回応答を届けてから操作するため、
+// このファイルの他の検査は1件もこの経路を歩いていない）。
+//
+// 「例外が出ないこと」と「renderTabs()/showView()/loadView() が最後まで走ったこと」を
+// 別々に確かめる。前者だけだと、例外は消えたのに食い違いだけが残る形（より見つけにくい）
+// を見逃す。
+// ---------------------------------------------------------------------------
+
+test('初回の読み込みが届く前にタブを押しても、例外にならず画面と内部が一致する', () => {
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  const first = h.calls[0];
+  assert.equal(first.method, 'apiGetView');
+  assert.deepEqual(first.args, ['board']);
+  // 「まだ応答していない」ことをここで明示的に確かめてから操作する。calls は
+  // 「未応答の呼び出し」なので、初回応答をうっかり届けていれば1件のはずが0件になる
+  // （実ブラウザでの再現で「遅延が短く、測る前に応答が届いていた」という取り違えが
+  // 実際に起きているため、同じ罠をここでも踏まないようにする）。
+  assert.deepEqual(h.calls, [first], '初回 apiGetView(board) 以外の状態で操作しようとしている');
+
+  // ここで例外が出れば、この呼び出し自体が同期的に投げる。
+  h.clickTab('スプリント');
+
+  // renderTabs() が最後まで走ったこと: タブの選択状態と、ビューボタンの中身
+  // （盤面/一覧/完了 のままではなく、スプリントタブのものに変わっている）の両方で見る。
+  assert.deepEqual(h.tabState().tabs.map(function (b) { return b.selected; }), [false, true, false],
+    'renderTabs() が走っていない（タブの選択状態が更新されていない）');
+  assert.deepEqual(h.tabState().views.map(function (b) { return b.label; }),
+    ['バーンダウン', 'ベロシティ', 'ロードマップ'],
+    'renderTabs() が走っていない（ビューボタンが前のタブ（盤面/一覧/完了）のまま）');
+  // showView() が最後まで走ったこと: 表示先が切り替わっている。
+  assert.equal(h.hiddenOf('board'), true, 'showView() が走っていない（#board が隠れていない）');
+  assert.equal(h.hiddenOf('table-view'), false, 'showView() が走っていない（#table-view が出ていない）');
+  // loadView() が最後まで走ったこと: 新しい読み取りが発行されている。
+  const second = latest(h);
+  assert.deepEqual(second.args, ['burndown'], 'loadView() が走っていない（新しい読み取りが発行されていない）');
+
+  // 古い最初の応答（viewSeq が既に進んでいるので捨てられるべき）が届いても動かない。
+  first.handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL), summary: BOARD_SUMMARY });
+  assert.equal(h.hiddenOf('board'), true, '古い board の応答で表示先が巻き戻った');
+  assert.deepEqual(h.tabState().tabs.map(function (b) { return b.selected; }), [false, true, false],
+    '古い board の応答でタブの選択状態が巻き戻った');
+});
+
+test('初回の読み込みが届く前にビューを押しても、例外にならず画面と内部が一致する', () => {
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  const first = h.calls[0];
+  assert.deepEqual(h.calls, [first], '初回 apiGetView(board) 以外の状態で操作しようとしている');
+
+  h.clickView('一覧');
+
+  assert.deepEqual(h.tabState().views.map(function (b) { return b.selected; }), [false, true, false],
+    'renderTabs() が走っていない（ビューの選択状態が更新されていない）');
+  assert.equal(h.hiddenOf('board'), true, 'showView() が走っていない（#board が隠れていない）');
+  assert.equal(h.hiddenOf('table-view'), false, 'showView() が走っていない（#table-view が出ていない）');
+  const second = latest(h);
+  assert.deepEqual(second.args, ['list'], 'loadView() が走っていない（新しい読み取りが発行されていない）');
+
+  first.handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL), summary: BOARD_SUMMARY });
+  assert.equal(h.hiddenOf('board'), true, '古い board の応答で表示先が巻き戻った');
+});
+
+// ---------------------------------------------------------------------------
 // 1. 書き込みの送信中にビューを行き来する
 // ---------------------------------------------------------------------------
 
@@ -467,9 +538,16 @@ function applies(name, view) {
  */
 function turn(h, from, to, deliveryName, arm, trace) {
   const d = DELIVERIES[deliveryName];
+  // 選ぶ「前」に控える。「最新にする」（showView() を経由しない）と盤面（showView() は
+  // 経由するが #table-view の中身自体は触らない）では、選んだ直後の #table-view は
+  // 「動かない」ことそのものが期待値。navigate() の後に tableShape(h) を再取得して
+  // 比べると、自分自身と比べる同語反復になり、何も確かめられなくなる。
+  const before = tableShape(h);
   const kind = navigate(h, from, to);
   // 「最新にする」は showView() を経由しないので、読み込み中表示は立ち直らない。
-  const afterNav = (kind === 'reload' || to === 'board') ? tableShape(h) : 'loading';
+  // 盤面は showView() を経由しても、isBoard の間は showTableLoading() を呼ばないので
+  // #table-view の中身は選ぶ前のまま動かない。
+  const afterNav = (kind === 'reload' || to === 'board') ? before : 'loading';
   assert.equal(tableShape(h), afterNav, trace + ' 選んだ直後の #table-view');
   assert.equal(h.hiddenOf('board'), to !== 'board', trace + ' 選んだ直後の #board の hidden');
   assert.equal(h.hiddenOf('table-view'), to === 'board', trace + ' 選んだ直後の #table-view の hidden');

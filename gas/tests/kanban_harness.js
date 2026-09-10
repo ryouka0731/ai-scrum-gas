@@ -213,24 +213,22 @@ function collect(el, pred, out) {
 const VOID_TAGS = { input: true, img: true, br: true, hr: true, meta: true, link: true };
 
 /**
- * <body> にある id 付きの要素を作る。HTML 側に id を足したらシムにも自動で載る。
- * <script> 以降は走査しない（JS 本文をタグとして誤認しないため）。
+ * body の HTML 断片を静的に解析し、id を持つ要素を byId で返す。
  *
- * 入れ子も辿れるようにする（`#panel` が隠れているなら、その中の「保存」も押せない、
- * という実ブラウザの判定に要る）。ただし親子は parentNode だけで結び、children には
- * 積まない — 積むと `clearHost()` の innerHTML = '' が静的な子まで消してしまう。
+ * id を持たない要素も Element として作り、hidden と親子関係（parentNode）だけを
+ * 追跡する。id が無い要素をスタックから丸ごと飛ばしていた頃は、
+ * `<div hidden><span><button id="x">` のような構造で `#x` の祖先探索が
+ * `<div hidden>` を素通りしていた（今の kanban.html では hidden が付くのは
+ * `#table-view`/`#panel`/`#toast` の3つだけなので実害は無いが、id を持たない
+ * 祖先に hidden が増えた瞬間にシムだけが実ブラウザとずれる）。
+ * 親子は parentNode だけで結び、children には積まない — 積むと `clearHost()` の
+ * innerHTML = '' が静的な子まで消してしまう。
  */
-function buildStaticElements() {
-  const source = html();
-  const from = source.indexOf('<body>');
-  const to = source.indexOf('<script>');
-  if (from === -1 || to === -1 || to < from) throw new Error('kanban.html の <body> を切り出せません');
-  // コメント中の文字列をタグとして拾わないよう、先に落とす。
-  const body = source.slice(from, to).replace(/<!--[\s\S]*?-->/g, '');
+function parseStaticElements(body) {
   const byId = {};
-  // 開始タグと終了タグの両方を拾い、id を持つ祖先だけを積んだスタックで親を決める。
+  // 開始タグと終了タグの両方を拾い、スタックで親を決める。
   const re = /<(\/?)([a-zA-Z][\w-]*)\b([^>]*)>/g;
-  const stack = [];   // [{ tag, el }]  el は id を持たない要素では null
+  const stack = [];   // [{ tag, el }]
   let m;
   while ((m = re.exec(body)) !== null) {
     const closing = m[1] === '/';
@@ -244,24 +242,35 @@ function buildStaticElements() {
       continue;
     }
     const selfClosing = /\/$/.test(attrs.trim()) || Object.prototype.hasOwnProperty.call(VOID_TAGS, tag);
+    const el = new Element(tag);
+    // aria-hidden を hidden 属性と取り違えないよう、直前が空白のものだけを見る。
+    el.hidden = /\shidden(\s|=|$)/.test(attrs);
+    if (stack.length > 0) el.parentNode = stack[stack.length - 1].el;
     const idm = attrs.match(/\bid="([^"]+)"/);
-    let el = null;
     if (idm) {
-      el = new Element(tag);
-      // aria-hidden を hidden 属性と取り違えないよう、直前が空白のものだけを見る。
-      el.hidden = /\shidden(\s|=|$)/.test(attrs);
       el.id = idm[1];
       // class は CSS の突き合わせ（#table-view の .table-wrap 等）に要る。
       const cls = attrs.match(/\bclass="([^"]*)"/);
       if (cls) el.className = cls[1];
-      for (let i = stack.length - 1; i >= 0; i--) {
-        if (stack[i].el) { el.parentNode = stack[i].el; break; }
-      }
       byId[idm[1]] = el;
     }
     if (!selfClosing) stack.push({ tag: tag, el: el });
   }
   return byId;
+}
+
+/**
+ * <body> にある id 付きの要素を作る。HTML 側に id を足したらシムにも自動で載る。
+ * <script> 以降は走査しない（JS 本文をタグとして誤認しないため）。
+ */
+function buildStaticElements() {
+  const source = html();
+  const from = source.indexOf('<body>');
+  const to = source.indexOf('<script>');
+  if (from === -1 || to === -1 || to < from) throw new Error('kanban.html の <body> を切り出せません');
+  // コメント中の文字列をタグとして拾わないよう、先に落とす。
+  const body = source.slice(from, to).replace(/<!--[\s\S]*?-->/g, '');
+  return parseStaticElements(body);
 }
 
 /**
@@ -751,5 +760,9 @@ module.exports = {
   declarations: declarations,
   topLevelRules: topLevelRules,
   styleSource: styleSource,
-  scriptSource: scriptSource
+  scriptSource: scriptSource,
+  // シム自身の DOM 構築ロジックを直接検査するために公開する
+  // （kanban.html の振る舞いではなく、シムの静的解析が実ブラウザとずれないことを見る）。
+  parseStaticElements: parseStaticElements,
+  isHidden: isHidden
 };

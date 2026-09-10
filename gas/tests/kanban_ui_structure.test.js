@@ -87,6 +87,11 @@ function functionBody(js, name) {
 /** 「読み込み中」の会計を持つ3者。これ以外は #table-view の中身も tableLoading も触らない。 */
 const TABLE_LOADING_OWNERS = ['showTableLoading', 'renderTable', 'foldTableLoading'];
 
+// 守っている不変条件（失敗メッセージにも毎回添える。変数名やヘルパー抽出で
+// この検査を壊した人が、検査を緩めるのではなく不変条件のほうを見て直せるように）。
+const INVARIANT = '不変条件「tableLoading（true）と #table-view の読み込み中 placeholder（出ている）は'
+  + '常に一致する」がこの3者だけに閉じている、という前提';
+
 test('tableLoading を書き換えるのは、placeholder を立てる／実データを描く／畳む の3者だけ', () => {
   // 3者のどれか1つでも後始末を落とすと、「true なのに placeholder が無い」
   // （あるいはその逆）の状態が残り、次に畳むときに実データを消しうる。
@@ -96,13 +101,15 @@ test('tableLoading を書き換えるのは、placeholder を立てる／実デ�
     return (text.match(/(?:^|[^.\w])(var\s+)?tableLoading\s*=[^=]/gm) || [])
       .filter(function (m) { return !/\bvar\s/.test(m); }).length;
   };
-  assert.equal((js.match(/\bvar\s+tableLoading\s*=/g) || []).length, 1, 'tableLoading の宣言が1つではない');
+  assert.equal((js.match(/\bvar\s+tableLoading\s*=/g) || []).length, 1,
+    'tableLoading の宣言が1つではない（' + INVARIANT + 'が崩れている）');
   assert.equal(writes(js), TABLE_LOADING_OWNERS.length,
-    'tableLoading への代入が ' + TABLE_LOADING_OWNERS.length + ' か所ではない（会計の持ち主が増減した）');
+    'tableLoading への代入が ' + TABLE_LOADING_OWNERS.length + ' か所ではない'
+    + '（会計の持ち主が増減した。' + INVARIANT + 'が崩れている）');
 
   TABLE_LOADING_OWNERS.forEach(function (name) {
     assert.equal(writes(functionBody(js, name)), 1,
-      name + ' が tableLoading をちょうど1回書き換えていない');
+      name + ' が tableLoading をちょうど1回書き換えていない（' + INVARIANT + 'が崩れている）');
   });
 });
 
@@ -115,12 +122,12 @@ test('#table-view の中身を変えるのは、その3者だけ', () => {
   // showView() は hidden を切り替えるだけ（中身は触らない）。ここだけは例外として認める。
   const showView = functionBody(js, 'showView');
   assert.equal(/getElementById\('table-view'\)\.hidden\s*=/.test(showView), true,
-    'showView が #table-view の hidden を切り替えていない');
+    'showView が #table-view の hidden を切り替えていない（表示先の切替が壊れている）');
   assert.equal((showView.match(hostRe) || []).length, 1,
-    'showView が #table-view を hidden の切替以外で触っている');
+    'showView が #table-view を hidden の切替以外で触っている（' + INVARIANT + 'が崩れている）');
 
   const total = (js.match(hostRe) || []).length;
   const inOwners = owners.reduce(function (n, body) { return n + (body.match(hostRe) || []).length; }, 0);
   assert.equal(total, inOwners + 1,
-    '#table-view を触る場所が、3者と showView(hidden) 以外にもある');
+    '#table-view を触る場所が、3者と showView(hidden) 以外にもある（' + INVARIANT + 'が崩れている）');
 });

@@ -563,7 +563,18 @@ function setMessage(text, kind) {
   el.className = kind || 'info';
 }
 
+/**
+ * closePanel() / openPanel() は「選択中のカードに印を付け直す」ために render(board) を
+ * 呼ぶ。初回の apiGetView('board') の応答が届く前（board がまだ null）にタブ／ビューを
+ * 押すと、その経路をここで踏む。b.columns を無条件に読むと TypeError になり、
+ * switchTab() 側は既に activeTab / activeView を書き換えたあとでその例外を受けるため、
+ * renderTabs() / showView() / loadView() が実行されないまま止まる — タブの表示と
+ * 内部状態が永続的に食い違う（この画面が繰り返し踏んでいるのと同型の不具合）。
+ * ここで無視すれば、呼び出し元は例外を受けずに最後まで進む。openPanel() 側の
+ * render(board) も同じ理由で守られる。
+ */
 function render(b) {
+  if (!b) return;
   board = b;
   var root = document.getElementById('board');
   clearHost(root);

@@ -23,17 +23,35 @@ const path = require('path');
  */
 
 const DIR = __dirname;
-const RAW_CALL_RE = /\.raw\.(click|drag|clickAdd|openCard)\(/;
+// `.raw.click(` のような「メソッドまで一致」する形にすると、`const rr = h.raw;
+// rr.openCard(...)` や `h.raw\n  .openCard(...)` のような、.raw と呼び出しの間に
+// 別名束縛・改行を挟む書き方で素通りする（実測: レビューで確認された抜け道）。
+// `.raw` という参照そのもの（プロパティアクセス）は、これらの書き方でも必ず
+// リテラルに残る一方、raw.* を使わない通常のコードには現れない。ここだけを拾う。
+const RAW_TOKEN_RE = /\.raw\b/;
+// 直後に `.<method>(` が続く、いちばん素直な書き方のときだけ、一覧を読みやすくする
+// ためにメソッド名を添える。別名束縛・改行のときは 'raw'（総称）のままにする —
+// それによって一覧の該当箇所（file / test）が変わらない限り、抜け道側の書き方を
+// 凝らしても検出（後述の deepEqual）には影響しない。
+const RAW_METHOD_RE = /\.raw\.(\w+)\(/;
 const TEST_NAME_RE = /^test\('((?:[^'\\]|\\.)*)'/;
 
-/** gas/tests/*.test.js のうち、raw.* の定義側である kanban_harness.js 自身は対象外。 */
+// raw.* の定義側である kanban_harness.js と、この検査自身（説明の中に `.raw` という
+// 文字列そのものを書いているため、自分を対象に含めると自分の説明文を拾って誤検出する）
+// は対象外。
+const SELF = path.basename(__filename);
+/** gas/tests/*.test.js のうち、上記2ファイルを除いたもの。 */
 function testFiles() {
-  return fs.readdirSync(DIR).filter(function (f) { return f.endsWith('.test.js'); }).sort();
+  return fs.readdirSync(DIR)
+    .filter(function (f) { return f.endsWith('.test.js') && f !== SELF; })
+    .sort();
 }
 
 /**
- * ファイル内の `.raw.<method>(` の出現を、直前に出た（インデントの無い）
- * `test('...', () => {` の名前と紐付けて集める。
+ * ファイル内の `.raw` 参照の出現を、直前に出た（インデントの無い）
+ * `test('...', () => {` の名前と紐付けて集める。比較に使う鍵は「ファイル / test名」
+ * だけ（メソッド名は表示用の飾り）なので、.raw と呼び出しの間に何を挟まれても、
+ * 未許可の箇所であればこの一覧に無い「ファイル / test名」として必ず引っかかる。
  */
 function rawCallSites() {
   const sites = [];
@@ -43,10 +61,10 @@ function rawCallSites() {
     lines.forEach(function (line) {
       const t = line.match(TEST_NAME_RE);
       if (t) currentTest = t[1];
-      const m = line.match(RAW_CALL_RE);
-      if (m) {
-        assert.ok(currentTest, file + ': raw.' + m[1] + '(...) がどの test() の中か特定できません');
-        sites.push(file + ' / ' + currentTest + ' / raw.' + m[1]);
+      if (RAW_TOKEN_RE.test(line)) {
+        assert.ok(currentTest, file + ': .raw の参照がどの test() の中か特定できません');
+        const method = (line.match(RAW_METHOD_RE) || [])[1] || 'raw';
+        sites.push(file + ' / ' + currentTest + ' / raw.' + method);
       }
     });
   });
