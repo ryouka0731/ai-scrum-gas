@@ -107,6 +107,11 @@
     #main { flex-direction: column; }
     #board { flex-direction: column; width: 100%; }
     .column { width: 100%; }
+    /* 縦積みの flex では交差軸（＝幅）が align-items: flex-start で中身なりに決まるため、
+       幅を指定しないと #table-view が表の幅まで広がり、ページごと横に伸びる
+       （375px の端末で 616px まで広がる実測がある）。親の幅で止めて、表は
+       .table-wrap の overflow-x で枠の中を横スクロールさせる。#board / #panel と同じ手。 */
+    #table-view { width: 100%; }
   }
 
   #panel {
@@ -488,9 +493,14 @@ function makeHelp(term) {
     btn.setAttribute('aria-expanded', 'true');
     // 位置は開くたびに計算する。表は横スクロールし、盤面は縦に伸びるので、
     // 作った時点の位置は当てにならない。表示してから測る（隠れた要素は測れない）。
+    // 収め先は documentElement の clientWidth / clientHeight。window.innerWidth は
+    // 端末によって「実際に見えている幅」と違う（375px の端末で 628 を返す実測がある。
+    // ページ自体が横に伸びると innerWidth はそちらに付いてくる）。その値を信じると、
+    // 収めたはずの補足が画面の外に出る。clientWidth はスクロールバーの幅も含まない。
+    var root = document.documentElement;
     var pos = helpBodyPosition(
       btn.getBoundingClientRect(), body.getBoundingClientRect(),
-      window.innerWidth, window.innerHeight
+      root.clientWidth, root.clientHeight
     );
     body.style.left = pos.left + 'px';
     body.style.top = pos.top + 'px';

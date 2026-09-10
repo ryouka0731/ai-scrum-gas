@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createHarness, htmlSource, styleRules, declarations } = require('./kanban_harness.js');
+const { createHarness, htmlSource, styleRules, topLevelRules, selectorList, declarations } = require('./kanban_harness.js');
 const { GLOSSARY, GLOSSARY_ALIASES, glossaryOf } = require('../pure_glossary.js');
 
 const STATUSES = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
@@ -385,6 +385,56 @@ test('位置は開くたびに測り直す', () => {
   help.setRects({ left: 40, top: 500, width: 24, height: 24 }, { left: 0, top: 0, width: 280, height: 90 });
   help.hover();
   assert.deepEqual(help.position(), { left: '40px', top: '532px' }, '前の位置のまま出ている');
+});
+
+test('狭い端末では、見えている幅（documentElement）に収める', () => {
+  // 実測: 375px の端末で window.innerWidth は 628 を返す（ページが横に伸びると
+  // innerWidth はそちらに付いてくる）。その値を信じて収めると、補足は右端 606px に
+  // 置かれ、実際に見えている 375px の外に出る。
+  const h = readyList([{ field: 'acceptance_criteria', label: '受入基準' }]);
+  h.setViewport(375, 800);
+  h.setWindowInner(628, 800);   // 見えている幅とずらす
+  const help = openPlaced(h, '受入基準',
+    { left: 326, top: 100, width: 24, height: 24 }, { left: 0, top: 0, width: 280, height: 120 });
+  assert.equal(help.position().left, '87px',   // 375 - 280 - 8
+    '見えていない幅（window.innerWidth）を基準に収めている: ' + help.position().left);
+});
+
+test('狭い端末では、見えている高さ（documentElement）に収める', () => {
+  const h = readyList([{ field: 'sprint', label: 'スプリント' }]);
+  h.setViewport(375, 800);
+  h.setWindowInner(375, 1200);
+  const help = openPlaced(h, 'スプリント',
+    { left: 20, top: 740, width: 24, height: 24 }, { left: 0, top: 0, width: 280, height: 120 });
+  assert.equal(help.position().top, '612px',   // 740 - 120 - 8（下に入らないので上へ）
+    '見えていない高さ（window.innerHeight）を基準に収めている: ' + help.position().top);
+});
+
+test('狭い画面では表が親の幅で止まり、枠の中で横スクロールする', () => {
+  // シムは CSS を評価しないので、規則そのものを見る（実機での確認はリードが行う）。
+  // 縦積みの flex では交差軸（＝幅）が align-items: flex-start で中身なりに決まるため、
+  // 幅を指定しないと #table-view が表の幅まで広がり、ページごと横に伸びる
+  // （375px の端末で 616px まで広がる実測がある）。そうなると補足の収め先も崩れる。
+  const narrow = styleRules().filter(function (r) {
+    return r.selector.indexOf('@media') === 0 && r.selector.indexOf('max-width: 900px') !== -1;
+  });
+  assert.ok(narrow.length > 0, '狭い画面向けの規則が無い');
+
+  const inner = narrow.map(function (r) { return topLevelRules(r.body); })
+    .reduce(function (a, b) { return a.concat(b); }, []);
+  const forTable = inner.filter(function (r) { return selectorList(r.selector).indexOf('#table-view') !== -1; });
+  assert.equal(forTable.length > 0, true, '狭い画面で #table-view の幅を止めていない');
+
+  const props = {};
+  forTable.forEach(function (r) {
+    declarations(r.body).forEach(function (d) { props[d.property] = d.value; });
+  });
+  assert.ok(props['width'] === '100%' || props['align-self'] === 'stretch',
+    '#table-view が親の幅で止まらない: ' + JSON.stringify(props));
+
+  // 枠の中で横スクロールする側（.table-wrap = #table-view と同じ要素）も残っていること。
+  const wrap = styleRules().find(function (r) { return r.selector === '.table-wrap'; });
+  assert.ok(wrap && /overflow-x\s*:\s*auto/.test(wrap.body), '表が枠の中で横スクロールしない');
 });
 
 test('スクロールすると開いている補足は閉じる', () => {

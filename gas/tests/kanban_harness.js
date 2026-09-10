@@ -293,7 +293,16 @@ function createHarness(initialColumns) {
   let timerSeq = 0;
   const timers = {};
 
+  // 補足の収め先。実際に見えている領域は documentElement の clientWidth / clientHeight で、
+  // window.innerWidth とは一致しないことがある（375px の端末で innerWidth が 628 を返す
+  // 実測がある）。既定は同じ値にしておき、食い違わせたいテストだけが setWindowInner で
+  // ずらす（どちらを読んでいるかを見分けられるようにするため）。
+  const documentElement = new Element('html');
+  documentElement.clientWidth = 1440;
+  documentElement.clientHeight = 900;
+
   const document = {
+    documentElement: documentElement,
     listeners: {},
     getElementById: function (id) {
       return Object.prototype.hasOwnProperty.call(byId, id) ? byId[id] : null;
@@ -579,8 +588,20 @@ function createHarness(initialColumns) {
       (win.listeners[type] || []).slice().forEach(function (fn) { fn({}); });
     },
 
-    /** viewport の大きさを変える（resize を起こすのは別）。 */
+    /** 実際に見えている領域の大きさを変える（resize を起こすのは別）。 */
     setViewport: function (width, height) {
+      documentElement.clientWidth = width;
+      documentElement.clientHeight = height;
+      win.innerWidth = width;
+      win.innerHeight = height;
+    },
+
+    /**
+     * window.innerWidth / innerHeight だけをずらす。実機ではページが横に伸びると
+     * innerWidth がそちらに付いてきて、見えている幅（documentElement.clientWidth）と
+     * 食い違う。どちらを読んで収めているかを見分けるために要る。
+     */
+    setWindowInner: function (width, height) {
       win.innerWidth = width;
       win.innerHeight = height;
     },
