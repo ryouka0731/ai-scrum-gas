@@ -32,7 +32,9 @@ const assert = require('node:assert/strict');
 
 const { chromePath, launch } = require('./chrome_session.js');
 const { buildStandalonePage, viewportContentFromDoGet } = require('./standalone_page.js');
-const { measureOne, installProbe, WIDTHS, SCHEMES, HEIGHT, TABLE_VIEW_LABEL } = require('./measure.js');
+const {
+  measureOne, installProbe, WIDTHS, SCHEMES, HEIGHT, TABLE_VIEW_LABEL, HELP_PRESS_SPOTS,
+} = require('./measure.js');
 
 /** 見本のデータから決まる、必ず出るはずの補足の件数。0件で空振りしないための錘。 */
 const EXPECTED_BOARD_HELPS = 10;   // 列見出し5 + カードの優先度5
@@ -358,6 +360,47 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
     assert.ok(o.rootScrollWidth <= o.rootClientWidth,
       width + 'px: スプリントゴールでページが横に伸びた（documentElement.scrollWidth '
       + o.rootScrollWidth + 'px > ' + o.rootClientWidth + 'px）');
+  });
+
+  test('補足は外側を押すと閉じ、その押下は飲み込まれない', async () => {
+    // 設計書 §専門用語には補足を付ける:「Escape と、外側を押すことで閉じる」。
+    // 外側を押す以外の閉じ手（wrap の mouseleave / ? の blur）は、カーソルの無い
+    // タッチ端末では来ない・来る保証がない。ここが無いと、補足が開いたまま閉じられない。
+    //
+    // 行列（12条件）には足さない。閉じるかどうかは幅にも配色にも依らず、
+    // 最後にカードを押して編集パネルを開くので、他の測定の前提を壊すため。
+    const width = 1024;
+    await session.open({ html: html, width: width, height: HEIGHT, scheme: 'light' });
+    await installProbe(session);
+    await session.waitFor('return window.__probe.boardReady() ? 1 : 0', width + 'px の初回読み込み');
+
+    const r = await session.evaluate('return window.__probe.helpOutsidePress('
+      + JSON.stringify(HELP_PRESS_SPOTS.columnHeader) + ');');
+
+    assert.equal(r.outside.stillAttached, true,
+      '外側を押したら補足が DOM から外れた（閉じたのではなく周りが描き直された）');
+    assert.equal(r.outside.closed, true, '外側を押しても補足が閉じない');
+    assert.equal(r.outside.expanded, 'false', '外側を押しても aria-expanded が閉じた状態にならない');
+    assert.equal(r.outside.panelHidden, true, '外側を押したら関係のない編集パネルが開いた');
+
+    assert.equal(r.inside.stillOpen, true,
+      '補足の本文を押したら閉じた（文面をなぞって選べない）');
+    assert.equal(r.inside.expanded, 'true', '本文を押したら aria-expanded が閉じた状態になった');
+
+    assert.equal(r.onCard.goneOrClosed, true, 'カードを押しても補足が開いたまま残っている');
+    // 以下4つが「押下を飲み込んでいない」の中身。補足はモーダルではなく、
+    // 開いている間もドラッグもカードの操作もできるのがこの画面の設計である。
+    assert.equal(r.onCard.pointerdownReachedCard, true,
+      '閉じる処理が pointerdown を捕捉フェーズで止めており、押下がカードまで届いていない');
+    assert.equal(r.onCard.notPrevented, true,
+      '閉じる処理が pointerdown の既定動作を打ち消している（ドラッグの開始が消える）');
+    assert.equal(r.onCard.clickReachedCard, true, '押下がカードの click まで届いていない');
+    assert.equal(r.onCard.panelOpened, true,
+      'カードを押したのに編集パネルが開かない（押下が本来の仕事に繋がっていない）');
+    assert.ok(r.onCard.panelTitle, '編集パネルは開いたが、どの PBI か分からない');
+
+    const errors = await session.evaluate('return (window.__errors || []).slice();');
+    assert.deepEqual(errors, [], 'ページで JS 例外が出ている');
   });
 
   test('viewport の meta を落とすと測定が成立せず、失敗になる', async () => {

@@ -133,7 +133,11 @@ function apiGetView(name) {
     }
     if (key === 'done') {
       const rows = readDoneBacklogRowsBestEffort_();
-      return { ok: true, name: key, view: buildDoneView(rows), summary: null };
+      // 要約は「やること」タブ単位のもの。ここだけ summary を落とすと、同じタブの中で
+      // 盤面 → 一覧 → 完了 と切り替えたときに要約の行が現れて消える。
+      // 集計元は完了バックログ自身にする。product_backlog.csv の合計をそのまま載せると、
+      // すぐ下に並ぶ完了の表と数字が食い違い、どちらの合計なのか読み手に分からない。
+      return { ok: true, name: key, view: buildDoneView(rows), summary: summarizeBacklog(rows, KANBAN_STATUSES) };
     }
     if (key === 'burndown') {
       const md = readSprintBacklogMdBestEffort_();

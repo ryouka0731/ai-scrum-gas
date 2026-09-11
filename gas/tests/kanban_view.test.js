@@ -660,3 +660,47 @@ test('削除の取り消しが読み取りと重なっても、読み込み中�
   assert.equal(messageShape(h), 'error', '古い読み取りを黙って捨てている');
   assert.equal(h.hiddenOf('table-view'), false, '表示先が動いた');
 });
+
+// ---------------------------------------------------------------------------
+// ビューが「そう見えている理由」を出す（view.notice）
+//
+// ロードマップは velocity.csv に実在スプリントが無いと ID とタイトルだけの2列の表を
+// 黙って出す。帯が出ない理由がどこにも出ないのが元の状態で、設計書が「実害がある」と
+// 名指しした形そのもの。サーバが載せた理由を画面が落とさないことをここで固定する。
+// ---------------------------------------------------------------------------
+
+const NO_SPRINT_NOTICE = 'velocity.csv にスプリントが登録されていません。';
+
+/** ロードマップを開いて、notice 付き（または無し）の応答を届ける。 */
+function roadmapWith(notice) {
+  const h = ready();
+  h.clickTab('スプリント');
+  h.clickView('ロードマップ');
+  const call = latest(h);
+  assert.deepEqual(call.args, ['roadmap']);
+  const view = { table: { headers: ['ID', 'タイトル'], rows: [['PBI-001', 'A']] }, marks: [] };
+  if (notice) view.notice = notice;
+  call.handlers.success({ ok: true, name: 'roadmap', view: view, summary: null });
+  return h;
+}
+
+test('ビューに添えられた理由が、表の前に描かれる', () => {
+  const h = roadmapWith(NO_SPRINT_NOTICE);
+  assert.ok(h.textTreeOf('table-view').indexOf(NO_SPRINT_NOTICE) !== -1,
+    '帯が出ない理由が画面のどこにも出ていない: ' + h.textTreeOf('table-view'));
+  // 理由は表の「前」。後ろに置くと、2列だけの表を見て困った後にしか目に入らない。
+  const classes = h.childClassesOf('table-view');
+  assert.equal(classes[0], 'table-note', '理由が先頭に無い: ' + JSON.stringify(classes));
+  assert.equal(classes.length, 2, '理由と表の2つ以外が描かれている: ' + JSON.stringify(classes));
+  // 理由を出したせいで表そのものが消えてはいけない。
+  assert.equal(h.tableRowsOf('table-view').length, 1, '理由を出したら表が描かれなくなった');
+});
+
+test('理由の無いビューでは、その行を作らない', () => {
+  const h = roadmapWith(null);
+  const classes = h.childClassesOf('table-view');
+  assert.equal(classes.indexOf('table-note'), -1,
+    '理由が無いのに空の案内が描かれている: ' + JSON.stringify(classes));
+  assert.ok(h.textTreeOf('table-view').indexOf('velocity.csv') === -1,
+    '理由が無いのに velocity.csv の話が出ている');
+});

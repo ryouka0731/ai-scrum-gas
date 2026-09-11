@@ -76,7 +76,9 @@ function viewFor(name) {
   switch (name) {
     case 'board': return { view: buildBoardData(ROWS), summary: summarizeBacklog(ROWS, KANBAN_STATUSES) };
     case 'list': return { view: buildListView(ROWS), summary: summarizeBacklog(ROWS, KANBAN_STATUSES) };
-    case 'done': return { view: buildDoneView(ROWS), summary: null };
+    // 完了の要約は完了バックログ自身の集計（web_app.js の apiGetView('done') と同じ）。
+    // ここを null に戻すと、やることタブの中で要約の行が現れて消える状態に逆戻りする。
+    case 'done': return { view: buildDoneView(ROWS), summary: summarizeBacklog(ROWS, KANBAN_STATUSES) };
     case 'burndown': return { view: buildBurndownView(ROWS, VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
     case 'velocity': return { view: buildVelocityView(VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
     case 'roadmap': return { view: buildRoadmapView(ROWS, VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };

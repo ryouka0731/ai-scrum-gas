@@ -503,3 +503,48 @@ test('apiGetView(board) は要約を一緒に返す', () => {
   assert.ok(res.summary);
   assert.ok(Array.isArray(res.summary.byStatus));
 });
+
+test('apiGetView(done) は完了バックログ自身の要約を返す', () => {
+  // 要約はタブ単位。ここだけ null にすると、やることタブの中で盤面→一覧→完了と
+  // 切り替えたときに要約の行が現れて消える。
+  const { ctx } = createTestContext({
+    'product_backlog.csv': headerOnlyCsv() +
+      csvRow({ id: 'PBI-010', title: '未完了', status: 'New', size: '3' }) + '\n',
+    'product_backlog_done.csv': headerOnlyCsv() +
+      csvRow({ id: 'PBI-001', title: '済み1', status: 'Done', size: '5' }) + '\n' +
+      csvRow({ id: 'PBI-002', title: '済み2', status: 'Done', size: '8' }) + '\n',
+  });
+
+  const backlog = ctx.apiGetView('list');
+  assert.equal(backlog.summary.total.count, 1, '前提: バックログ側の合計と区別できる見本になっていない');
+
+  const done = ctx.apiGetView('done');
+  assert.equal(done.ok, true, JSON.stringify(done));
+  assert.ok(done.summary, '完了だけ要約が無い（同じタブの中で要約の行が消える）');
+  // バックログの合計（1件 / 3pt）をそのまま載せていないこと。
+  assert.equal(done.summary.total.count, 2, '完了バックログ自身の件数になっていない');
+  assert.equal(done.summary.total.points, 13, '完了バックログ自身のポイントになっていない');
+});
+
+test('apiGetView(roadmap) は velocity.csv にスプリントが無い理由を応答に載せる', () => {
+  // 帯が出ない理由がどこにも出ない、という設計書が名指しした状態を防ぐ。
+  const { ctx } = createTestContext({
+    'product_backlog.csv': headerOnlyCsv() +
+      csvRow({ id: 'PBI-001', title: 'A', status: 'New', sprint: 'sprint001' }) + '\n',
+  });
+  const res = ctx.apiGetView('roadmap');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.view.notice, 'velocity.csv にスプリントが登録されていません。');
+});
+
+test('apiGetView(roadmap) は実在スプリントがあれば理由を載せない', () => {
+  const { ctx } = createTestContext({
+    'product_backlog.csv': headerOnlyCsv() +
+      csvRow({ id: 'PBI-001', title: 'A', status: 'New', sprint: 'sprint001' }) + '\n',
+    'velocity.csv': 'sprint,planned_points,completed_points,carried_over_points,sprint_start,sprint_end,notes\n' +
+      'sprint001,10,8,2,2026-01-01,2026-01-14,\n',
+  });
+  const res = ctx.apiGetView('roadmap');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.view.notice, undefined);
+});

@@ -267,6 +267,8 @@
   td { overflow-wrap: anywhere; }
   td.mark { background: var(--accent); color: var(--accent-ink); }
   .table-empty { color: var(--ink-2); font-size: 12px; padding: var(--sp-4) 0; }
+  /* 表がそう見えている理由（ロードマップの帯が出ない等）。表の前に置く。 */
+  .table-note { color: var(--ink-2); font-size: 12px; padding: 0 0 var(--sp-3); }
 </style>
 </head>
 <body>
@@ -439,6 +441,10 @@ function glossaryOf(term) {
 // 今開いている補足を閉じる関数。補足は同時に1つだけ開く（別の補足が開いたら前を閉じる）。
 // Escape はここを最初に見る（一番手前にあるものから閉じるため）。
 var openHelp = null;
+// 開いている補足の入れ物（.help）。「外側を押した」の外側を決めるために要る。
+// 押した先がこの中なら閉じない（本文をなぞって選んでコピーする人がいる。? 自身の
+// 押下も、そのボタン側の開閉と取り合いにしない）。
+var openHelpWrap = null;
 
 /** 開いている補足があれば閉じて true を返す。無ければ false。 */
 function closeOpenHelp() {
@@ -526,7 +532,7 @@ function makeHelp(term) {
   var close = function () {
     body.hidden = true;
     btn.setAttribute('aria-expanded', 'false');
-    if (openHelp === close) openHelp = null;
+    if (openHelp === close) { openHelp = null; openHelpWrap = null; }
   };
   var open = function () {
     // 同時に2つ開かない。描き直しで消えた補足を openHelp が掴んだままにもしない。
@@ -547,6 +553,7 @@ function makeHelp(term) {
     body.style.left = pos.left + 'px';
     body.style.top = pos.top + 'px';
     openHelp = close;
+    openHelpWrap = wrap;
   };
 
   // 押したときの開閉は「押し始めた時点」の状態で決める。
@@ -1336,8 +1343,6 @@ function switchView(viewId) {
   loadView();
 }
 
-function currentView() { return activeView; }
-
 /**
  * 「どのビューを見せるか」をクリック時点で確定させる。応答を待たない。
  *
@@ -1572,6 +1577,15 @@ function renderTable(view) {
     host.appendChild(none);
     return;
   }
+  // その表がそう見えている理由（ロードマップの帯が出ない等）。表より先に出す。
+  // #message には出さない — loadView() は成功のたびにそこを空へ戻すので消えてしまい、
+  // 残ったとしてもビューをまたいで居座る場所なので、このビューだけの事情の置き場ではない。
+  if (view.notice) {
+    var note = document.createElement('div');
+    note.className = 'table-note';
+    note.textContent = view.notice;
+    host.appendChild(note);
+  }
   // 障害物は未解決と解決済の2つの表になる。
   if (view.open !== undefined && view.resolved !== undefined) {
     host.appendChild(tableSection('未解決', view.columns, view.open));
@@ -1657,6 +1671,31 @@ document.getElementById('panel-close').addEventListener('click', closePanel);
 document.getElementById('panel-save').addEventListener('click', savePanel);
 fillButton(document.getElementById('toast-undo'), 'undo', '取り消す');
 document.getElementById('panel-delete').addEventListener('click', deletePbi);
+// 補足は外側を押しても閉じる。
+//
+// これが無いと、閉じ手は Escape / wrap の mouseleave / ? の blur / もう一度 ? だけになる。
+// タッチ端末ではカーソルが無いので mouseleave は来ず、フォーカスを取らない場所
+// （盤面の余白・カード本体）を叩いても blur が来る保証はない。つまり開いたまま
+// 閉じられない状態が起こりうる。
+//
+// 2つ守ること:
+// - **押下を飲み込まない。** 補足はモーダルではなく、開いている間もドラッグもカードの
+//   操作もできるのがこの画面の設計である。preventDefault も stopPropagation もしない
+//   （閉じるだけで、その押下は本来の行き先へそのまま通す）。
+// - **補足の中を押しても閉じない。** 50字前後の本文をなぞって選び、コピーしたい人がいる。
+//
+// 捕捉フェーズで受けるのは、途中の誰かが stopPropagation() してもここへ届かせるため
+// （? ボタン自身が click を止めている。pointerdown は止めていないが、その並びに
+// 依存させない）。捕捉は ? ボタン自身の pointerdown より先に走るが、そちらは
+// openHelpWrap の中なので上の判定で素通りし、押し直しでの開閉と取り合いにならない。
+// 押した先が分からないとき（target が無い合成イベント）は何もしない。
+document.addEventListener('pointerdown', function (ev) {
+  if (!openHelpWrap) return;
+  var target = ev && ev.target;
+  if (!target) return;
+  if (openHelpWrap === target || openHelpWrap.contains(target)) return;
+  closeOpenHelp();
+}, true);
 document.addEventListener('keydown', function (ev) {
   if (ev.key !== 'Escape') return;
   // 一番手前にあるものから閉じる。補足は通知（z-index: 10）より上（20）に出る。

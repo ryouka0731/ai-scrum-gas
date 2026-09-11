@@ -371,6 +371,105 @@
     },
 
     /**
+     * 補足を開いたまま「外側」を押したときの振る舞いを測る。
+     *
+     * ここは実ブラウザでしか測れない。シム（kanban_harness.js）は伝播を再現しない
+     * ので、document に捕捉フェーズで登録した listener へ「カードを押した」が届くか
+     * どうかを確かめられず、押下を飲み込んでいないかも見られない（シムで押せるのは
+     * その listener を直に呼ぶことだけで、それでは何も確かめたことにならない）。
+     *
+     * 3つを続けて測る。順序に依存があるので分けない（最後の1つは編集パネルを開く）。
+     *  1. 無害な場所（#message）を押すと閉じる
+     *  2. 本文の中を押しても閉じない（50字前後の説明をなぞって選び、コピーしたい）
+     *  3. カードを押すと閉じ、かつその押下はカードまで届いている（飲み込んでいない）
+     */
+    helpOutsidePress: async function (wrapSelector) {
+      var wrap = document.querySelector(wrapSelector);
+      if (!wrap) throw new Error(wrapSelector + ' に補足がありません');
+      var btn = wrap.querySelector('button');
+      var body = wrap.querySelector('.help-body');
+      if (!btn || !body) throw new Error(wrapSelector + ' の補足に ? か本文がありません');
+      var panel = document.getElementById('panel');
+      if (!panel.hidden) throw new Error('測る前から編集パネルが開いています');
+
+      // タッチ端末での1タップ。カーソルが無いので合成の mouseenter は来ない。
+      var tap = async function (el) {
+        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        el.click();
+        await frame();
+      };
+      // 押しただけ（click は起こさない）。閉じる側の判定だけを見るときに使う。
+      var pressOnly = async function (el) {
+        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        await frame();
+      };
+      // 「開いた状態にする」。既に開いていれば押さない — ? の押下は開閉の切り替えなので、
+      // 開いているのに押すと閉じてしまう（本文の中を押しても閉じない、を確かめた直後が
+      // まさにその状態）。
+      var open = async function (what) {
+        btn.scrollIntoView({ block: 'center', inline: 'center' });
+        await frame();
+        await sleep(60);   // スクロールの通知で閉じられてから開く
+        if (body.hidden) await tap(btn);
+        if (body.hidden) throw new Error(what + ' の前に補足を開けませんでした');
+      };
+
+      // 1. 無害な場所を押す。#message は押しても何も起こさない div。
+      await open('外側を押す');
+      await pressOnly(document.getElementById('message'));
+      var outside = {
+        stillAttached: document.contains(body),
+        closed: body.hidden,
+        expanded: btn.getAttribute('aria-expanded'),
+        panelHidden: panel.hidden,
+      };
+
+      // 2. 本文の中を押す。閉じてはいけない。
+      await open('本文の中を押す');
+      await pressOnly(body);
+      var inside = {
+        stillOpen: !body.hidden && getComputedStyle(body).display !== 'none',
+        expanded: btn.getAttribute('aria-expanded'),
+      };
+
+      // 3. カードを押す。閉じたうえで、その押下はカードまで届いていなければならない
+      //    （補足はモーダルではない。開いている間もカードは操作できる）。
+      //
+      //    「届いた」は3つの目で見る。閉じる処理は document に**捕捉フェーズ**で
+      //    載っているので、そこで stopPropagation() すれば pointerdown は的にすら
+      //    届かず、preventDefault() すればドラッグの開始やフォーカスが消える。
+      //    パネルが開いたかどうかだけでは、pointerdown を止めても click は別の
+      //    イベントとして届くため、その2つを取りこぼす。
+      await open('カードを押す');
+      var card = document.querySelector('#board .card');
+      if (!card) throw new Error('盤面にカードがありません');
+      var reached = { pointerdown: false, click: false };
+      var onDown = function () { reached.pointerdown = true; };
+      var onClick = function () { reached.click = true; };
+      card.addEventListener('pointerdown', onDown);
+      card.addEventListener('click', onClick);
+      var down = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
+      var notPrevented = card.dispatchEvent(down);
+      card.click();
+      await frame();
+      card.removeEventListener('pointerdown', onDown);
+      card.removeEventListener('click', onClick);
+      var onCard = {
+        // カードを押すとパネルが開き、盤面ごと描き直されるので補足は要素ごと消える。
+        // 「閉じた」と「消えた」のどちらでも、開いたまま残っていないことに変わりはない。
+        goneOrClosed: !document.contains(body) || body.hidden,
+        // 押下そのものが的まで届いているか。
+        pointerdownReachedCard: reached.pointerdown,
+        clickReachedCard: reached.click,
+        notPrevented: notPrevented && !down.defaultPrevented,
+        // 届いた結果、カードが本来する仕事（編集パネルを開く）をしたか。
+        panelOpened: !panel.hidden,
+        panelTitle: txt(document.getElementById('panel-title')),
+      };
+      return { where: wrapSelector, outside: outside, inside: inside, onCard: onCard };
+    },
+
+    /**
      * 通知（#toast）が出ている最中にパネルを開き、通知がパネルの操作を覆っていないか測る。
      *
      * 第2段階で実際に苦しんだ組み合わせ（通知が下端にあると、狭い画面で全幅に積まれた

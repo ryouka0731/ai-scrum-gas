@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  buildBurndownView, buildVelocityView, buildRoadmapView,
+  ROADMAP_NO_SPRINT_NOTICE, buildBurndownView, buildVelocityView, buildRoadmapView,
 } = require('../pure_view_sprint.js');
 
 const VEL = [
@@ -75,4 +75,29 @@ test('ロードマップは velocity.csv にスプリントが無ければ帯を
                   created_at: '2026-08-18', updated_at: '2026-08-18' }];
   const v = buildRoadmapView(rows, []);
   assert.equal(v.marks.length, 0);
+});
+
+test('ロードマップは velocity.csv にスプリントが無ければ理由を添える', () => {
+  // 帯が出ない理由は表を見ても分からない（ID とタイトルだけの2列の表が黙って出る）。
+  // 文面は設計書 §読み取りの失敗 が指定したもの。
+  const rows = [{ id: 'PBI-001', title: 'a', status: 'New', sprint: 'sprint001',
+                  created_at: '2026-08-18', updated_at: '2026-08-18' }];
+  assert.equal(buildRoadmapView(rows, []).notice,
+    'velocity.csv にスプリントが登録されていません。');
+  assert.equal(buildRoadmapView(rows, []).notice, ROADMAP_NO_SPRINT_NOTICE);
+  // 雛形のまま（sprint 名はあるが開始・終了日が日付になっていない）も同じ扱い。
+  const template = [{ sprint: 'sprintXXX', planned_points: '', completed_points: '',
+                      carried_over_points: '', sprint_start: 'YYYY-MM-DD',
+                      sprint_end: 'YYYY-MM-DD', notes: '' }];
+  assert.equal(buildRoadmapView(rows, template).notice, ROADMAP_NO_SPRINT_NOTICE);
+});
+
+test('ロードマップは実在スプリントがあれば理由を添えない', () => {
+  // 帯が1本も塗られないことと、スプリントが1つも無いことは別。PBI がどれも
+  // 割り当たっていないだけのときに同じ案内を出すと、velocity.csv を疑わせてしまう。
+  const unassigned = [{ id: 'PBI-001', title: 'a', status: 'New', sprint: '',
+                        created_at: '2026-08-18', updated_at: '2026-08-18' }];
+  const v = buildRoadmapView(unassigned, VEL);
+  assert.equal(v.marks.length, 0, '前提: 帯が1本も塗られていない状態で見ている');
+  assert.equal(v.notice, undefined);
 });
