@@ -67,13 +67,21 @@ test('ゴールは数値の統計と同じ並びに埋めない', () => {
   assert.ok(props.indexOf('overflow-wrap') !== -1, '長いゴールで横スクロールが出る');
 });
 
+// 要約の見本には**ゴールを持たせる**。renderSummary がゴールを出すのは
+// `if (summary.goal)` の下だけなので、goal の無い見本を渡すと「出ない」ことは
+// 確かめられても「出さない」ことは確かめられない — その枝にゴール表示を足されても、
+// 値が無いので何も描かれず、検査は通ったままになる（＝何も守らない検査）。
+const withGoal = (summary) => Object.assign({ goal: GOAL }, summary);
+
 test('やることの要約にはゴールを出さない', () => {
   const h = createHarness(INITIAL);
   h.sandbox.load();
   h.calls[0].handlers.success({
-    ok: true, view: h.boardOf(INITIAL), summary: { byStatus: [], total: { count: 3, points: 8 } }
+    ok: true, view: h.boardOf(INITIAL),
+    summary: withGoal({ byStatus: [], total: { count: 3, points: 8 } })
   });
-  assert.equal(h.textTreeOf('summary').indexOf('ゴール'), -1);
+  assert.equal(h.textTreeOf('summary').indexOf('ゴール'), -1,
+    'やることの要約にゴールが出ている: ' + h.textTreeOf('summary'));
   assert.ok(h.textTreeOf('summary').indexOf('合計') !== -1, '前提: 要約が出ていない');
 });
 
@@ -86,7 +94,7 @@ test('障害物の要約にはゴールを出さない', () => {
   h.clickTab('障害物');
   h.calls[h.calls.length - 1].handlers.success({
     ok: true, name: 'impediment', view: { open: [], resolved: [] },
-    summary: { open: 1, resolved: 0 }
+    summary: withGoal({ open: 1, resolved: 0 })
   });
   assert.equal(h.textTreeOf('summary').indexOf('ゴール'), -1,
     '障害物の要約にゴールが出ている: ' + h.textTreeOf('summary'));

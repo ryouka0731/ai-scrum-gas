@@ -126,7 +126,8 @@ test('velocity.csv と sprint_backlog.md が同じスプリントならゴール
 });
 
 test('表記が揺れていても同じスプリントとして扱う', () => {
-  // product_backlog.csv 側は "Sprint 002"、velocity.csv 側は "sprint002"（実データ）。
+  // sprint_backlog.md 側は "Sprint 002"（product_backlog.csv と同じ表記）、
+  // velocity.csv 側は "sprint002"。成果物のひな形がそう書き分けている（実データ）。
   assert.equal(summarizeSprint(VEL2, backlogMd('Sprint 002', '動くものを出す')).goal, '動くものを出す');
 });
 
