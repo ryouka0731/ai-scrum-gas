@@ -157,6 +157,32 @@
     },
 
     /**
+     * `td` の中に、途中で折り返せない長い連なり（URL、PBI-006 の見本）があれば、
+     * そのセルの幅を測る。
+     *
+     * `.table-wrap`（= #table-view）は overflow-x: auto で自分の中に横スクロールを
+     * 閉じ込めるため、`td { overflow-wrap: anywhere; }` を消しても「ページが横に
+     * 伸びる」検査は空振りのまま通ってしまう（実測で確認済み）。かわりに、
+     * 折り返せていれば要らないはずの幅（＝表の可視幅より広い1セル）を直接見る。
+     * table は列の内容に合わせて幅を決める（table-layout: auto）ため、
+     * 折り返せない連なりがあると、そのセルだけでなく表全体がそのぶん押し広げられる。
+     */
+    wideTokenCell: function () {
+      var tv = document.getElementById('table-view');
+      var marker = 'docs.google.com';   // PBI-006（fixtures.js）のタイトルに含まれる
+      var td = list('td', tv).filter(function (el) {
+        return (el.textContent || '').indexOf(marker) !== -1;
+      })[0];
+      if (!td) return { found: false };
+      var r = td.getBoundingClientRect();
+      return {
+        found: true,
+        tableViewClientWidth: tv.clientWidth,
+        width: Math.round(r.width * 100) / 100,
+      };
+    },
+
+    /**
      * hidden 属性が実ブラウザで本当に効いているか。
      * 作成者オリジンの display 指定は UA の [hidden]{display:none} に必ず勝つため、
      * `[hidden] { display: none !important; }` が無いと display: flex の要素は描かれ続ける。
@@ -381,7 +407,16 @@
 
       var undo = document.getElementById('toast-undo');
       var ur = undo.getBoundingClientRect();
+      // パネルは今まさに開いている（このすぐ上で next.click() した）。この幅の
+      // 検査だけのために開閉をやり直すのは無駄なので、ここで一緒に測る。
+      // 900px 以下は #panel { flex: 1 1 auto; width: 100%; } で全幅にする設計なので
+      // 380px と一致しない（意図どおり）。判定は呼び出し側で幅を見て行う。
+      var panelRect = panel.getBoundingClientRect();
       return {
+        panelWidth: {
+          declared: getComputedStyle(root).getPropertyValue('--panel-w').trim(),
+          actual: Math.round(panelRect.width * 100) / 100,
+        },
         toast: {
           hidden: toast.hidden,
           rects: toast.getClientRects().length,
@@ -403,6 +438,43 @@
         // 標本点が親に当たって 1 を僅かに割ることがあり、覆いの判定には向かない）。
         covered: controls.filter(function (c) { return c.inViewport && c.overlappedByToast; }),
         undoVisibleRatio: Math.round(visibleRatio(undo) * 1000) / 1000,
+      };
+    },
+
+    /**
+     * パネルが閉じている状態で通知が中央にあるか測る。
+     *
+     * `@media (min-width: 901px) #main:has(#panel:not([hidden])) ~ #toast` は
+     * パネルが開いている間**だけ**通知を寄せる意図（`:not([hidden])`）。閉じている
+     * ときにこの上書きが誤って効く（例: `:not([hidden])` を落として `:has(#panel)`
+     * にする）と、通知は画面の中央から動いたままになるが、`toastOverPanel()` は
+     * パネルを開いた状態でしか測っていないため、その退行を検出できない。
+     *
+     * 手順: カードを開いて削除する。本体は削除に成功すると closePanel() してから
+     * 通知を出すため（kanban.html の deletePbi）、追加の操作なしでパネルが
+     * 閉じた状態の通知が作れる。
+     */
+    toastCenteredWhilePanelClosed: async function () {
+      var firstCard = document.querySelector('#board .card');
+      if (!firstCard) throw new Error('盤面にカードがありません');
+      firstCard.click();
+      await frame();
+      var panel = document.getElementById('panel');
+      if (panel.hidden) throw new Error('パネルが開きませんでした（前提が崩れた）');
+      document.getElementById('panel-delete').click();
+
+      var toast = document.getElementById('toast');
+      var until = Date.now() + 3000;
+      while (toast.hidden && Date.now() < until) await sleep(20);
+      if (toast.hidden) throw new Error('削除しても通知が出ませんでした');
+      await frame();
+
+      if (!panel.hidden) throw new Error('削除後もパネルが開いたままだった（前提が崩れた）');
+      var r = toast.getBoundingClientRect();
+      return {
+        panelHidden: panel.hidden,
+        centerX: Math.round((r.left + r.right) / 2 * 100) / 100,
+        rootHalf: Math.round(root.clientWidth / 2 * 100) / 100,
       };
     },
 

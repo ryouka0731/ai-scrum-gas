@@ -74,6 +74,10 @@ async function measureOne(session, html, spec) {
     helps: await session.evaluate('return window.__probe.helpAudit("table-view");'),
     pressTableHeaderHelp: await session.evaluate(
       'return window.__probe.pressHelp(' + JSON.stringify(HELP_PRESS_SPOTS.tableHeader) + ');'),
+    // PBI-006（fixtures.js）の URL のセル。折り返せていなければ表全体が押し広げられる
+    // （`td { overflow-wrap: anywhere; }` を消しても「ページが横に伸びる」検査は
+    // .table-wrap の overflow-x に吸収されて空振りになるため、別に直接見る）。
+    wideCell: await session.evaluate('return window.__probe.wideTokenCell();'),
   };
 
   // 通知とパネルの重なりは盤面で見る（削除も新しいパネルも盤面から起こる）。
@@ -82,11 +86,14 @@ async function measureOne(session, html, spec) {
   await session.evaluate('return window.__probe.clickIn("views", ' + JSON.stringify(BOARD_VIEW_LABEL) + ');');
   await session.waitFor('return window.__probe.boardReady() ? 1 : 0', where + ' の盤面への戻り');
   const toast = await session.evaluate('return window.__probe.toastOverPanel();');
+  // パネルを閉じた状態での通知の中央寄せ。toastOverPanel の直後（パネルが開いた
+  // 状態）から続けて行う。順序はどちらでもよいが、状態を変える測定はまとめて最後に置く。
+  const toastClosed = await session.evaluate('return window.__probe.toastCenteredWhilePanelClosed();');
 
   return {
     width: spec.width, height: spec.height || HEIGHT, scheme: spec.scheme,
     where: where, token: opened.token, actualViewport: opened.viewport,
-    board: board, table: table, toast: toast,
+    board: board, table: table, toast: toast, toastClosed: toastClosed,
   };
 }
 

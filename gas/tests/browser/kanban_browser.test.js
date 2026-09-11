@@ -130,6 +130,29 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
           m.table.helps.forEach(function (h) { assertHelpIsReadable(h, where); });
         });
 
+        test('表の中の折り返せない連なりは、表の枠より広くならない', () => {
+          // `.table-wrap`（= #table-view）は overflow-x: auto で横スクロールを自分の中に
+          // 閉じ込めるため、「ページが横に伸びない」検査は `td { overflow-wrap: anywhere; }`
+          // を消しても空振りのまま通ってしまう（実測で確認済み）。折り返せていれば、
+          // PBI-006 の URL を持つセル1つが表の可視幅より広くなる理由が無いことを直接見る。
+          const c = measured[where].table.wideCell;
+          assert.equal(c.found, true, where + ': URL を含むセルが見つからない（PBI-006 の見本が変わった？）');
+          assert.ok(c.width <= c.tableViewClientWidth,
+            where + ': URL のセルが表の可視幅（' + c.tableViewClientWidth
+            + 'px）より広い（' + c.width + 'px）。折り返せていない');
+        });
+
+        test('パネルの幅は、宣言どおり（380px）になる', () => {
+          // 901px 以上でだけ判定する。900px 以下は #panel { flex: 1 1 auto; width: 100%; }
+          // で全幅にする設計で、380px と一致しないのが正しい（別の検査が既にその全幅を見ている）。
+          if (width <= 900) return;
+          const p = measured[where].toast.panelWidth;
+          assert.equal(p.declared, '380px', where + ': --panel-w の宣言値が変わった');
+          assert.equal(p.actual, 380,
+            where + ': パネルの実測幅が宣言（380px）と違う（' + p.actual
+            + 'px）。flex 項目の自動的な最小の幅が下限になっている可能性がある');
+        });
+
         test('表は枠の中で横スクロールし、ページを横に伸ばさない', () => {
           // 盤面のほうも見る。長いタイトルや列の最小幅でカードがはみ出せば、
           // 表と同じようにページごと横に伸びる。
@@ -232,6 +255,18 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
             where + ': パネルの操作部が ' + t.controls.length + ' 件しか測れていない');
           assert.deepEqual(t.covered.map(function (c) { return c.what; }), [],
             where + ': 通知がパネルの操作部を覆っている');
+        });
+
+        test('パネルが閉じているときは、通知が画面の中央のまま', () => {
+          // `@media (min-width: 901px) #main:has(#panel:not([hidden])) ~ #toast` は
+          // パネルが開いている間だけ通知を寄せる意図（:not([hidden]) がその境目）。
+          // 上のテストはパネルが開いた状態でしか見ていないため、この境目が壊れて
+          // 閉じていても寄ったまま（またはその逆）になる退行を検出できない。
+          const t = measured[where].toastClosed;
+          assert.equal(t.panelHidden, true, where + ': パネルが閉じていない（前提が崩れた）');
+          assert.equal(t.centerX, t.rootHalf,
+            where + ': パネルが閉じているのに通知が画面の中央にない（中心 ' + t.centerX
+            + 'px / 画面の半分 ' + t.rootHalf + 'px）');
         });
       });
     });

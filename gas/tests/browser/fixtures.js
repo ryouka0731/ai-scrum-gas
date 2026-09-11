@@ -32,8 +32,10 @@ const ROWS = [
   { id: 'PBI-005', title: 'velocity.csv に無いスプリントが付いた項目', status: 'New', priority: 'Medium', size: '1',
     sprint: '旧スプリント', acceptance_criteria: '選択肢に残る', updated_at: '2026-09-05 09:00:00' },
   // この PBI は「途中で折り返せない長い連なり」（URL）を持つために在る。**消さないこと。**
-  // 消すと `.card .title` の overflow-wrap の検査が空振りになる（規則を消しても落ちなく
-  // なる）。日本語と空白だけのタイトルは、規則が無くても折り返せてしまうため。
+  // 消すと `.card .title`（一覧では title の td も兼ねる）の overflow-wrap の検査が
+  // 空振りになる（規則を消しても落ちなくなる）。日本語と空白だけのタイトルは、
+  // 規則が無くても折り返せてしまうため。一覧の title 列の td（`kanban_browser.test.js`
+  // の「表の中の折り返せない連なりは、表の枠より広くならない」）も同じこの値で守っている。
   // 優先度は空にしておく（用語集に無いので補足が増えず、補足の件数を動かさない）。
   { id: 'PBI-006',
     title: 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefghij/edit#gid=0 の共有設定を直す',
