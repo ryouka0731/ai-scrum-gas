@@ -564,7 +564,16 @@ function makeHelp(term) {
   // マウスでは mouseenter の後、タッチでは合成イベントより前に来るので、
   // ここで控えた状態を使えばどちらでも意図どおりになる
   // （マウス: 触れて開く → 押して閉じる、タッチ: 押して開く → もう一度押して閉じる）。
-  // pointerdown が来ない環境（古い Safari・キーボード操作）では今の状態で判定する。
+  //
+  // キーボードは pointerdown が来ないうえ、focus が先に開いてしまう。今の状態で
+  // 判定すると、Enter / Space を押した瞬間に「開いているから閉じる」となり、
+  // **押すと閉じる**（設計書の「押すと開く」の裏返し）。実測（Chrome の headless、
+  // Input.dispatchKeyEvent で本物の Enter）: focus で hidden=false → Enter で
+  // hidden=true、その click は isTrusted=true / detail=0。
+  // キーボードと支援技術が出す click は detail が 0 なので、それを「開く」に倒す
+  // （マウスの click は detail>=1 なので、触れて開く → 押して閉じるは変わらない）。
+  // 閉じ方はキーボードにも残っている（Escape と、フォーカスを外すこと）。
+  // pointerdown も detail も無い環境（古い Safari 等）では今の状態で判定する。
   var hiddenAtPress = null;
   btn.addEventListener('pointerdown', function () { hiddenAtPress = body.hidden; });
   btn.addEventListener('click', function (ev) {
@@ -575,7 +584,9 @@ function makeHelp(term) {
     // 開くうえ、カーソルの無いタッチ端末ではカードの補足に到達する手が無くなる。
     // 置かれた先の親に気を配らせる形にすると、次に別の場所へ置いた人が同じ穴を開ける。
     ev.stopPropagation();
-    var wasHidden = (hiddenAtPress === null) ? body.hidden : hiddenAtPress;
+    var wasHidden = (hiddenAtPress === null)
+      ? (ev.detail === 0 || body.hidden)   // detail === 0 はキーボード・支援技術
+      : hiddenAtPress;
     hiddenAtPress = null;
     if (wasHidden) open(); else close();
   });

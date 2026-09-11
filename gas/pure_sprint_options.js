@@ -13,6 +13,9 @@ if (typeof require !== 'undefined' && typeof realSprints === 'undefined') {
 if (typeof require !== 'undefined' && typeof filterRealRows === 'undefined') {
   var { filterRealRows } = require('./pure_filter.js');
 }
+if (typeof require !== 'undefined' && typeof normalizeSprint === 'undefined') {
+  var { normalizeSprint } = require('./pure_filter.js');
+}
 
 const SPRINT_UNASSIGNED_LABEL = '（未割り当て）';
 
@@ -32,10 +35,14 @@ function unknownSprintOption(name) {
  */
 function sprintOptions(velocityRows) {
   const options = [{ value: '', label: SPRINT_UNASSIGNED_LABEL, unknown: false }];
-  const seen = {};
+  // `{}` ではなく `Object.create(null)` を使う。スプリント名が `__proto__` のとき、
+  // `{}` への代入は own property にならず（プロトタイプの差し替えとして黙って捨てられる）、
+  // hasOwnProperty が常に false を返して同じ選択肢が何度も並ぶ。名前は CSV 由来で
+  // 何でも書けるため、prototype を持たない入れ物にして名前の内容に依存させない。
+  const seen = Object.create(null);
   realSprints(velocityRows || []).forEach(function (v) {
     const name = String(v.sprint || '').trim();
-    if (!name || Object.prototype.hasOwnProperty.call(seen, name)) return;
+    if (!name || seen[name]) return;
     seen[name] = true;
     options.push({ value: name, label: name, unknown: false });
   });
@@ -55,6 +62,13 @@ function sprintOptions(velocityRows) {
  * 絞り込みと日付の判定が realSprints（gas/pure_grid_board.js。ROADMAP_DATE_RE もそこ）、
  * 並び順と重複排除が sprintOptions、unknown の判定がこの関数。
  *
+ * **velocity.csv に在るかどうかの判定は、ロードマップと同じ突き合わせ方で行う**
+ * （normalizeSprint。product_backlog.csv は "Sprint 001"、velocity.csv は "sprint001" と
+ * 表記が揺れる）。生の文字列で比べると、ロードマップには帯が出ている PBI の値に
+ * 「velocity.csv に無い」という嘘の注記が付き、プルダウンにした目的が裏返る。
+ * 選択肢の value は PBI に入っている生の値のまま残す（`<select>` は値が一字一句
+ * 一致しないと選択済みにならない）。
+ *
  * ただし「今そこに在る値が選択肢に無ければ足す」だけは画面側にある。ここで足せるのは
  * サーバが読んだ時点の値までで、読み込みの後に別の書き手が付けたスプリントには届かない。
  * 画面が足すほうは「この画面がまだ知らない」という一時的な状態で、意味が違うため
@@ -64,14 +78,24 @@ function sprintOptions(velocityRows) {
  */
 function sprintChoices(velocityRows, backlogRows) {
   const options = sprintOptions(velocityRows);
-  const seen = {};
-  options.forEach(function (o) { seen[o.value] = true; });
+  // 同じ value を2つ出さないための控え（`<select>` の重複を防ぐ）。
+  const seenValue = Object.create(null);
+  // velocity.csv に在るかどうかの控え。ロードマップと同じ鍵（normalizeSprint）で持つ。
+  // 足した未知の名前はここに入れない（同じ綴り違いがもう1つ来たときに、
+  // 2つ目だけ「velocity.csv にある」ことになってしまう）。
+  const knownKey = Object.create(null);
+  options.forEach(function (o) {
+    seenValue[o.value] = true;
+    if (o.value !== '') knownKey[normalizeSprint(o.value)] = true;
+  });
 
   filterRealRows(backlogRows || []).forEach(function (row) {
     const name = String(row.sprint || '').trim();
-    if (!name || Object.prototype.hasOwnProperty.call(seen, name)) return;
-    seen[name] = true;
-    options.push(unknownSprintOption(name));
+    if (!name || seenValue[name]) return;
+    seenValue[name] = true;
+    options.push(knownKey[normalizeSprint(name)]
+      ? { value: name, label: name, unknown: false }
+      : unknownSprintOption(name));
   });
   return options;
 }

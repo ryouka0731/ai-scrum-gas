@@ -30,7 +30,7 @@
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { chromePath, launch } = require('./chrome_session.js');
+const { chromePath, launch, chromeArgs } = require('./chrome_session.js');
 const { buildStandalonePage, viewportContentFromDoGet } = require('./standalone_page.js');
 const { responses, VIEW_NAMES } = require('./fixtures.js');
 const {
@@ -404,6 +404,33 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
     assert.deepEqual(errors, [], 'ページで JS 例外が出ている');
   });
 
+  test('削除の通知の「取り消す」を押すと、実際に戻す要求が飛ぶ', async () => {
+    // 「取り消せる」の検査（12条件）が見ているのは当たり判定と可視率だけで、
+    // 押していない。見本の応答が removed: null を返していると、押した先は
+    // restorePbi の「取り消せませんでした」の枝になるが、それでも通ってしまう。
+    // ここで押した結果まで見る（本物の apiDeletePbi は消した行そのものを返す）。
+    //
+    // 行列（12条件）には足さない。押した結果は幅にも配色にも依らず、
+    // 盤面の状態を変えるので他の測定の前提を壊す。
+    const width = 1024;
+    await session.open({ html: html, width: width, height: HEIGHT, scheme: 'light' });
+    await installProbe(session);
+    await session.waitFor('return window.__probe.boardReady() ? 1 : 0', width + 'px の初回読み込み');
+
+    const r = await session.evaluate('return window.__probe.undoDelete();');
+
+    assert.equal(r.toastHidden, true, '「取り消す」を押しても通知が出たまま');
+    assert.equal(r.method, 'apiRestorePbi',
+      '「取り消す」を押しても戻す要求が飛んでいない（飛んだのは ' + r.method + '）');
+    assert.equal(r.sentId, r.deletedId,
+      '消した ' + r.deletedId + ' ではなく ' + r.sentId + ' を戻そうとしている');
+    assert.notEqual(r.messageKind, 'error', '取り消しが失敗している: ' + r.message);
+    assert.ok(r.message.indexOf('戻しました') !== -1, '戻した旨が出ていない: ' + r.message);
+
+    const errors = await session.evaluate('return (window.__errors || []).slice();');
+    assert.deepEqual(errors, [], 'ページで JS 例外が出ている');
+  });
+
   test('バーンダウンのビューが実ブラウザで表として描かれる', async () => {
     // 見本の burndown は buildBurndownView(ROWS, VELOCITY) と呼んでいた。あの関数が
     // 受け取るのは sprint_backlog.md の本文ひとつだけなので view はずっと null で、
@@ -502,4 +529,61 @@ test('見本の7つのビューが、どれも描くものを持っている', (
     assert.ok(rowCountOf(r.view) > 0,
       name + ' の見本が0行（画面には「ありません。」しか出ず、その画面の検査が空振りする）');
   });
+});
+
+
+// ---------------------------------------------------------------------------
+// Chrome の起こし方・片付け方
+// ---------------------------------------------------------------------------
+
+test('root では --no-sandbox を付ける（付けないと起動すらしない）', () => {
+  // コンテナ等で root のまま走らせると、Chrome は
+  // 'Running as root without --no-sandbox is not supported' と言って即座に終了する。
+  // ここは実際に root になれないので、引数の組み立てだけを両方向で確かめる。
+  const real = process.getuid;
+  try {
+    process.getuid = function () { return 0; };
+    assert.ok(chromeArgs(9999, '/tmp/x').indexOf('--no-sandbox') !== -1,
+      'root なのに --no-sandbox が無い（起動直後に終了する）');
+    process.getuid = function () { return 501; };
+    assert.equal(chromeArgs(9999, '/tmp/x').indexOf('--no-sandbox'), -1,
+      'root でないのに sandbox を外している');
+  } finally {
+    process.getuid = real;
+  }
+  // 引数の末尾は開くページ。ここが崩れると Chrome は何も開かない。
+  assert.equal(chromeArgs(9999, '/tmp/x').pop(), 'about:blank');
+});
+
+test('シグナルで死んだ Chrome の片付けで待たされない', { skip: SKIP }, async () => {
+  // exit イベントの code は**シグナル死のとき null**。終了の有無を code で持つと
+  // 「まだ生きている」と見分けが付かず、close() は既に起きた exit を 3 秒待つ
+  // （起動待ちのほうも、死んだことに気づかず 20 秒空回りする）。
+  const session = await launch();
+  process.kill(session.pid, 'SIGKILL');
+  const until = Date.now() + 5000;
+  while (Date.now() < until) {
+    try { process.kill(session.pid, 0); } catch (_) { break; }   // ESRCH = もう居ない
+    await new Promise(function (r) { setTimeout(r, 20); });
+  }
+  const started = Date.now();
+  await session.close();
+  const took = Date.now() - started;
+  assert.ok(took < 1000, '既に死んでいる Chrome の片付けに ' + took + 'ms かかっている');
+});
+
+test('measure.js は配色の打ち間違いを黙って light として測らない', { skip: SKIP }, async () => {
+  // 幅の打ち間違いは NaN が clientWidth の照合で落ちる。配色は `dark` 以外がすべて
+  // 「light の期待」になるので、照合をすり抜けて別の色を測りうる（Chromium は
+  // 値が不正だと上書きそのものを捨て、端末の設定のままになる。light の端末では
+  // 期待も実測も light で一致してしまう）。起こす前に落とす。
+  const { execFile } = require('node:child_process');
+  const script = require('node:path').join(__dirname, 'measure.js');
+  const r = await new Promise(function (resolve) {
+    execFile(process.execPath, [script, '375', 'drak'], function (err, stdout, stderr) {
+      resolve({ code: err ? err.code : 0, stdout: stdout, stderr: stderr });
+    });
+  });
+  assert.equal(r.code, 1, '打ち間違いのまま測り始めている: ' + r.stdout.slice(0, 200));
+  assert.ok(r.stderr.indexOf('drak') !== -1, '何が悪いのか分からない文面: ' + r.stderr);
 });

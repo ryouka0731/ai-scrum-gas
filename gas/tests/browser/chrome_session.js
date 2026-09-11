@@ -66,6 +66,28 @@ function freePort() {
   });
 }
 
+/**
+ * Chrome に渡す引数。**root では --no-sandbox が要る** — コンテナ等で root のまま
+ * 走らせると、Chrome は 'Running as root without --no-sandbox is not supported' と
+ * 言って即座に終了し、測る前に落ちる。付けるのは root のときだけにする
+ * （sandbox は要らないから外すのではなく、外さないと起動しないから外す）。
+ */
+function chromeArgs(port, userDataDir) {
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  return [
+    '--headless=new',
+    '--remote-debugging-port=' + port,
+    '--user-data-dir=' + userDataDir,
+    '--no-first-run', '--no-default-browser-check', '--disable-extensions',
+    '--disable-gpu', '--force-device-scale-factor=1',
+    // headless でも背景タブ扱いでタイマーが間引かれると、google.script.run の
+    // 代役（setTimeout で応答する）が遅れて「応答が来ない」に見える。
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+  ].concat(asRoot ? ['--no-sandbox'] : []).concat(['about:blank']);
+}
+
 let tokenSeq = 0;
 /** ページごとに一意な合言葉。古いページを掴んでいないことの確認に使う。 */
 function nextToken() {
@@ -118,22 +140,14 @@ async function launch(opts) {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-scrum-gas-chrome-'));
   const pageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-scrum-gas-page-'));
 
-  const proc = spawn(bin, [
-    '--headless=new',
-    '--remote-debugging-port=' + port,
-    '--user-data-dir=' + userDataDir,
-    '--no-first-run', '--no-default-browser-check', '--disable-extensions',
-    '--disable-gpu', '--force-device-scale-factor=1',
-    // headless でも背景タブ扱いでタイマーが間引かれると、google.script.run の
-    // 代役（setTimeout で応答する）が遅れて「応答が来ない」に見える。
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    'about:blank',
-  ], { stdio: 'ignore' });
+  const proc = spawn(bin, chromeArgs(port, userDataDir), { stdio: 'ignore' });
 
-  let exited = null;
-  proc.on('exit', function (code) { exited = code; });
+  // 終了したかどうかは**真偽値で**控える。終了コードだけでは足りない —
+  // シグナルで死んだときの code は null で、「まだ生きている」と見分けが付かない
+  // （下の起動待ちが 20 秒空回りし、close() は既に起きた exit を 3 秒待つ）。
+  let exited = false;
+  let exitCode = null;
+  proc.on('exit', function (code) { exited = true; exitCode = code; });
 
   const rmDirs = function () {
     [userDataDir, pageDir].forEach(function (dir) {
@@ -154,7 +168,7 @@ async function launch(opts) {
   let wsUrl = null;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (exited !== null) { cleanup(); throw new Error('Chrome が起動直後に終了しました（code=' + exited + '）'); }
+    if (exited) { cleanup(); throw new Error('Chrome が起動直後に終了しました（code=' + exitCode + '）'); }
     try {
       const list = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json();
       const page = list.filter(function (t) { return t.type === 'page' && t.webSocketDebuggerUrl; })[0];
@@ -260,6 +274,8 @@ async function launch(opts) {
   }
 
   return {
+    // 後始末の検査（外からシグナルで殺して close() の振る舞いを見る）で使う。
+    pid: proc.pid,
     open: open,
     evaluate: evaluate,
     waitFor: waitFor,
@@ -270,7 +286,7 @@ async function launch(opts) {
       // SIGKILL は非同期に届く。**終わったことを見届けてから**消す。
       // 死ぬ前に消すと、Chrome が終了処理でプロファイルを書き直して復活し、
       // 消したつもりのディレクトリが残る（残骸は次の実行を紛らわしくする）。
-      if (exited === null) {
+      if (!exited) {
         await new Promise(function (resolve) {
           proc.once('exit', resolve);
           setTimeout(resolve, 3000).unref();
@@ -281,4 +297,4 @@ async function launch(opts) {
   };
 }
 
-module.exports = { chromePath: chromePath, launch: launch };
+module.exports = { chromePath: chromePath, launch: launch, chromeArgs: chromeArgs };

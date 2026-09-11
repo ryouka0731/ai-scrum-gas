@@ -17,10 +17,12 @@ test('画面で使う語はすべて説明を持つ', () => {
 });
 
 test('説明は空でなく、用語そのものの言い換えで終わらない', () => {
+  // 「用語そのもの」だけを弾くと、'期限。New' のように用語で終わる説明
+  // （＝説明になっていない）が通る。終わり方まで見る。
   Object.keys(GLOSSARY).forEach((t) => {
     const d = GLOSSARY[t];
     assert.ok(d.trim().length >= 10, t + ' の説明が短すぎる: ' + d);
-    assert.notEqual(d.trim(), t, t + ' の説明が用語そのもの');
+    assert.ok(!d.trim().endsWith(t), t + ' の説明が用語で終わっている: ' + d);
   });
 });
 

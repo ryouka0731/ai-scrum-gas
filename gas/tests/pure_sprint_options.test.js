@@ -103,3 +103,44 @@ test('velocity.csv の名前に前後の空白があっても、PBI 側の同じ
   assert.deepEqual(sprintChoices(vel, rows).map((x) => x.value), ['', 'sprint001']);
   assert.deepEqual(sprintChoices(vel, rows).map((x) => x.unknown), [false, false]);
 });
+
+test('表記が揺れていても、ロードマップに出るスプリントに「無い」と書かない', () => {
+  // product_backlog.csv は "Sprint 001"、velocity.csv は "sprint001" と書く（実データ）。
+  // 生の文字列で突き合わせると、ロードマップには帯が出ているのに選択肢では
+  // 「velocity.csv に無い」と書かれる。判定はロードマップと同じ normalizeSprint で行う。
+  const vel = [{ sprint: 'sprint001', sprint_start: '2026-08-18', sprint_end: '2026-08-31' }];
+  const rows = [{ id: 'PBI-001', title: 'A', sprint: 'Sprint 001' }];
+  const o = sprintChoices(vel, rows);
+  assert.deepEqual(o.map((x) => x.unknown), [false, false, false],
+    'ロードマップに出るスプリントに「velocity.csv に無い」が付いている: ' + JSON.stringify(o));
+  // value は PBI に入っている生の値のまま。ここを正規化すると、その PBI を開いた
+  // ときに `<select>` が一致する選択肢を見つけられず、選択済みにならない。
+  assert.deepEqual(o.map((x) => x.value), ['', 'sprint001', 'Sprint 001']);
+});
+
+test('表記が揺れた未知のスプリントは、2つ目も「velocity.csv に無い」のまま', () => {
+  // 足した未知の名前を「在るもの」として控えると、綴り違いの2つ目だけ注記が消える。
+  const rows = [
+    { id: 'PBI-001', title: 'A', sprint: 'ゆうれい 1' },
+    { id: 'PBI-002', title: 'B', sprint: 'ゆうれい1' },
+  ];
+  assert.deepEqual(sprintChoices([], rows).map((x) => x.unknown), [false, true, true]);
+});
+
+test('スプリント名が __proto__ でも選択肢は重ならない', () => {
+  // 素の `{}` に `seen['__proto__'] = true` を入れても own property にならず、
+  // 重複の判定が常に素通りする（同じ選択肢が行の数だけ並ぶ）。名前は CSV 由来。
+  const vel = [
+    { sprint: '__proto__', sprint_start: '2026-08-18', sprint_end: '2026-08-31' },
+    { sprint: '__proto__', sprint_start: '2026-09-01', sprint_end: '2026-09-14' },
+  ];
+  assert.deepEqual(sprintOptions(vel).map((x) => x.value), ['', '__proto__']);
+
+  const rows = [
+    { id: 'PBI-001', title: 'A', sprint: '__proto__' },
+    { id: 'PBI-002', title: 'B', sprint: '__proto__' },
+  ];
+  assert.deepEqual(sprintChoices([], rows).map((x) => x.value), ['', '__proto__']);
+  // velocity.csv 側にある __proto__ を、PBI 側からもう一度足さない。
+  assert.deepEqual(sprintChoices(vel, rows).map((x) => x.value), ['', '__proto__']);
+});

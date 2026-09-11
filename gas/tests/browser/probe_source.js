@@ -604,6 +604,46 @@
       };
     },
 
+    /**
+     * 削除してから「取り消す」を実際に押し、戻す要求が飛んだかまで測る。
+     *
+     * 「取り消せる」の検査が当たり判定と可視率だけだと、押した先が
+     * 「取り消せませんでした」の枝でも通ってしまう（見本の応答が `removed: null` を
+     * 返していた頃は、まさにそうなっていた）。押した結果まで見る。
+     */
+    undoDelete: async function () {
+      var card = document.querySelector('#board .card');
+      if (!card) throw new Error('盤面にカードがありません');
+      var id = card.getAttribute('data-id');
+      card.click();
+      await frame();
+      document.getElementById('panel-delete').click();
+
+      var toast = document.getElementById('toast');
+      var until = Date.now() + 3000;
+      while (toast.hidden && Date.now() < until) await sleep(20);
+      if (toast.hidden) throw new Error('削除しても通知が出ませんでした');
+
+      var before = window.__calls.length;
+      document.getElementById('toast-undo').click();
+      until = Date.now() + 3000;
+      while (window.__calls.length === before && Date.now() < until) await sleep(20);
+      var call = window.__calls[window.__calls.length - 1] || {};
+      // 戻す要求の応答（board の描き直しとメッセージ）まで待つ。
+      until = Date.now() + 3000;
+      while (txt(document.getElementById('message')).indexOf('戻しています') !== -1
+        && Date.now() < until) await sleep(20);
+      var message = document.getElementById('message');
+      return {
+        deletedId: id,
+        toastHidden: toast.hidden,
+        method: call.method || null,
+        sentId: (call.args && call.args[0] && call.args[0].id) || null,
+        message: txt(message),
+        messageKind: message.className,
+      };
+    },
+
     /** #tabs / #views のボタンをラベルで押す。 */
     clickIn: function (hostId, label) {
       var b = list('button', document.getElementById(hostId)).filter(function (x) { return txt(x) === label; })[0];

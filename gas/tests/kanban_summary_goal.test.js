@@ -67,11 +67,28 @@ test('ゴールは数値の統計と同じ並びに埋めない', () => {
   assert.ok(props.indexOf('overflow-wrap') !== -1, '長いゴールで横スクロールが出る');
 });
 
-test('やること・障害物の要約にはゴールを出さない', () => {
+test('やることの要約にはゴールを出さない', () => {
   const h = createHarness(INITIAL);
   h.sandbox.load();
   h.calls[0].handlers.success({
     ok: true, view: h.boardOf(INITIAL), summary: { byStatus: [], total: { count: 3, points: 8 } }
   });
   assert.equal(h.textTreeOf('summary').indexOf('ゴール'), -1);
+  assert.ok(h.textTreeOf('summary').indexOf('合計') !== -1, '前提: 要約が出ていない');
+});
+
+test('障害物の要約にはゴールを出さない', () => {
+  // 障害物の枝（summary.open）も通しておく。やること（total）だけを通していると、
+  // 後からこちらの枝にゴールが足されても気づけない。
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, view: h.boardOf(INITIAL) });
+  h.clickTab('障害物');
+  h.calls[h.calls.length - 1].handlers.success({
+    ok: true, name: 'impediment', view: { open: [], resolved: [] },
+    summary: { open: 1, resolved: 0 }
+  });
+  assert.equal(h.textTreeOf('summary').indexOf('ゴール'), -1,
+    '障害物の要約にゴールが出ている: ' + h.textTreeOf('summary'));
+  assert.ok(h.textTreeOf('summary').indexOf('未解決') !== -1, '前提: 要約が出ていない');
 });

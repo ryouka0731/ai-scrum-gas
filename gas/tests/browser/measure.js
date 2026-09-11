@@ -148,6 +148,14 @@ if (require.main === module) {
   }
   const widths = process.argv[2] ? process.argv[2].split(',').map(Number) : undefined;
   const schemes = process.argv[3] ? [process.argv[3]] : undefined;
+  // 打ち間違いを黙って light として測らない。幅の打ち間違いは NaN が
+  // clientWidth の照合で落ちるが、配色は `dark` 以外がすべて「light の期待」に
+  // なるため、`drak` と打つと照合も通ってしまう（別のものを測って成功する）。
+  const badScheme = (schemes || []).filter(function (x) { return SCHEMES.indexOf(x) === -1; })[0];
+  if (badScheme !== undefined) {
+    console.error('配色は ' + SCHEMES.join(' か ') + ' です（指定: ' + badScheme + '）');
+    process.exit(1);
+  }
   measureAll({ widths: widths, schemes: schemes })
     .then(function (r) { console.log(JSON.stringify(r, null, 2)); })
     .catch(function (e) { console.error(e); process.exit(1); });

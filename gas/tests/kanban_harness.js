@@ -668,12 +668,22 @@ function createHarness(initialColumns) {
               fire(btn, 'click', {});
             },
             /**
+             * キーボードでの1回の操作（Tab で来て Enter か Space を押す）。
+             * ブラウザが出す順に起こす: focus が先、そのあとに click。pointerdown は
+             * 来ず、click の detail は 0 になる（実測: Chrome の headless に
+             * Input.dispatchKeyEvent で本物の Enter を送ると isTrusted=true / detail=0）。
+             */
+            keyPress: function () {
+              fireVisible(btn, 'focus', {}, '補足の ? ボタン');
+              fire(btn, 'click', { detail: 0 });
+            },
+            /**
              * マウスでの1回のクリック。カーソルが乗るのが先で、pointerdown はその後。
              */
             mouseClick: function () {
               fireVisible(btn, 'mouseenter', {}, '補足の ? ボタン');
               fire(btn, 'pointerdown', {});
-              fire(btn, 'click', {});
+              fire(btn, 'click', { detail: 1 });   // マウスの click は detail >= 1
             },
             hover: function () { fireVisible(btn, 'mouseenter', {}, '補足の ? ボタン'); },
             leave: function () { fire(wrap, 'mouseleave', {}); },

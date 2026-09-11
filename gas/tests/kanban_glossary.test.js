@@ -172,6 +172,32 @@ test('補足はキーボードのフォーカスでも開き、外れると閉�
   assert.equal(help.isOpen(), false, 'フォーカスが外れても閉じない');
 });
 
+test('キーボードで Enter / Space を押しても補足は閉じない（押すと開く）', () => {
+  // Tab で来た時点で focus が開く。そこで Enter を押すと click が続けて来るので、
+  // 「今開いているから閉じる」と判定すると、押した瞬間に閉じる（設計書の
+  // 「押すと開く」の裏返し）。実測（Chrome の headless に Input.dispatchKeyEvent で
+  // 本物の Enter）: focus で開き、Enter の click は isTrusted=true / detail=0 で閉じた。
+  const h = ready();
+  const help = h.helpFor('board', 'Done');
+  help.keyPress();
+  assert.equal(help.isOpen(), true, 'キーボードで押すと閉じてしまう');
+  assert.equal(help.expanded(), 'true', 'aria-expanded が開いた状態になっていない');
+
+  // 押し続けても開いたまま（開くほうへ倒す。閉じるのは Escape とフォーカス外し）。
+  help.keyPress();
+  assert.equal(help.isOpen(), true, '2打目で閉じてしまう');
+});
+
+test('キーボードで開いた補足は Escape で閉じられる', () => {
+  // 「押すと閉じる」を止めた分、閉じる手段が残っていることを確かめる。
+  const h = ready();
+  const help = h.helpFor('board', 'Done');
+  help.keyPress();
+  assert.equal(help.isOpen(), true, '前提: 開いていない');
+  h.pressKey('Escape');
+  assert.equal(help.isOpen(), false, 'Escape で閉じない（キーボードでは閉じられない）');
+});
+
 test('補足を開いている間も盤面を操作できる（モーダルにしない）', () => {
   const h = ready();
   h.helpFor('board', 'New').press();

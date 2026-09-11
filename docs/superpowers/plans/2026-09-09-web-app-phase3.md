@@ -358,6 +358,28 @@ git add gas/pure_sprint_options.js gas/pure_grid_board.js gas/tests/pure_sprint_
 git commit -m "feat: スプリントの選択肢を velocity.csv から組み立てる"
 ```
 
+**実装時の変更**（計画は書き換えず、判明した順に記録する）:
+
+1. 出荷した `sprintOptions` は第2引数を取らない（`sprintOptions(velocityRows)`）。
+   「今の値が選択肢に無ければ足す」規則は、サーバ側の
+   `sprintChoices(velocityRows, backlogRows)`（PBI 側に付いている名前を `unknown`
+   付きで足す）と、画面側の「（選択肢に無い値）」の2つに分かれた。**画面が今そこに
+   持っている値**は、サーバが CSV を読んだ時点の値とは別物（読み込みの後に別の
+   書き手が付けたスプリントには、サーバ側の規則は届かない）で、注記の意味も違うため。
+   Task 8 Step 5 の `sprintOptions(velocityRows, card ? card.sprint : '')` と、
+   本 Task の Interfaces / テスト片の第2引数はいずれも出荷物には存在しない。
+2. 盤面の応答に載せるのは `velocityRows` ではなく、組み立て済みの `sprintChoices`
+   （Task 6 の実装時の変更を参照）。
+3. `velocity.csv` に在るかどうかの判定は生の文字列ではなく `normalizeSprint`
+   （ロードマップと同じ鍵）で行う。`product_backlog.csv` は "Sprint 001"、
+   `velocity.csv` は "sprint001" と表記が揺れるため、生で比べると
+   **ロードマップには帯が出ている PBI に「velocity.csv に無い」と書く**
+   （PR #3 のレビュー指摘。選択肢の `value` は `<select>` の照合に要るので生のまま）。
+4. 重複を控える入れ物は `{}` ではなく `Object.create(null)`。スプリント名が
+   `__proto__` のとき、`{}` では own property にならず同じ選択肢が並ぶ（同上）。
+
+---
+
 ---
 
 ### Task 3: やることのビュー（一覧・完了）と要約
@@ -852,6 +874,21 @@ git add gas/pure_view_sprint.js gas/pure_summary.js gas/tests/pure_view_sprint.t
 git commit -m "feat: スプリントのビューと要約を足す"
 ```
 
+**実装時の変更**（計画は書き換えず、判明した順に記録する）:
+
+1. Step 1 のテスト「ロードマップは velocity.csv にスプリントが無ければ行が出ない」
+   （`v.table.rows.length === 0`）は成立しない。`buildRoadmapGrid`（計画どおり
+   **触らない**）は、velocity にスプリントが無くても実 PBI ごとに行を残す
+   （スプリントの列が無くなるだけ）ので、実測は `rows.length === 1`。
+   出荷したテストは「帯を塗る位置が無い」ことを見る形に変えてある
+   （`ロードマップは velocity.csv にスプリントが無ければ帯を塗らない`）。
+2. `summarizeSprint` は、`sprint_backlog.md` が「スプリント情報」の表で名乗る
+   スプリント番号が velocity.csv の最新行と食い違うときはゴールを空にする
+   （PR #3 のレビュー指摘）。数字は velocity.csv、ゴールは**最新のスプリント
+   フォルダ**の md と出所が違い、ずれると別々のスプリントの数字と目的が1行に混ざる。
+
+---
+
 ---
 
 ### Task 5: 障害物のビューと要約
@@ -1222,6 +1259,17 @@ Expected: PASS（332 + 4 = 336 件）
 git add gas/web_app.js gas/kanban.html gas/tests/web_app_flow.test.js
 git commit -m "feat: 読み取りの API を apiGetView に集約する"
 ```
+
+**実装時の変更**（計画は書き換えず、判明した順に記録する）:
+
+1. `apiGetView` の盤面（`board`）の応答には `sprintChoices` を足した。本 Task の
+   契約・コード片（`{ ok, name, view, summary }`）にはスプリントのプルダウンの
+   データ源が無く、そのままでは Task 8 Step 5 の選択肢が作れない。計画は
+   `velocityRows` をそのまま載せる形だったが、組み立て（重複排除・並び順・
+   `unknown` の判定）を画面側へ写すとサーバ側だけを直したときに黙ってずれるため、
+   **完成した選択肢**を載せる形にした（Task 2 の実装時の変更を参照）。
+
+---
 
 ---
 

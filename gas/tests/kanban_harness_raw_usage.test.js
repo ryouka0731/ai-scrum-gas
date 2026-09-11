@@ -36,11 +36,16 @@ const DOT_RAW = '\\' + '.' + 'raw';
 // `.raw` という参照そのもの（プロパティアクセス）は、これらの書き方でも必ず
 // リテラルに残る一方、raw.* を使わない通常のコードには現れない。ここだけを拾う。
 const RAW_TOKEN_RE = new RegExp(DOT_RAW + '\\b');
-// 直後に `.<method>(` が続く、いちばん素直な書き方のときだけ、一覧を読みやすくする
-// ためにメソッド名を添える。別名束縛・改行のときは 'raw'（総称）のままにする —
-// それによって一覧の該当箇所（file / test）が変わらない限り、抜け道側の書き方を
-// 凝らしても検出（後述の deepEqual）には影響しない。
+// 直後に `.<method>(` が続く、いちばん素直な書き方のときだけ、落ちたときの文面に
+// メソッド名を添える。**比較に使う鍵には入れない**（別名束縛・改行に書き換えると
+// 総称の 'raw' になるため、鍵に入れると許可済みの箇所を書き直しただけで落ちる）。
 const RAW_METHOD_RE = new RegExp(DOT_RAW + '\\.(\\w+)\\(');
+// 角括弧でのプロパティアクセス（`h['raw'].drag(...)`）も同じ参照。文字列リテラルの
+// 中身は後段の stripNoise が落とすため、**落とす前に** `.raw` の形へ均しておく
+// （均さずに角括弧の形を探そうとすると、コメントの中の説明まで拾ってしまう）。
+// 空白に改行を含めない: 含めると行の対応が崩れ、test 名との紐付けがずれる。
+const BRACKET_RAW_RE = /\[[ \t]*(['"])raw\1[ \t]*\]/g;
+function normalizeBracketAccess(text) { return text.replace(BRACKET_RAW_RE, '.raw'); }
 const TEST_NAME_RE = /^test\('((?:[^'\\]|\\.)*)'/;
 
 /**
@@ -80,34 +85,53 @@ function testFiles() {
 }
 
 /**
- * ファイル内の `.raw` 参照の出現を、直前に出た（インデントの無い）
- * `test('...', () => {` の名前と紐付けて集める。比較に使う鍵は「ファイル / test名」
- * だけ（メソッド名は表示用の飾り）なので、.raw と呼び出しの間に何を挟まれても、
- * 未許可の箇所であればこの一覧に無い「ファイル / test名」として必ず引っかかる。
+ * 1ファイル分の `.raw` 参照を、直前に出た（インデントの無い）
+ * `test('...', () => {` の名前と紐付けて集める。返すのは
+ * `{ key: 'ファイル / test名', method: '表示用のメソッド名' }`。
+ *
+ * **比較に使う鍵は「ファイル / test名」だけ**（メソッド名は落ちたときの文面のため
+ * だけに添える）。こうしておくと、.raw と呼び出しの間に何を挟まれても、未許可の
+ * 箇所であれば一覧に無い「ファイル / test名」として必ず引っかかり、逆に許可済みの
+ * 箇所を別名束縛や改行に書き直しただけでは落ちない。
  *
  * test 名の特定は**元のテキスト**から行う（文字列を落とすと test('...') の名前
  * そのものが読めなくなるため）。`.raw` の検出は**コメント・文字列を落としたテキスト**
  * から行う（コメントや、この一覧の文字列表現を誤検出しないため）。
  */
+function rawSitesIn(file, text) {
+  const sites = [];
+  const originalLines = text.split('\n');
+  const noiseFreeLines = stripNoise(normalizeBracketAccess(text)).split('\n');
+  let currentTest = null;
+  originalLines.forEach(function (line, i) {
+    const t = line.match(TEST_NAME_RE);
+    if (t) currentTest = t[1];
+    const codeLine = noiseFreeLines[i];
+    if (RAW_TOKEN_RE.test(codeLine)) {
+      assert.ok(currentTest, file + ': .raw の参照がどの test() の中か特定できません');
+      sites.push({
+        key: file + ' / ' + currentTest,
+        method: (codeLine.match(RAW_METHOD_RE) || [])[1] || 'raw',
+      });
+    }
+  });
+  return sites;
+}
+
+/** gas/tests/*.test.js 全体の呼び出し箇所（比較に使う鍵だけ）。 */
 function rawCallSites() {
+  return rawCallDetails().map(function (x) { return x.key; }).sort();
+}
+
+/** 同上。落ちたときの文面のために、メソッド名まで添えたもの。 */
+function rawCallDetails() {
   const sites = [];
   testFiles().forEach(function (file) {
-    const original = fs.readFileSync(path.join(DIR, file), 'utf8');
-    const originalLines = original.split('\n');
-    const noiseFreeLines = stripNoise(original).split('\n');
-    let currentTest = null;
-    originalLines.forEach(function (line, i) {
-      const t = line.match(TEST_NAME_RE);
-      if (t) currentTest = t[1];
-      const codeLine = noiseFreeLines[i];
-      if (RAW_TOKEN_RE.test(codeLine)) {
-        assert.ok(currentTest, file + ': .raw の参照がどの test() の中か特定できません');
-        const method = (codeLine.match(RAW_METHOD_RE) || [])[1] || 'raw';
-        sites.push(file + ' / ' + currentTest + ' / raw.' + method);
-      }
+    rawSitesIn(file, fs.readFileSync(path.join(DIR, file), 'utf8')).forEach(function (x) {
+      sites.push(x);
     });
   });
-  return sites.sort();
+  return sites;
 }
 
 /**
@@ -116,16 +140,57 @@ function rawCallSites() {
  * なった際、それまで通常の操作手段で書かれていた検査から切り替えた）。
  */
 const ALLOWED = [
-  "kanban_flow.test.js / 期限が過ぎた通知からは取り消せない / raw.click",
-  "kanban_view_switch_fix1.test.js / タブ切替の読み取りが ok:false でも、選んだタブ側が表示され、隠れた盤面はドラッグしても送信されない / raw.drag",
-  "kanban_view_switch_fix1.test.js / タブ切替の読み取りが通信断（withFailureHandler）でも、選んだタブ側が表示されたまま / raw.drag",
-  "kanban_view_switch_fix2.test.js / 盤面が隠れているとき、カードの click でパネルが開かず apiUpdatePbi も飛ばない / raw.openCard",
-  "kanban_view_switch_fix2.test.js / 盤面が隠れているとき、ドラッグしても apiUpdateStatus は飛ばない / raw.drag",
-  "kanban_view_switch_fix2.test.js / 盤面が隠れているとき、「追加」ボタンでパネルが開かず apiCreatePbi も飛ばない / raw.clickAdd",
+  "kanban_flow.test.js / 期限が過ぎた通知からは取り消せない",
+  "kanban_view_switch_fix1.test.js / タブ切替の読み取りが ok:false でも、選んだタブ側が表示され、隠れた盤面はドラッグしても送信されない",
+  "kanban_view_switch_fix1.test.js / タブ切替の読み取りが通信断（withFailureHandler）でも、選んだタブ側が表示されたまま",
+  "kanban_view_switch_fix2.test.js / 盤面が隠れているとき、カードの click でパネルが開かず apiUpdatePbi も飛ばない",
+  "kanban_view_switch_fix2.test.js / 盤面が隠れているとき、ドラッグしても apiUpdateStatus は飛ばない",
+  "kanban_view_switch_fix2.test.js / 盤面が隠れているとき、「追加」ボタンでパネルが開かず apiCreatePbi も飛ばない",
 ].sort();
 
 test('h.raw.* の呼び出し箇所は、この一覧にある6件だけである', () => {
+  const detail = rawCallDetails()
+    .map(function (x) { return x.key + '（raw.' + x.method + '）'; }).sort().join('\n');
   assert.deepEqual(rawCallSites(), ALLOWED,
     'raw.* の呼び出し箇所が増減した。新しい箇所は「実ブラウザでは到達できない経路を'
-    + 'あえて検査する」正当な理由があるかを確認したうえで、この一覧を書き換えること。');
+    + 'あえて検査する」正当な理由があるかを確認したうえで、この一覧を書き換えること。'
+    + '\n実際の箇所:\n' + detail);
+});
+
+// ---------------------------------------------------------------------------
+// 走査そのものの検査（この監査が素通りしないこと）
+// ---------------------------------------------------------------------------
+
+test('角括弧でのプロパティアクセスも見つける', () => {
+  // 文字列リテラルの中身は stripNoise が落とすので、均しておかないと
+  // `h['raw']` はどこにも `.raw` の並びを残さず、監査を素通りする。
+  const src = [
+    "test('ぬけみち', () => {",
+    "  h['raw'].drag('PBI-001', 'Ready');",
+    '});',
+  ].join('\n');
+  assert.deepEqual(rawSitesIn('x.test.js', src).map(function (x) { return x.key; }),
+    ['x.test.js / ぬけみち']);
+});
+
+test('許可済みの箇所を書き直しても、比較に使う鍵は変わらない', () => {
+  // 別名束縛・改行に書き換えるとメソッド名は総称の 'raw' になる。鍵にメソッド名まで
+  // 入れると、振る舞いを変えていないのにこの監査が落ちる（コメントの約束と食い違う）。
+  const plain = "test('ある検査', () => {\n  h.raw.drag('PBI-001', 'Ready');\n});";
+  const alias = "test('ある検査', () => {\n  const rr = h.raw;\n  rr.drag('PBI-001', 'Ready');\n});";
+  const wrapped = "test('ある検査', () => {\n  h.raw\n    .drag('PBI-001', 'Ready');\n});";
+  const keys = function (src) { return rawSitesIn('x.test.js', src).map(function (x) { return x.key; }); };
+  assert.deepEqual(keys(plain), ['x.test.js / ある検査']);
+  assert.deepEqual(keys(alias), keys(plain));
+  assert.deepEqual(keys(wrapped), keys(plain));
+});
+
+test('コメントや文字列の中の .raw は拾わない', () => {
+  const src = [
+    "test('ある検査', () => {",
+    '  // h.raw.drag をここでは使わない',
+    "  const label = 'h.raw.drag';",
+    '});',
+  ].join('\n');
+  assert.deepEqual(rawSitesIn('x.test.js', src), []);
 });

@@ -94,3 +94,53 @@ test('障害物の要約はファイル別に数え、雛形行を除く', () =>
 test('障害物の要約は空でも 0 で返る', () => {
   assert.deepEqual(summarizeImpediment(null, null), { open: 0, resolved: 0 });
 });
+
+// ---------------------------------------------------------------------------
+// 数字（velocity.csv）とゴール（最新スプリントフォルダの sprint_backlog.md）は
+// 出所が違う。ずれたまま並べると、別々のスプリントの数字と目的が1行に混ざる。
+// ---------------------------------------------------------------------------
+
+/** ひな形と同じ形の sprint_backlog.md。 */
+const backlogMd = (sprintName, goal) => [
+  '# スプリントバックログ - ' + sprintName,
+  '',
+  '## スプリントゴール',
+  goal,
+  '',
+  '## スプリント情報',
+  '| 項目 | 内容 |',
+  '|------|------|',
+  '| スプリント番号 | ' + sprintName + ' |',
+  '| 開始日 | 2026-09-01 |',
+].join('\n');
+
+const VEL2 = [
+  { sprint: 'sprint002', planned_points: '25', completed_points: '0',
+    carried_over_points: '0', sprint_start: '2026-09-01', sprint_end: '2026-09-14' },
+];
+
+test('velocity.csv と sprint_backlog.md が同じスプリントならゴールを出す', () => {
+  const s = summarizeSprint(VEL2, backlogMd('sprint002', '動くものを出す'));
+  assert.equal(s.sprint, 'sprint002');
+  assert.equal(s.goal, '動くものを出す');
+});
+
+test('表記が揺れていても同じスプリントとして扱う', () => {
+  // product_backlog.csv 側は "Sprint 002"、velocity.csv 側は "sprint002"（実データ）。
+  assert.equal(summarizeSprint(VEL2, backlogMd('Sprint 002', '動くものを出す')).goal, '動くものを出す');
+});
+
+test('velocity.csv と sprint_backlog.md がずれていたらゴールを出さない', () => {
+  // 次のスプリントのフォルダだけ先にできている状況。sprint003 のゴールを
+  // sprint002 の数字の隣に並べると、読み手はどちらの話か区別できない。
+  const s = summarizeSprint(VEL2, backlogMd('sprint003', '次の目的'));
+  assert.equal(s.sprint, 'sprint002');
+  assert.equal(s.goal, '', '別のスプリントのゴールが混ざっている: ' + s.goal);
+  assert.equal(s.planned, 25, '数字まで落としている');
+});
+
+test('sprint_backlog.md が名乗っていなければ、そのままゴールを出す', () => {
+  // 突き合わせようがない。ずれているとは限らないので落とさない（今までどおり）。
+  const s = summarizeSprint(VEL2, '## スプリントゴール\n\n動くものを出す\n');
+  assert.equal(s.goal, '動くものを出す');
+});

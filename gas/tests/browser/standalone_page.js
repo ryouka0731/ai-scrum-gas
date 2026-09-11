@@ -12,7 +12,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { responses } = require('./fixtures.js');
+const { responses, ROWS } = require('./fixtures.js');
 
 const GAS_DIR = path.join(__dirname, '..', '..');
 const KANBAN_PATH = path.join(GAS_DIR, 'kanban.html');
@@ -37,6 +37,7 @@ function stubScript(delayMs) {
     + '(function () {\n'
     + '  window.__pageToken = "__PAGE_TOKEN__";\n'
     + '  var RESPONSES = ' + JSON.stringify(responses()) + ';\n'
+    + '  var ROWS = ' + JSON.stringify(ROWS) + ';\n'
     + '  var DELAY = ' + Number(delayMs || 0) + ';\n'
     + '  window.__calls = [];\n'
     + '  window.__errors = [];\n'
@@ -57,6 +58,14 @@ function stubScript(delayMs) {
     + '          if (m === "apiGetView") {\n'
     + '            ok(RESPONSES[args[0]]\n'
     + '              || { ok: false, name: args[0], message: "見本がありません", view: null, summary: null });\n'
+    + '          } else if (m === "apiDeletePbi") {\n'
+    // 本物の apiDeletePbi は「消した行そのもの」を返す（取り消しに使う）。ここで
+    // null を返すと、「取り消す」を押した先が必ず restorePbi の
+    // 「取り消せませんでした」の枝になる。落ちはしないが、取り消しを試す検査が
+    // 「押せた」だけで通る空振りになるため、見本でも行を返す。
+    + '            var removed = null;\n'
+    + '            ROWS.forEach(function (r) { if (String(r.id) === String(args[0])) removed = r; });\n'
+    + '            ok({ ok: true, board: RESPONSES.board.view, id: null, removed: removed });\n'
     + '          } else {\n'
     + '            ok({ ok: true, board: RESPONSES.board.view, id: null, removed: null });\n'
     + '          }\n'
