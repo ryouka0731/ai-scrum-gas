@@ -52,14 +52,29 @@ const VELOCITY = [
     sprint_start: '2026-08-29', sprint_end: '2026-09-11', notes: '' },
 ];
 
-// スプリントゴールは sprint_backlog.md に人が書く文章。URL を貼ることは普通にあり、
-// 日本語と空白だけの文章と違って「途中で折り返せない長い連なり」を持つ。
-// **消さないこと。** 消すと `#summary .goal` の overflow-wrap の検査（375px で
-// ページが横に伸びないこと）が空振りになる。
+// sprintXXX/sprint_backlog.md の見本。バーンダウンのビューとスプリントの要約
+// （ゴール）の2つがここから作られる。
+//
+// スプリントゴールは人が書く文章。URL を貼ることは普通にあり、日本語と空白だけの
+// 文章と違って「途中で折り返せない長い連なり」を持つ。**消さないこと。** 消すと
+// `#summary .goal` の overflow-wrap の検査（375px でページが横に伸びないこと）が
+// 空振りになる。
+//
+// 「バーンダウン」の節も**消さないこと。** 節が無いと buildBurndownGrid が null を
+// 返し、バーンダウンのビューは「まだありません。」だけになる。7つあるビューのうち
+// そこだけ実ブラウザで一度も表を描かない状態に戻る（列の見出しの書式は
+// scrum/sprintSAMPLE/sprint_backlog.md に合わせてある）。
 const SPRINT_MD = [
   '# スプリントバックログ', '', '## スプリントゴール', '',
   '同期の失敗が画面から分かり、その場で直せる状態にする。'
     + ' 詳細: https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefghij/edit',
+  '', '## バーンダウン', '',
+  '| 日付 | 残タスク数 | 残ポイント |',
+  '|------|------------|------------|',
+  '| 2026-08-29 | 12 | 14 |',
+  '| 2026-09-01 | 9 | 11 |',
+  '| 2026-09-04 | 5 | 6 |',
+  '| 2026-09-08 | 2 | 3 |',
   '', '## PBI', '',
 ].join('\n');
 
@@ -79,7 +94,9 @@ function viewFor(name) {
     // 完了の要約は完了バックログ自身の集計（web_app.js の apiGetView('done') と同じ）。
     // ここを null に戻すと、やることタブの中で要約の行が現れて消える状態に逆戻りする。
     case 'done': return { view: buildDoneView(ROWS), summary: summarizeBacklog(ROWS, KANBAN_STATUSES) };
-    case 'burndown': return { view: buildBurndownView(ROWS, VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
+    // buildBurndownView が受け取るのは sprint_backlog.md の本文ひとつだけ。
+    // ここに ROWS（PBI の配列）を渡していたため、view はずっと null だった。
+    case 'burndown': return { view: buildBurndownView(SPRINT_MD), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
     case 'velocity': return { view: buildVelocityView(VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
     case 'roadmap': return { view: buildRoadmapView(ROWS, VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
     case 'impediment':

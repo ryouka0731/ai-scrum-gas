@@ -32,6 +32,7 @@ const assert = require('node:assert/strict');
 
 const { chromePath, launch } = require('./chrome_session.js');
 const { buildStandalonePage, viewportContentFromDoGet } = require('./standalone_page.js');
+const { responses, VIEW_NAMES } = require('./fixtures.js');
 const {
   measureOne, installProbe, WIDTHS, SCHEMES, HEIGHT, TABLE_VIEW_LABEL, HELP_PRESS_SPOTS,
 } = require('./measure.js');
@@ -403,6 +404,38 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
     assert.deepEqual(errors, [], 'ページで JS 例外が出ている');
   });
 
+  test('バーンダウンのビューが実ブラウザで表として描かれる', async () => {
+    // 見本の burndown は buildBurndownView(ROWS, VELOCITY) と呼んでいた。あの関数が
+    // 受け取るのは sprint_backlog.md の本文ひとつだけなので view はずっと null で、
+    // 7つあるビューのうちここだけ実ブラウザで一度も表を描いていなかった。
+    // 「見本を直したつもりで、まだ null だった」を画面の側から塞ぐ。
+    const width = 1024;
+    await session.open({ html: html, width: width, height: HEIGHT, scheme: 'light' });
+    await installProbe(session);
+    await session.waitFor('return window.__probe.boardReady() ? 1 : 0', width + 'px の初回読み込み');
+    await session.evaluate('return window.__probe.clickIn("tabs", "スプリント");');
+    await session.evaluate('return window.__probe.clickIn("views", "バーンダウン");');
+    await session.waitFor('return window.__probe.tableReady() ? 1 : 0', 'バーンダウンの表の読み込み');
+
+    const t = await session.evaluate(
+      'var host = document.getElementById("table-view");'
+      + 'return {'
+      + '  rows: host.querySelectorAll("table tbody tr").length,'
+      + '  headers: Array.prototype.map.call(host.querySelectorAll("table thead th"),'
+      + '    function (e) { return (e.textContent || "").replace(/[?？]$/, "").trim(); }),'
+      + '  text: (host.textContent || "").trim()'
+      + '};');
+
+    assert.equal(t.rows, 4, 'バーンダウンの行が描かれていない: ' + JSON.stringify(t));
+    assert.deepEqual(t.headers, ['日付', '残タスク数', '残ポイント'],
+      'バーンダウンの見出しが見本と違う: ' + JSON.stringify(t.headers));
+    assert.equal(t.text.indexOf('まだありません'), -1,
+      'バーンダウンが「まだありません。」のまま（見本の view がまだ null）');
+
+    const errors = await session.evaluate('return (window.__errors || []).slice();');
+    assert.deepEqual(errors, [], 'ページで JS 例外が出ている');
+  });
+
   test('viewport の meta を落とすと測定が成立せず、失敗になる', async () => {
     // 「meta の再現を忘れる」は黙って 980px 相当で描き、狭い画面の確認をまるごと
     // 無意味にする。忘れたら通るのではなく落ちることを、ここで実際に確かめる。
@@ -439,4 +472,34 @@ test('表のビューのラベルが kanban.html の TABS に実在する', () =
   const src = fs.readFileSync(require('./standalone_page.js').KANBAN_PATH, 'utf8');
   assert.ok(src.indexOf("label: '" + TABLE_VIEW_LABEL + "'") !== -1,
     'kanban.html の TABS に「' + TABLE_VIEW_LABEL + '」のビューが無い');
+});
+
+// 見本そのものの検査（Chrome が無くても走る）。
+//
+// 「引数を取り違えて null のまま」「空の配列を渡していて表が出ない」は、画面側の
+// 検査からは「たまたま何も起きていない」としか見えず、静かに空振りする。この案件では
+// 実際に burndown で1段階まるごと見逃している。見本の側で先に止める。
+test('見本の7つのビューが、どれも描くものを持っている', () => {
+  const res = responses();
+
+  /** そのビューが実際に描く行の数。形はビューごとに違う（renderTable の分岐と同じ）。 */
+  function rowCountOf(view) {
+    if (!view) return 0;
+    if (view.table) return view.table.rows.length;
+    if (view.open !== undefined && view.resolved !== undefined) return view.open.length + view.resolved.length;
+    if (view.rows) return view.rows.length;   // 一覧・完了（columns も持つので先に見る）
+    if (view.columns) {                        // 盤面（columns は列で、中にカードが入る）
+      return view.columns.reduce(function (n, c) { return n + c.cards.length; }, 0);
+    }
+    return 0;
+  }
+
+  VIEW_NAMES.forEach(function (name) {
+    const r = res[name];
+    assert.ok(r, name + ' の見本がない');
+    assert.equal(r.ok, true, name + ' の見本が ok:false');
+    assert.ok(r.view, name + ' の見本の view が null（画面には「まだありません。」しか出ない）');
+    assert.ok(rowCountOf(r.view) > 0,
+      name + ' の見本が0行（画面には「ありません。」しか出ず、その画面の検査が空振りする）');
+  });
 });
