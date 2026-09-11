@@ -52,9 +52,15 @@ const VELOCITY = [
     sprint_start: '2026-08-29', sprint_end: '2026-09-11', notes: '' },
 ];
 
+// スプリントゴールは sprint_backlog.md に人が書く文章。URL を貼ることは普通にあり、
+// 日本語と空白だけの文章と違って「途中で折り返せない長い連なり」を持つ。
+// **消さないこと。** 消すと `#summary .goal` の overflow-wrap の検査（375px で
+// ページが横に伸びないこと）が空振りになる。
 const SPRINT_MD = [
   '# スプリントバックログ', '', '## スプリントゴール', '',
-  '同期の失敗が画面から分かり、その場で直せる状態にする。', '', '## PBI', '',
+  '同期の失敗が画面から分かり、その場で直せる状態にする。'
+    + ' 詳細: https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefghij/edit',
+  '', '## PBI', '',
 ].join('\n');
 
 const IMPEDIMENT_OPEN = [

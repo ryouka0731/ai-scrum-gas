@@ -52,6 +52,9 @@ async function measureOne(session, html, spec) {
   const board = {
     viewport: await session.evaluate('return window.__probe.viewport();'),
     overflow: await session.evaluate('return window.__probe.overflow();'),
+    // `.column` の `min-width: 0`。今の見本では振る舞いに現れない備え（z-index と同型）。
+    // 詳細は probe_source.js の columnMinWidth のコメントを参照。
+    columnMinWidth: await session.evaluate('return window.__probe.columnMinWidth();'),
     hidden: await session.evaluate('return window.__probe.hiddenAudit();'),
     tap: await session.evaluate('return window.__probe.tapTargets();'),
     contrast: await session.evaluate('return window.__probe.contrastAudit();'),

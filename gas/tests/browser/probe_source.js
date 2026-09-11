@@ -157,6 +157,22 @@
     },
 
     /**
+     * `.column` の `min-width: 0` が明示されているか。
+     *
+     * `#board` / `.row > .field` の同種の `min-width: 0` は消すと「ページが横に伸びる」で
+     * 落ちる（実測で確認済み）が、`.column` だけは消しても**今の見本では振る舞いに
+     * 現れない**（実測で0件）。`.card .title` の `overflow-wrap: anywhere` が先に効いて
+     * カードの中身を折り返すため、列の min-content がそもそも閾値に達しない。
+     * 見本を歪めてまで振る舞いで落とすのは、実際には起こらない状況を検査に固定する
+     * ことになるのでやらない。`z-index` と同じく、`.card .title` 側の折り返しが
+     * 変わったときのための備えとして、宣言そのものが在ることを固定しておく。
+     */
+    columnMinWidth: function () {
+      var col = document.querySelector('.column');
+      return col ? getComputedStyle(col).minWidth : null;
+    },
+
+    /**
      * `td` の中に、途中で折り返せない長い連なり（URL、PBI-006 の見本）があれば、
      * そのセルの幅を測る。
      *

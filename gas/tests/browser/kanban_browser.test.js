@@ -32,7 +32,7 @@ const assert = require('node:assert/strict');
 
 const { chromePath, launch } = require('./chrome_session.js');
 const { buildStandalonePage, viewportContentFromDoGet } = require('./standalone_page.js');
-const { measureOne, WIDTHS, SCHEMES, HEIGHT, TABLE_VIEW_LABEL } = require('./measure.js');
+const { measureOne, installProbe, WIDTHS, SCHEMES, HEIGHT, TABLE_VIEW_LABEL } = require('./measure.js');
 
 /** 見本のデータから決まる、必ず出るはずの補足の件数。0件で空振りしないための錘。 */
 const EXPECTED_BOARD_HELPS = 10;   // 列見出し5 + カードの優先度5
@@ -140,6 +140,17 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
           assert.ok(c.width <= c.tableViewClientWidth,
             where + ': URL のセルが表の可視幅（' + c.tableViewClientWidth
             + 'px）より広い（' + c.width + 'px）。折り返せていない');
+        });
+
+        test('.column の min-width: 0 が明示されている', () => {
+          // `#board` / `.row > .field` の同種の min-width: 0 は消すと落ちるが、`.column` は
+          // `.card .title` の overflow-wrap が先に折り返すため、消しても今の見本では
+          // 振る舞いに現れない（実測で確認済み）。見本を歪めてまで振る舞いで落とすのは
+          // 実際には起こらない状況を検査に固定することになるのでやらない。z-index と同じく
+          // 「備えが在ること」（宣言そのもの）を固定しておく（`.card .title` 側が変わった
+          // ときのための備え）。
+          assert.equal(measured[where].board.columnMinWidth, '0px',
+            where + ': .column の min-width: 0 が明示されていない');
         });
 
         test('パネルの幅は、宣言どおり（380px）になる', () => {
@@ -280,6 +291,35 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
         width + 'px: 表が枠に収まってしまい、横スクロールの検査が空振りしている（scrollWidth '
         + o.tableView.scrollWidth + ' / clientWidth ' + o.tableView.clientWidth + '）');
     });
+  });
+
+  test('スプリントゴールの折り返せない連なりで、375px のページが横に伸びない', async () => {
+    // #summary .goal（overflow-wrap: anywhere）は board/list ビューには出ない
+    // （summarizeBacklog() の結果に goal が無い）ため、上の行列では一度も測っていない。
+    // スプリントゴールは sprint_backlog.md に人が書く文章（SPRINT_MD、fixtures.js）で、
+    // URL を貼ることは普通にある。心配なのはそこだけなので、ビューの計測を行列に
+    // 足さず、375px 単体でここだけ見る。
+    const width = 375;
+    await session.open({ html: html, width: width, height: HEIGHT, scheme: 'light' });
+    await installProbe(session);
+    await session.waitFor('return window.__probe.boardReady() ? 1 : 0', width + 'px の初回読み込み');
+    await session.evaluate('return window.__probe.clickIn("tabs", "スプリント");');
+    await session.evaluate('return window.__probe.clickIn("views", "バーンダウン");');
+    await session.waitFor('return document.querySelector("#summary .goal") ? 1 : 0',
+      width + 'px のスプリントゴールの表示');
+
+    const goalText = await session.evaluate(
+      'return (document.querySelector("#summary .goal") || {}).textContent || "";');
+    assert.ok(goalText.indexOf('docs.google.com') !== -1,
+      'スプリントゴールの見本が変わった（URL を含む文言が見つからない）: ' + goalText);
+
+    const o = await session.evaluate('return window.__probe.overflow();');
+    assert.ok(o.bodyScrollWidth <= o.rootClientWidth,
+      width + 'px: スプリントゴールでページが横に伸びた（body.scrollWidth ' + o.bodyScrollWidth
+      + 'px > ' + o.rootClientWidth + 'px）');
+    assert.ok(o.rootScrollWidth <= o.rootClientWidth,
+      width + 'px: スプリントゴールでページが横に伸びた（documentElement.scrollWidth '
+      + o.rootScrollWidth + 'px > ' + o.rootClientWidth + 'px）');
   });
 
   test('viewport の meta を落とすと測定が成立せず、失敗になる', async () => {
