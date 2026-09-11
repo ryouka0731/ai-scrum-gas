@@ -164,7 +164,8 @@ function buildSyncLogGrid(syncedAt, readFiles, warnings) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    VELOCITY_HEADERS, IMPEDIMENT_HEADERS, IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL,
+    VELOCITY_HEADERS, IMPEDIMENT_HEADERS, IMPEDIMENT_FIELDS,
+    IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL, isImpedimentPlaceholder,
     buildVelocityGrid, buildBurndownGrid, buildImpedimentGrid, buildDashboardGrid,
     buildSyncLogGrid, parsePublished,
   };

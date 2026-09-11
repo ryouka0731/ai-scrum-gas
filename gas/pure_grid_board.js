@@ -63,5 +63,5 @@ function buildRoadmapGrid(rows, velocityRows) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { KANBAN_STATUSES, ROADMAP_MARK, buildKanbanGrid, buildRoadmapGrid };
+  module.exports = { KANBAN_STATUSES, ROADMAP_MARK, realSprints, buildKanbanGrid, buildRoadmapGrid };
 }
