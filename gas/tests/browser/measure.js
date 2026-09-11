@@ -89,23 +89,10 @@ async function measureOne(session, html, spec) {
   await session.evaluate('return window.__probe.clickIn("views", ' + JSON.stringify(BOARD_VIEW_LABEL) + ');');
   await session.waitFor('return window.__probe.boardReady() ? 1 : 0', where + ' の盤面への戻り');
   const toast = await session.evaluate('return window.__probe.toastOverPanel();');
-  // パネルを閉じた状態での通知の中央寄せ。順序を入れ替えて隠さないこと。
-  // toastOverPanel（PBI-006 を消す）の直後にここで別のカードを消すと、375/600px で
-  // 中央寄せが崩れる（実測: left が本来の 15px ではなく 178.5px になり、
-  // documentElement.scrollWidth が 702px になる）。切り分け済みの実測:
-  //   - 3秒待っても直らない（10回×300msサンプルで固定値のまま）。
-  //   - document.body.style.display を none→'' に戻す強制リフローでも直らない。
-  //   - window.scrollTo(50, 0) を呼んでも scrollX は 0 のまま
-  //     （＝ページは実際にはスクロールできない。documentElement.scrollWidth の値は
-  //     どの要素も実際にその幅まで広がっていることに拠らない。body 配下を全走査しても
-  //     #toast 自身とその子孫以外に画面幅を超える要素は無い）。
-  //   - 最初に消すカードを PBI-002（長いが折り返せる CJK のタイトル）に変えると
-  //     再現しない。PBI-006（overflow-wrap: anywhere が実際に文字の途中で
-  //     折り返しを起こす、折り返す場所の無い連なり）のときだけ起こる。
-  // 以上から「待てば消える揺れ」ではなく、`#toast` の `width: fit-content` +
-  // `max-width` + auto margin による中央寄せの再計算が、overflow-wrap: anywhere で
-  // 強制的な文字単位の折り返しが起きた直後の再描画で狂う、実際に再現する現象と判断した
-  // （kanban.html は変更していない。判断と対応要否はチームリードに委ねる）。
+  // パネルを閉じた状態での通知の中央寄せ。順序を入れ替えて隠さないこと
+  // （toastOverPanel が PBI-006 を消した直後にここで別のカードを消すと、375/600px で
+  // 中央寄せが崩れる実測済みの現象がある。原因の切り分けと対象幅の絞り込みの理由は
+  // kanban_browser.test.js の「パネルが閉じているときは、通知が画面の中央のまま」参照）。
   const toastClosed = await session.evaluate('return window.__probe.toastCenteredWhilePanelClosed();');
 
   return {
