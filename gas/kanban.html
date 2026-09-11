@@ -14,6 +14,9 @@
     --shadow-2: 0 8px 24px rgba(16,24,40,.12), 0 2px 6px rgba(16,24,40,.06);
     --radius: 10px;
     --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+    /* パネルの幅。#panel と、それを避ける #toast の両方が読む。片方だけ直すと
+       通知の逃げ場がずれてまたパネルに被るため、値は1か所に持つ。 */
+    --panel-w: 380px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -115,7 +118,11 @@
   }
 
   #panel {
-    flex: 0 0 380px; align-self: stretch;
+    /* min-width を切らないと、flex 項目の自動的な最小の幅（= min-content）が下限になり、
+       flex-basis の 380px を上回って居座る（実測で 557px。901px の画面では盤面が
+       280px しか残らず、5列が各 40px まで潰れていた）。#board / .column / .row > .field と
+       同じ手で切る。通知がパネルを避ける計算も、この幅が宣言どおりであることに拠る。 */
+    flex: 0 0 var(--panel-w); min-width: 0; align-self: stretch;
     background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
     box-shadow: var(--shadow-1); padding: var(--sp-4);
     display: flex; flex-direction: column; gap: var(--sp-3);
@@ -144,7 +151,12 @@
   }
 
   #toast {
-    position: fixed; left: 50%; bottom: var(--sp-5); transform: translateX(-50%);
+    /* 中央寄せに transform を使わない。position: fixed の子孫にとって transform は
+       包含ブロックを作るため、この中に fixed のものを置いた人が黙って嵌まる
+       （補足の本文がまさに fixed）。left/right と margin-inline: auto なら副作用が無く、
+       下の「パネルを避ける」上書きも right を差し替えるだけで済む。 */
+    position: fixed; left: 0; right: 0; bottom: var(--sp-5);
+    width: fit-content; margin-inline: auto;
     display: flex; align-items: center; gap: var(--sp-4);
     background: var(--ink); color: var(--bg);
     border-radius: var(--radius); box-shadow: var(--shadow-2);
@@ -164,6 +176,19 @@
      ソース順が先の規則は負ける）。 */
   @media (max-width: 900px) {
     #toast { top: var(--sp-3); bottom: auto; }
+  }
+  /* 広い画面ではパネルが右に居座るので、下端中央の通知はパネルの入力欄と重なる
+     （901px で4件、1024px で2件、1440px でも f-size が1件、実測）。通知は10秒消えず、
+     利用者からは「保存した直後に特定の欄だけ反応しなくなり、しばらくすると直る」と
+     しか見えないため、原因の見当が付かない。パネルが開いている間だけ、盤面の側へ寄せる。
+     right をパネルの左端まで引くと、本体規則の width: fit-content と
+     margin-inline: auto がその帯の中で中央に置いてくれる（帯より広い文面は帯で折り返る）。
+     パネルが閉じているときは動かさない（画面の中央のままにする）。 */
+  @media (min-width: 901px) {
+    #main:has(#panel:not([hidden])) ~ #toast {
+      left: var(--sp-5);
+      right: calc(var(--panel-w) + var(--sp-4) + var(--sp-5));   /* パネル + #main の gap + 余白 */
+    }
   }
 
   .tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--line); }

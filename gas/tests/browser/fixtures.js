@@ -31,8 +31,9 @@ const ROWS = [
     sprint: '', acceptance_criteria: '帯が出る', updated_at: '2026-09-04 13:00:00' },
   { id: 'PBI-005', title: 'velocity.csv に無いスプリントが付いた項目', status: 'New', priority: 'Medium', size: '1',
     sprint: '旧スプリント', acceptance_criteria: '選択肢に残る', updated_at: '2026-09-05 09:00:00' },
-  // 途中で折り返せない長い連なり（URL）。`.card .title` の overflow-wrap が無いと
-  // カードから溢れてページごと横に伸びるので、これが無いとその検査が空振りする。
+  // この PBI は「途中で折り返せない長い連なり」（URL）を持つために在る。**消さないこと。**
+  // 消すと `.card .title` の overflow-wrap の検査が空振りになる（規則を消しても落ちなく
+  // なる）。日本語と空白だけのタイトルは、規則が無くても折り返せてしまうため。
   // 優先度は空にしておく（用語集に無いので補足が増えず、補足の件数を動かさない）。
   { id: 'PBI-006',
     title: 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefghij/edit#gid=0 の共有設定を直す',

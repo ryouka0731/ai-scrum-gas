@@ -54,9 +54,6 @@ function assertHelpIsReadable(h, where) {
     + h.scrollWidth + ' > clientWidth ' + h.clientWidth + '）');
 }
 
-/** 通知は狭い画面では上端、広い画面では下端に出る（`@media (max-width: 900px)` の境目）。 */
-const NARROW_MAX = 900;
-
 /** 補足を押した結果1件の判定。押した先が違っても、振る舞いは同じでなければならない。 */
 function assertPressOpensOnlyTheHelp(r, where) {
   const at = where + ' の ' + r.where + ' の ?';
@@ -224,32 +221,18 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
             where + ': 「取り消す」の当たり判定が 24×24 未満: ' + JSON.stringify(t.toast.undo));
         });
 
-        if (width <= NARROW_MAX) {
-          test('狭い画面では、通知がパネルの操作部を覆わない', () => {
-            // 通知を下端に置いたままだと、全幅で縦に積まれたパネルの入力欄・保存ボタンを
-            // 10 秒間覆う。`@media (max-width: 900px)` で上端へ寄せたのがその対処。
-            const t = measured[where].toast;
-            assert.ok(t.controls.length >= 8,
-              where + ': パネルの操作部が ' + t.controls.length + ' 件しか測れていない');
-            assert.deepEqual(t.covered.map(function (c) { return c.what; }), [],
-              where + ': 通知がパネルの操作部を覆っている');
-          });
-        } else {
-          test('広い画面でも、通知は保存・削除・取り消すを覆わない', () => {
-            // 広い画面では通知が下端に出るため、パネルの入力欄と重なる帯が残っている
-            // （第2段階で park された既知の欠陥。task-9b-report.md に実測を載せた）。
-            // 覆われるのが入力欄までに留まり、押せないと作業が止まるものへ広がらないことを
-            // ここで固定する。直したら、上の狭い画面と同じ「1件も覆わない」に締め直すこと。
-            const t = measured[where].toast;
-            assert.ok(t.controls.length >= 8,
-              where + ': パネルの操作部が ' + t.controls.length + ' 件しか測れていない');
-            const blocking = t.covered.filter(function (c) {
-              return /^button#panel-(save|delete)/.test(c.what);
-            });
-            assert.deepEqual(blocking.map(function (c) { return c.what; }), [],
-              where + ': 通知が保存／削除ボタンを覆っている（10 秒間その作業が止まる）');
-          });
-        }
+        test('通知がパネルの操作部を覆わない', () => {
+          // 通知は10秒消えない。その間その入力欄が触れなくなるが、利用者からは
+          // 「保存した直後に特定の欄だけ反応しなくなり、しばらくすると直る」としか
+          // 見えず、壊れているのか自分の操作が悪いのか判断できない。
+          // 狭い画面は上端へ寄せる（`@media (max-width: 900px)`）、広い画面は
+          // パネルの外側へ寄せる（`@media (min-width: 901px)` の `:has()`）で避けている。
+          const t = measured[where].toast;
+          assert.ok(t.controls.length >= 8,
+            where + ': パネルの操作部が ' + t.controls.length + ' 件しか測れていない');
+          assert.deepEqual(t.covered.map(function (c) { return c.what; }), [],
+            where + ': 通知がパネルの操作部を覆っている');
+        });
       });
     });
   });
