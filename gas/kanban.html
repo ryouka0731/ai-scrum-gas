@@ -165,11 +165,28 @@
        足されると黙って隠れてしまうため、明示しておく。 */
     z-index: 10;
   }
+  /* PBI のタイトルに途中で折り返せない長い連なり（URL 等）があると、#toast-text の
+     min-content 幅がその連なりの分だけ大きくなる。#toast は flex（.spacer で
+     「取り消す」を右へ押しやる作り）なので、折り返せないと #toast-text がその幅
+     まで広がり、「取り消す」が #toast の可視幅（max-width）どころか画面の外まで
+     押し出されて押せなくなる（実測: 375px でも 1440px でも起こる。#panel が
+     min-width: 0 を切らずに 380px の宣言を守れなかったのと同じ「flex 項目の
+     自動的な最小幅」の罠）。.card .title / #summary .goal / td と同じ手で折り返す。
+     `min-width: 0` だけでは足りない（試した: 位置は直るが、折り返さない文字自体が
+     自分の箱からはみ出し、901px で通知がパネルの操作部を覆う形で実際に検査が
+     落ちた）。overflow-wrap: anywhere は「どこでも折り返せる」ことで自動的な
+     最小幅そのものを小さくするため、これ単体で両方直る（実測: 単体で全件通過）。 */
+  #toast-text { overflow-wrap: anywhere; }
   #toast button {
     background: transparent; border-color: transparent; color: var(--bg);
     text-decoration: underline; padding: var(--sp-1) var(--sp-2);
   }
   #toast button:hover { background: rgba(255,255,255,.12); }
+  /* #toast-text が折り返しても、まだ隣にいる「取り消す」を flex-shrink で
+     縮めるだけの余地がある。縮むと自分自身の中身（アイコン＋文字）の折り返しが
+     悪化して縦に伸び、当たり判定の形が崩れる（実測）。押せる操作の形を保つため
+     縮ませない。 */
+  #toast-undo { flex: none; }
   /* 狭い画面では #panel が全幅で縦に積まれ、下端の入力欄・保存ボタンが画面下部に来る。
      通知を bottom に置いたままだと、消えるまでの10秒間それらを覆ってしまう。
      #toast 本体の規則より後ろに置き、bottom を確実に上書きする（同じ詳細度なので

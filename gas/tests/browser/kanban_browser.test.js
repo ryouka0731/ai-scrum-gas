@@ -236,6 +236,10 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
         });
 
         test('通知は画面に収まり、重なった相手より手前に来て、取り消せる', () => {
+          // 消すのは PBI-006（URL を含む長いタイトル）。かつて本体に実バグがあり
+          // （`#toast-text` に overflow-wrap が無く、折り返せない連なりで「取り消す」が
+          // 画面外へ押し出されて押せなくなっていた。375px でも 1440px でも起きていた）、
+          // 直した今もこの経路（可視率・当たり判定の両方）で退行を検出できる。
           const t = measured[where].toast;
           assert.equal(t.panelHidden, false, where + ': 通知の最中にパネルが開いていない（前提が崩れた）');
           assert.equal(t.toast.hidden, false, where + ': 通知が出ていない');
@@ -253,6 +257,18 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
             where + ': 通知の重なり順が明示されていない（DOM 順に頼っている）');
           assert.ok(t.toast.undo.width >= 24 - 0.01 && t.toast.undo.height >= 24 - 0.01,
             where + ': 「取り消す」の当たり判定が 24×24 未満: ' + JSON.stringify(t.toast.undo));
+        });
+
+        test('通知の幅は、宣言どおり（min(560px, 92vw)）を超えない', () => {
+          // `#toast-text` が折り返すようになった今、通知の見た目（画面に収まる・
+          // 覆わない）だけでは `max-width` を消しても落ちない（実測で確認済み。
+          // 折り返しさえすればどんな幅でも画面には収まってしまうため）。
+          // `#panel` の幅と同じく、宣言した上限そのものを直接測る。
+          const t = measured[where].toast;
+          const limit = Math.min(560, 0.92 * width);
+          assert.ok(t.toast.rect.width <= limit + 0.5,
+            where + ': 通知の幅が min(560px, 92vw)（' + limit + 'px）を超えている（'
+            + t.toast.rect.width + 'px）');
         });
 
         test('通知がパネルの操作部を覆わない', () => {

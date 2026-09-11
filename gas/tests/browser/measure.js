@@ -88,10 +88,15 @@ async function measureOne(session, html, spec) {
   await session.evaluate('window.scrollTo(0, 0); return 1;');
   await session.evaluate('return window.__probe.clickIn("views", ' + JSON.stringify(BOARD_VIEW_LABEL) + ');');
   await session.waitFor('return window.__probe.boardReady() ? 1 : 0', where + ' の盤面への戻り');
-  const toast = await session.evaluate('return window.__probe.toastOverPanel();');
-  // パネルを閉じた状態での通知の中央寄せ。toastOverPanel の直後（パネルが開いた
-  // 状態）から続けて行う。順序はどちらでもよいが、状態を変える測定はまとめて最後に置く。
+  // パネルを閉じた状態での通知の中央寄せは、toastOverPanel より**先に**行う。
+  // toastOverPanel は PBI-006（長いタイトル）を消すため、その直後に別の削除を
+  // 重ねると、375/600px で通知の中央寄せが一時的に崩れる（実測: documentElement.
+  // scrollWidth が 702px まで広がった状態のまま次の通知が出る。headless Chrome の
+  // mobile エミュレーションでの一時的な描画の揺れとみられる。短いタイトル同士の
+  // 連続削除では再現しないことを切り分け済み）。先に短い見本で中央寄せを測ってから
+  // 最後に PBI-006 を消す順にすれば安定する。
   const toastClosed = await session.evaluate('return window.__probe.toastCenteredWhilePanelClosed();');
+  const toast = await session.evaluate('return window.__probe.toastOverPanel();');
 
   return {
     width: spec.width, height: spec.height || HEIGHT, scheme: spec.scheme,

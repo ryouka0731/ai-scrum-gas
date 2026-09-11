@@ -378,9 +378,20 @@
      * 上端へ寄せたのがその対処で、`z-index` を明示したのも同じ場面のため。
      *
      * 手順は実際の道筋のとおり: 1件消して通知を出し、消えないうちに別のカードを開く。
+     *
+     * 消すカードは PBI-006（fixtures.js。URL を含む長いタイトル）を狙う。先頭カード
+     * （PBI-001、短いタイトル）だと通知の文面が常に短く（実測 483px）、
+     * `#toast { max-width: min(560px, 92vw); }` や `#toast-text` の overflow-wrap が
+     * 効く場面が一度も来ない（実測で確認済み）。新しい見本は足さず、既存の PBI-006 を
+     * 使い回す（表のセルの overflow-wrap を確かめたのと同じ手）。
+     *
+     * かつて本体に実バグがあり（`#toast-text` に overflow-wrap が無く、折り返せない
+     * 連なりで「取り消す」が画面外へ押し出されて押せなくなっていた）、直した今も
+     * その経路をここで測り続けることに意味がある。
      */
     toastOverPanel: async function () {
-      var firstCard = document.querySelector('#board .card');
+      var firstCard = document.querySelector('#board .card[data-id="PBI-006"]')
+        || document.querySelector('#board .card');
       if (!firstCard) throw new Error('盤面にカードがありません');
       firstCard.click();                                  // パネルが開く
       await frame();
