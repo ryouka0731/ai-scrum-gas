@@ -27,3 +27,16 @@ test('解決策は空白だけでは通らない', () => {
   assert.equal(validateResolution(null).ok, false);
   assert.equal(validateResolution('再起動した').ok, true);
 });
+
+test('（）だけで囲んだタイトルは雛形の行と見分けられないので拒否する（前後の空白は無視）', () => {
+  const msg = 'タイトルを（）だけで囲まないでください。雛形の行と見分けられなくなります。';
+  assert.deepEqual(validateImpedimentFields({ title: ' （サーバ停止） ', reported_by: 'マヤ' }), { ok: false, errors: [msg] });
+  assert.deepEqual(validateImpedimentFields({ title: '（）', reported_by: 'マヤ' }).errors, [msg]);
+  assert.equal(validateImpedimentFields({ title: '（仮）サーバ停止', reported_by: 'マヤ' }).ok, true);
+  assert.equal(validateImpedimentFields({ title: 'サーバ停止（本番）', reported_by: 'マヤ' }).ok, true);
+});
+
+test('GAS の共有グローバルに汎用名 blank_ を置かない', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'pure_impediment_validate.js'), 'utf8');
+  assert.doesNotMatch(src, /function blank_\(/);
+});

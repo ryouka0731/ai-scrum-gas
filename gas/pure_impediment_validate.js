@@ -8,20 +8,25 @@
 // id / reported_at / status / resolved_at / resolution はサーバが決める。
 const IMPEDIMENT_EDITABLE_FIELDS = ['title', 'description', 'reported_by', 'sprint'];
 
-function blank_(v) {
+function impBlank_(v) {
   return String(v === undefined || v === null ? '' : v).trim() === '';
 }
 
 function validateImpedimentFields(fields) {
   const f = fields || {};
   const errors = [];
-  if (blank_(f.title)) errors.push('タイトルを入力してください。');
-  if (blank_(f.reported_by)) errors.push('報告者を入力してください。');
+  const title = String(f.title === undefined || f.title === null ? '' : f.title).trim();
+  if (!title) errors.push('タイトルを入力してください。');
+  // 雛形の行（（障害物タイトル））と同じ形は、一覧から隠れてしまうため受け付けない。
+  else if (title.charAt(0) === '（' && title.charAt(title.length - 1) === '）') {
+    errors.push('タイトルを（）だけで囲まないでください。雛形の行と見分けられなくなります。');
+  }
+  if (impBlank_(f.reported_by)) errors.push('報告者を入力してください。');
   return { ok: errors.length === 0, errors: errors };
 }
 
 function validateResolution(text) {
-  return blank_(text)
+  return impBlank_(text)
     ? { ok: false, errors: ['解決策を入力してください。'] }
     : { ok: true, errors: [] };
 }
