@@ -458,9 +458,12 @@ function withImpedimentWrite_(first, mutate) {
 }
 
 /** 障害物の競合・不在の定型文。 */
-function impedimentMessage_(reason, retryHint) {
+function impedimentMessage_(reason, retryHint, id) {
   if (reason === 'conflict') return '他の変更が先に入っています。最新の内容に更新しました。' + (retryHint || '');
   if (reason === 'not_found') return 'この障害物が見つかりません。最新の内容に更新しました。';
+  if (reason === 'duplicate_id') {
+    return '未解決と解決済に、同じ ID の別の障害物があります（' + String(id || '').trim() + '）。CSV の ID を直してから操作してください。';
+  }
   return '入力が不正です。';
 }
 
@@ -506,9 +509,14 @@ function apiResolveImpediment(id, resolution, expected) {
     if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
     const r = planResolve(open, resolved, id, String(resolution), expected, todayText_());
     if (!r.ok) {
-      const message = (r.reason === 'conflict' && !open.some(function (x) { return String(x.id || '').trim() === String(id || '').trim(); }))
+      const inOpen = open.some(function (x) {
+        return !isImpedimentPlaceholder(x) && String(x.id || '').trim() === String(id || '').trim();
+      });
+      const message = (r.reason === 'conflict' && !inOpen)
         ? 'この障害物は既に解決済みです。最新の内容に更新しました。'
-        : impedimentMessage_(r.reason, '内容を確認し、もう一度押すと解決します。');
+        : r.reason === 'conflict'
+          ? '他の変更が先に入っています。最新の内容に更新しました。内容を確認してから、もう一度「解決を確定」を押してください。'
+          : impedimentMessage_(r.reason, '', id);
       return { ok: false, reason: r.reason, message: message };
     }
     return { ok: true, open: r.open, resolved: r.resolved, extra: { moved: r.moved, resolvedRow: r.resolvedRow } };
@@ -522,7 +530,7 @@ function apiUnresolveImpediment(moved, resolvedRow) {
     if (!r.ok) {
       const message = r.reason === 'invalid' ? '取り消す内容が不正です。'
         : r.reason === 'conflict' ? '解決したあとに他の変更が入っています。取り消しはしません。'
-        : impedimentMessage_(r.reason);
+        : impedimentMessage_(r.reason, '', (moved || {}).id);
       return { ok: false, reason: r.reason, message: message };
     }
     return { ok: true, open: r.open, resolved: r.resolved };

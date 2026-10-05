@@ -20,13 +20,13 @@ function impResponse(open, resolved) {
 const latest = (h) => h.calls[h.calls.length - 1];
 
 /** 障害物タブを開き、ROW が1件ある状態にする。 */
-function onImpediment() {
+function onImpediment(opt) {
   const h = createHarness(INITIAL);
   h.sandbox.load();
   h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL),
     summary: { byStatus: [], total: { count: 0, points: 0 } }, sprintChoices: CHOICES });
   h.clickTab('障害物');
-  latest(h).handlers.success(impResponse([ROW]));
+  latest(h).handlers.success(impResponse((opt && opt.rows) || [ROW]));
   return h;
 }
 
@@ -325,4 +325,92 @@ test('「完了する」の通知はチェックのアイコン、「取り消�
   assert.equal(h.labelOf('toast-undo'), '完了する');
   assert.notEqual(h.iconPathOf('toast-undo'), undoIcon);
   assert.equal(h.iconPathOf('toast-undo'), 'M3 8.4 6.4 11.6 13 4.8');
+});
+
+// 「完了する」の通知は、時間・別の通知・Escape で消えない（未解決の行は隠れていて、他に完了させる手段が無い）。
+const ROW3 = Object.assign({}, ROW, { id: 'IMP-003', title: 'もう1件' });
+const RESOLVED_ROW3 = Object.assign({}, ROW3, { status: 'Resolved', resolution: '直した' });
+
+/** IMP-002 の解決を途中で止め、「完了する」の通知を出した状態にする（未解決には IMP-003 が残る）。 */
+function stickyShown() {
+  const h = onImpediment({ rows: [ROW, ROW3] });
+  sendResolve(h).handlers.success(partial([ROW3], [RESOLVED_ROW]));
+  return h;
+}
+
+test('「完了する」の通知は、時間が過ぎても消えない', () => {
+  const h = stickyShown();
+  assert.equal(h.hiddenOf('toast'), false);
+  h.flushTimers();
+  assert.equal(h.hiddenOf('toast'), false, '時間で消えた');
+  assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') !== -1);
+});
+
+test('「完了する」の通知が出ている間に別の通知が来て、それが消えたら「完了する」が戻る', () => {
+  const h = stickyShown();
+  h.clickImpRow('IMP-003');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', '直した');
+  h.click('imp-panel-resolve');
+  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3]), { moved: ROW3, resolvedRow: RESOLVED_ROW3 }));
+  assert.ok(h.textOf('toast-text').indexOf('IMP-003') !== -1 && h.textOf('toast-text').indexOf('解決しました') !== -1, h.textOf('toast-text'));
+  assert.ok(h.textTreeOf('toast-undo').indexOf('取り消す') !== -1);
+  assert.ok(h.textOf('message').indexOf('もう取り消せません') === -1, '普通が sticky を上書きしたことにしない: ' + h.textOf('message'));
+  h.flushTimers();
+  assert.equal(h.hiddenOf('toast'), false, '「完了する」が戻っていない');
+  assert.ok(h.textOf('toast-text').indexOf('IMP-002 の解決が途中で止まりました。') !== -1, h.textOf('toast-text'));
+  assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') !== -1);
+  h.click('toast-undo');
+  assert.equal(latest(h).method, 'apiResolveImpediment');
+  assert.deepEqual(latest(h).args, ['IMP-002', '再起動した', ROW]);
+});
+
+test('「完了する」を押すと再送し、通知は消える。また途中で止まれば、また消えない通知で出る', () => {
+  const h = stickyShown();
+  h.click('toast-undo');
+  const retry = latest(h);
+  assert.equal(retry.method, 'apiResolveImpediment');
+  assert.equal(h.hiddenOf('toast'), true);
+  h.flushTimers();
+  assert.equal(h.hiddenOf('toast'), true, '手放したはずの通知が戻った');
+  retry.handlers.success(partial([ROW3], [RESOLVED_ROW]));
+  assert.equal(h.hiddenOf('toast'), false);
+  h.flushTimers();
+  assert.equal(h.hiddenOf('toast'), false, '再び止まったのに、消える通知になった');
+});
+
+test('Escape では「完了する」の通知を閉じない', () => {
+  const h = stickyShown();
+  h.pressKey('Escape');
+  assert.equal(h.hiddenOf('toast'), false);
+  assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') !== -1);
+});
+
+test('取り消しが途中で止まったときの「完了する」も消えない', () => {
+  const h = onImpediment();
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  h.click('toast-undo');
+  latest(h).handlers.success(partial([ROW], [RESOLVED_ROW]));
+  h.flushTimers();
+  assert.equal(h.hiddenOf('toast'), false);
+  assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') !== -1);
+});
+
+test('通知の「完了する」からの再送が conflict なら、全体メッセージで解決し直しを案内する', () => {
+  const h = stickyShown();
+  h.click('toast-undo');
+  latest(h).handlers.success(Object.assign(impResponse([ROW3], [RESOLVED_ROW]),
+    { ok: false, reason: 'conflict', message: '他の変更が先に入っています。' }));
+  assert.equal(h.textOf('message'), 'IMP-002 は他の変更が入ったため完了できませんでした。障害物タブで行を開き、解決し直してください。');
+});
+
+test('普通の通知が普通の通知を上書きするときは、従来どおり「もう取り消せません」を出す', () => {
+  const h = onImpediment({ rows: [ROW, ROW3] });
+  sendResolve(h).handlers.success(Object.assign(impResponse([ROW3], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  h.clickImpRow('IMP-003');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', '直した');
+  h.click('imp-panel-resolve');
+  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3]), { moved: ROW3, resolvedRow: RESOLVED_ROW3 }));
+  assert.ok(h.textOf('message').indexOf('もう取り消せません') !== -1, h.textOf('message'));
 });

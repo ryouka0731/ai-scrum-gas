@@ -9,6 +9,9 @@
 if (typeof require !== 'undefined' && typeof isImpedimentPlaceholder === 'undefined') {
   var { isImpedimentPlaceholder } = require('./pure_grid_report.js');
 }
+if (typeof require !== 'undefined' && typeof impedimentSameIdentity === 'undefined') {
+  var { impedimentSameIdentity } = require('./pure_impediment_merge.js');
+}
 if (typeof require !== 'undefined' && typeof IMPEDIMENT_FIELDS === 'undefined') {
   globalThis.IMPEDIMENT_FIELDS = require('./pure_grid_report.js').IMPEDIMENT_FIELDS;
 }
@@ -40,17 +43,18 @@ function impedimentRows_(rows) {
 }
 
 /**
- * 画面に出す未解決。雛形と、解決済にも在る ID を除く。
+ * 画面に出す未解決。雛形と、解決済にも在る同じ行（ID と中身が同じ）を除く。
  * 解決は「resolved に足す → open から消す」の順で書くため、途中で止まると両方に残る。
  * そのときは解決済を正とする（もう一度「解決」を押すと open から消えて揃う）。
  */
 function openImpedimentsShown(openRows, resolvedRows) {
-  const done = Object.create(null);
-  (resolvedRows || []).forEach(function (r) {
-    if (!isImpedimentPlaceholder(r)) done[String(r.id || '').trim()] = true;
-  });
+  const done = (resolvedRows || []).filter(function (r) { return !isImpedimentPlaceholder(r); });
   return (openRows || []).filter(function (r) {
-    return !isImpedimentPlaceholder(r) && !done[String(r.id || '').trim()];
+    if (isImpedimentPlaceholder(r)) return false;
+    // 同じ ID でも中身が違えば別の行。隠すと画面から触れなくなるため未解決に出す。
+    return !done.some(function (d) {
+      return String(d.id || '').trim() === String(r.id || '').trim() && impedimentSameIdentity(d, r);
+    });
   });
 }
 

@@ -122,9 +122,10 @@ test('解決: resolved に同じ ID の雛形行があっても、本物の行�
     imp({ id: 'IMP-001', status: 'Resolved', resolved_at: '2026-10-05', resolution: '直した' })]);
 });
 
-test('解決: resolved に同じ ID で中身の違う行があれば conflict（途中で止まった解決とみなさない）', () => {
+test('解決: resolved に同じ ID で中身の違う行があれば duplicate_id（途中で止まった解決とみなさない）', () => {
+  // 以前は conflict。何度押しても通らない行になるため、ID の重複として知らせる。
   const other = imp({ title: '別の障害物', status: 'Resolved', resolved_at: '2026-09-01', resolution: '昔の' });
-  assert.equal(m.planResolve([imp()], [other], 'IMP-002', 'x', imp(), 'd').reason, 'conflict');
+  assert.equal(m.planResolve([imp()], [other], 'IMP-002', 'x', imp(), 'd').reason, 'duplicate_id');
 });
 
 test('取り消し: open に同じ ID の雛形行があっても、取り消し済みとみなさず open に戻す', () => {
@@ -138,13 +139,20 @@ test('取り消し: open に同じ ID の雛形行があっても、取り消し
   assert.equal(m.planUnresolve([tmpl()], [tmpl({ status: 'Resolved' })], real, done).reason, 'not_found');
 });
 
-test('取り消し: open に同じ ID で中身の違う行があれば conflict', () => {
+test('取り消し: open に同じ ID で中身の違う行があれば duplicate_id', () => {
+  // 以前は conflict。解決済の行の有無にかかわらず、ID の重複として知らせる。
   const other = imp({ title: '別の障害物' });
-  assert.equal(m.planUnresolve([other], [resolvedRow], imp(), resolvedRow).reason, 'conflict');
-  assert.equal(m.planUnresolve([other], [], imp(), resolvedRow).reason, 'conflict');
+  assert.equal(m.planUnresolve([other], [resolvedRow], imp(), resolvedRow).reason, 'duplicate_id');
+  assert.equal(m.planUnresolve([other], [], imp(), resolvedRow).reason, 'duplicate_id');
 });
 
 test('更新は雛形の行を編集させない（not_found）', () => {
   const tpl = imp({ id: 'IMP-001', title: '（障害物タイトル）', reported_at: 'YYYY-MM-DD' });
   assert.equal(m.updateImpediment([tpl], 'IMP-001', { title: '乗っ取り' }, tpl).reason, 'not_found');
+});
+
+test('impedimentSameIdentity: 解決で変わらない列だけを比べる', () => {
+  assert.equal(m.impedimentSameIdentity(imp(), imp({ status: 'Resolved', resolved_at: 'd', resolution: 'x' })), true);
+  assert.equal(m.impedimentSameIdentity(imp(), imp({ title: '別' })), false);
+  assert.equal(m.impedimentSameIdentity(imp(), imp({ sprint: 'sprint002' })), false);
 });

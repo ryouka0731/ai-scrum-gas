@@ -151,3 +151,9 @@ test('障害物の要約は、両方にある ID を未解決に数えない', (
   assert.deepEqual(summarizeImpediment([row('IMP-002'), row('IMP-003')], [row('IMP-002')]),
     { open: 1, resolved: 1 });
 });
+
+test('障害物の要約: 同じ ID でも中身が違えば未解決に数える', () => {
+  const row = (title) => ({ id: 'IMP-002', title: title, reported_at: '2026-10-01' });
+  assert.deepEqual(summarizeImpediment([row('A')], [row('A')]), { open: 0, resolved: 1 });
+  assert.deepEqual(summarizeImpediment([row('A')], [row('B')]), { open: 1, resolved: 1 });
+});

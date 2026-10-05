@@ -67,3 +67,11 @@ test('両方にある ID は未解決から隠し、解決済にだけ出す（�
   assert.deepEqual(v.resolved.map((r) => r.id.trim()), ['IMP-002']);
   assert.deepEqual(openImpedimentsShown([imp({ id: 'IMP-002' })], [imp({ id: 'IMP-002' })]), []);
 });
+
+test('解決済に同じ ID・同じ中身があれば未解決に出さない。同じ ID でも中身が違えば未解決に出す', () => {
+  const done = imp({ status: 'Resolved', resolved_at: '2026-10-02', resolution: '直した' });
+  assert.deepEqual(buildImpedimentView([imp()], [done]).open, []);
+  const other = imp({ title: '別の障害物' });
+  assert.deepEqual(buildImpedimentView([other], [done]).open.map((r) => r.title), ['別の障害物']);
+  assert.deepEqual(openImpedimentsShown([other], [done]), [other]);
+});
