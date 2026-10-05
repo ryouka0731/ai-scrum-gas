@@ -23,7 +23,9 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
   `impediment_log_resolved.csv`・`comments.csv` の4ファイルだけ**で、共有スプレッドシートには触れない
 - 人のコメントは `scrum/comments.csv`（`target_id` で PBI・障害物に紐づく）。PBI や障害物を扱う前に
   該当コメントを読む。返答を書くときは `author` に自分のエージェント名を入れて追記する
-  （列は `id,target_id,author,created_at,body`。`id` は `CMT-` + 8桁の16進で重複させない）
+  （列は `id,target_id,author,created_at,body`。`target_id` は `PBI-…` か `IMP-…`、
+  `id` は `CMT-` + 小文字8桁の16進（重複させない）、`created_at` は `YYYY-MM-DD HH:mm:ss`、
+  `body` は1〜2000字）。コメントは共有スプレッドシートには同期されない
 - Web アプリからの変更も同じファイルに入るため、**あなたは何もしなくても人の操作結果を
   次にそれらのファイルを読んだときに見られる**。同期の仕組みを意識する必要はない
 - 共有スプレッドシートは `scrum/` の内容を `syncAll`（既存の同期）が**一方向で作り直したもの**であり、
