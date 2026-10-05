@@ -644,6 +644,29 @@
       };
     },
 
+    /**
+     * 障害物パネル（#imp-panel）の実測幅。.side-panel の規則が効いているかを見る。
+     * 障害物タブへ切り替え、未解決の最初の行を押して開き、測ったら Escape で閉じる。
+     * 画面の状態を変えるので、他の測定が済んだあとに呼ぶこと。
+     */
+    impPanelWidth: async function () {
+      var tab = list('button', document.getElementById('tabs')).filter(function (x) { return txt(x) === '障害物'; })[0];
+      if (!tab) throw new Error('#tabs に「障害物」のボタンがありません');
+      tab.click();
+      var until = Date.now() + 3000;
+      var row;
+      while (!(row = document.querySelector('#table-view tr.clickable')) && Date.now() < until) await sleep(20);
+      if (!row) throw new Error('障害物の未解決の行（tr.clickable）が描かれませんでした');
+      row.click();
+      await frame();
+      var panel = document.getElementById('imp-panel');
+      if (panel.hidden) throw new Error('障害物パネルが開きませんでした');
+      var width = Math.round(panel.getBoundingClientRect().width * 100) / 100;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await frame();
+      return width;
+    },
+
     /** #tabs / #views のボタンをラベルで押す。 */
     clickIn: function (hostId, label) {
       var b = list('button', document.getElementById(hostId)).filter(function (x) { return txt(x) === label; })[0];
