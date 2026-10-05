@@ -56,11 +56,12 @@ function impRealIndex_(rows, id) {
  * 解決・取り消しで変わらない列（status / resolved_at / resolution 以外）が同じか。
  * 同じなら「同じ障害物が途中まで移った」とみなす。違えば別の行なので触らない。
  */
-function impSameIdentity_(a, b) {
+function impedimentSameIdentity(a, b) {
   const x = a || {};
   const y = b || {};
   return ['id', 'title', 'description', 'reported_by', 'reported_at', 'sprint'].every(function (f) {
-    return impText_(x[f]) === impText_(y[f]);
+    // ID は探すときと同じく前後の空白を無視する（' IMP-002 ' と 'IMP-002' は同じ行）。
+    return f === 'id' ? impText_(x[f]).trim() === impText_(y[f]).trim() : impText_(x[f]) === impText_(y[f]);
   });
 }
 
@@ -116,7 +117,7 @@ function planResolve(openRows, resolvedRows, id, resolution, expected, todayText
   const moved = impPick_(open[oi]);
   if (ri !== -1) {
     // 同じ ID でも中身が違えば別の行。消すと解決策ごと失われるため触らない。
-    if (!impSameIdentity_(resolved[ri], open[oi])) return { ok: false, reason: 'conflict' };
+    if (!impedimentSameIdentity(resolved[ri], open[oi])) return { ok: false, reason: 'duplicate_id' };
     // 前回の解決が「resolved に足した」ところで止まっている。足し直さず、消すだけで完了させる。
     return { ok: true, open: impWithout_(open, oi), resolved: null, moved: moved, resolvedRow: impPick_(resolved[ri]) };
   }
@@ -145,7 +146,7 @@ function planUnresolve(openRows, resolvedRows, moved, resolvedRow) {
   const oi = impRealIndex_(open, id);
   const ri = impRealIndex_(resolved, id);
   // open に同じ ID でも中身の違う行があれば、取り消しの途中とはみなさない。
-  if (oi !== -1 && !impSameIdentity_(open[oi], src)) return { ok: false, reason: 'conflict' };
+  if (oi !== -1 && !impedimentSameIdentity(open[oi], src)) return { ok: false, reason: 'duplicate_id' };
   if (ri === -1) {
     // 既に戻っている（前回の取り消しが完了済み）なら、何も書かずに成功とする。
     if (oi !== -1) return { ok: true, open: null, resolved: null };
@@ -161,5 +162,5 @@ function planUnresolve(openRows, resolvedRows, moved, resolvedRow) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { impedimentRowsEqual, appendImpediment, updateImpediment, planResolve, planUnresolve };
+  module.exports = { impedimentRowsEqual, impedimentSameIdentity, appendImpediment, updateImpediment, planResolve, planUnresolve };
 }

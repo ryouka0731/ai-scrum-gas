@@ -691,3 +691,78 @@ test('解決: 解決策が空なら invalid で書かない', () => {
   assert.equal(ctx.apiResolveImpediment('IMP-002', '  ', IMP2_ROW).reason, 'invalid');
   assert.ok(files['impediment_log.csv'].indexOf('IMP-002') !== -1);
 });
+
+const DUP_MSG = '未解決と解決済に、同じ ID の別の障害物があります（IMP-002）。CSV の ID を直してから操作してください。';
+
+test('解決: 同じ ID で中身の違う行が解決済にあれば duplicate_id の文言で、書かない', () => {
+  const f = impFiles(IMP2, 'IMP-002,別の障害物,,マヤ,2026-09-01,Resolved,2026-09-02,直した,sprint001\n');
+  const { ctx, files } = createTestContext(f);
+  const before = [files['impediment_log.csv'], files['impediment_log_resolved.csv']];
+  const res = ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(res.reason, 'duplicate_id');
+  assert.equal(res.message, DUP_MSG);
+  assert.deepEqual([files['impediment_log.csv'], files['impediment_log_resolved.csv']], before);
+});
+
+test('取り消し: 同じ ID で中身の違う行が未解決にあれば duplicate_id の文言', () => {
+  const f = impFiles('IMP-002,別の障害物,,マヤ,2026-09-01,Open,,,sprint001\n',
+    'IMP-002,止まっている,,マヤ,2026-10-01,Resolved,2026-10-02,直した,sprint001\n');
+  const { ctx } = createTestContext(f);
+  const resolvedRow = Object.assign({}, IMP2_ROW, { status: 'Resolved', resolved_at: '2026-10-02', resolution: '直した' });
+  const res = ctx.apiUnresolveImpediment(IMP2_ROW, resolvedRow);
+  assert.equal(res.reason, 'duplicate_id');
+  assert.equal(res.message, DUP_MSG);
+});
+
+test('解決: conflict の文言に「もう一度押すと解決します」を含めない', () => {
+  const { ctx } = createTestContext(impFiles(IMP2));
+  const res = ctx.apiResolveImpediment('IMP-002', '再起動した', Object.assign({}, IMP2_ROW, { title: '古い題' }));
+  assert.equal(res.reason, 'conflict');
+  assert.ok(res.message.indexOf('既に解決済み') === -1, res.message);
+  assert.ok(res.message.indexOf('もう一度押すと解決します') === -1, res.message);
+  assert.ok(res.message.indexOf('もう一度「解決を確定」を押してください。') !== -1, res.message);
+});
+
+test('解決: 未解決側に雛形 IMP-001 しか無く、解決済に本物の IMP-001 があれば「既に解決済み」（雛形を未解決の行と取り違えない）', () => {
+  const real = 'IMP-001,本物,,マヤ,2026-09-01,Resolved,2026-09-02,直した,sprint001\n';
+  const f = impFiles('', real);
+  const before = [f['impediment_log.csv'], f['impediment_log_resolved.csv']];
+  const { ctx } = createTestContext(f);
+  const res = ctx.apiResolveImpediment('IMP-001', 'x', { id: 'IMP-001', title: '本物' });
+  assert.equal(res.reason, 'conflict');
+  assert.equal(res.message, 'この障害物は既に解決済みです。最新の内容に更新しました。');
+  assert.deepEqual([f['impediment_log.csv'], f['impediment_log_resolved.csv']], before);
+});
+
+/** 解決が2つ目で止まった状態（IMP-002 が両方のファイルにある）の CSV を作る。 */
+function halfResolvedFiles() {
+  const f = impFiles(IMP2);
+  const res = createTestContext(f, { failWriteFile: 'impediment_log.csv' }).ctx
+    .apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(res.reason, 'partial');
+  return f;
+}
+
+test('途中で止まった解決: apiGetView が pending を返し、「解決済として完了」で解決済だけに揃う', () => {
+  const f = halfResolvedFiles();
+  const view = createTestContext(f).ctx.apiGetView('impediment');
+  const pending = plain(view.view.pending);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].id, 'IMP-002');
+  assert.equal(view.summary.pending, 1);
+  const res = createTestContext(f).ctx.apiResolveImpediment(pending[0].id, pending[0].resolved.resolution, pending[0].open);
+  assert.equal(res.ok, true, res.message);
+  assert.equal(f['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE);
+  assert.equal(f['impediment_log_resolved.csv'].split('IMP-002').length - 1, 1);
+  assert.deepEqual(plain(res.view.pending), []);
+});
+
+test('途中で止まった解決: 「未解決に戻す」で未解決だけに揃う', () => {
+  const f = halfResolvedFiles();
+  const pending = plain(createTestContext(f).ctx.apiGetView('impediment').view.pending)[0];
+  const res = createTestContext(f).ctx.apiUnresolveImpediment(pending.open, pending.resolved);
+  assert.equal(res.ok, true, res.message);
+  assert.equal(f['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE + IMP2);
+  assert.equal(f['impediment_log_resolved.csv'], IMP_HEADER + IMP_TEMPLATE);
+  assert.deepEqual(plain(res.view.pending), []);
+});

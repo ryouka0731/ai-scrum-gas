@@ -605,6 +605,14 @@ function createHarness(initialColumns) {
       fireVisible(hit[0], 'click', {}, '行 ' + id);
     },
 
+    /** 「途中で止まった操作」の行のボタンを押す。which は 'resolve'（解決済として完了）か 'unresolve'（未解決に戻す）。 */
+    clickPending: function (id, which) {
+      const eid = 'imp-pending-' + which + '-' + id;
+      const hit = collect(byId['table-view'], function (e) { return e.id === eid; });
+      if (hit.length !== 1) throw new Error(eid + ' が ' + hit.length + ' 件見つかりました');
+      fireVisible(hit[0], 'click', {}, eid);
+    },
+
     /** 障害物タブの「障害物を追加」を押す。 */
     clickImpAdd: function () {
       const hit = collect(byId['table-view'], function (e) { return e.id === 'imp-add'; });

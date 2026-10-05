@@ -1221,24 +1221,49 @@ var UNDO_SECONDS = 10;
 // 全体メッセージで知らせる。
 var activeToastText = null;
 
-/**
- * 取り消せる通知を出す。時間が過ぎたら消える。
- * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）、
- * iconName はそのアイコン（既定は undo。「完了する」は check）。
- */
-function showUndoToast(text, onUndo, actionLabel, iconName) {
-  if (toastTimer && activeToastText) {
-    setMessage(activeToastText + '（もう取り消せません）', 'info');
-  }
+// 「完了する」の通知（sticky）。途中で止まった書き込みの行は画面から隠れていて、この通知が
+// 完了させる唯一の手段になるため、時間・別の通知・Escape では消さない。1件だけ持つ。
+// 別の（普通の）通知が来たらそちらを出し、それが消えたときに出し直す。
+var stickyToast = null;
+var shownIsSticky = false;
+
+function renderToast(text, onUndo, actionLabel, iconName) {
   var el = document.getElementById('toast');
   document.getElementById('toast-text').textContent = text;
   var btn = document.getElementById('toast-undo');
   btn.innerHTML = '';
   fillButton(btn, iconName || 'undo', actionLabel || '取り消す');
-  btn.onclick = function () { hideToast(); onUndo(); };
+  btn.onclick = onUndo;
   el.hidden = false;
+}
+
+/**
+ * 取り消せる通知を出す。時間が過ぎたら消える。
+ * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）、
+ * iconName はそのアイコン（既定は undo。「完了する」は check）。
+ * sticky が真なら時間では消さず、別の通知が出ても、その通知が消えたあとに出し直す。
+ */
+function showUndoToast(text, onUndo, actionLabel, iconName, sticky) {
+  // 取り消せなくなるのは、時間付きの通知が別の通知に上書きされるときだけ（sticky は戻ってくる）。
+  if (toastTimer && activeToastText) {
+    setMessage(activeToastText + '（もう取り消せません）', 'info');
+  }
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  if (sticky) {
+    var self = { text: text, onUndo: onUndo, label: actionLabel, icon: iconName };
+    stickyToast = self;
+    shownIsSticky = true;
+    activeToastText = null;
+    renderToast(text, function () {
+      if (stickyToast === self) stickyToast = null;   // 押したら手放す。再び止まれば、また sticky で出る
+      hideToast();
+      onUndo();
+    }, actionLabel, iconName);
+    return;
+  }
+  shownIsSticky = false;
+  renderToast(text, function () { hideToast(); onUndo(); }, actionLabel, iconName);
   activeToastText = text;
-  if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, UNDO_SECONDS * 1000);
 }
 
@@ -1247,6 +1272,11 @@ function hideToast() {
   document.getElementById('toast').hidden = true;
   document.getElementById('toast-undo').onclick = null;   // 期限切れ後は押せないようにする
   activeToastText = null;
+  shownIsSticky = false;
+  if (stickyToast) {
+    var st = stickyToast;
+    showUndoToast(st.text, st.onUndo, st.label, st.icon, true);
+  }
 }
 
 /**
@@ -1562,7 +1592,7 @@ function showResolveOutcome(id, resolution, expected, res) {
   }
   setMessage(res.message, 'error');
   showUndoToast(id + ' の解決が途中で止まりました。',
-    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check');
+    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check', true);
 }
 
 /** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
@@ -1578,6 +1608,7 @@ function retryResolveImp(id, resolution, expected) {
         showResolveOutcome(id, resolution, expected, res);
         return;
       }
+      // 「既に解決済みです」など、サーバが使い分けた文言をそのまま出す。
       setMessage(res.message, 'error');
     })
     .withFailureHandler(function (err) {
@@ -1598,7 +1629,7 @@ function unresolveImp(moved, resolvedRow) {
       if (res.reason === 'partial') {
         // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
         showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
-          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check');
+          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', true);
       }
     })
     .withFailureHandler(function (err) {
@@ -1753,6 +1784,7 @@ function renderSummary(summary) {
     // 障害物: 未解決/解決済の件数。
     stat('未解決', summary.open + '件');
     stat('解決済', summary.resolved + '件');
+    if (summary.pending > 0) stat('途中で止まった操作', summary.pending + '件');
   }
 }
 
@@ -1873,9 +1905,11 @@ function objectTable(columns, rows, onRow) {
       var td = document.createElement('td');
       var v = row[c.field];
       td.textContent = (v === null || v === undefined) ? '' : String(v);
+      // ID が重なっている行は、どの行を指すか決められないので押せない行として出す。
+      if (row.duplicate === 'true' && c.field === 'title') td.textContent += '（ID が重複しています。CSV を直してください）';
       tr.appendChild(td);
     });
-    if (onRow) {
+    if (onRow && row.duplicate !== 'true') {
       tr.className = 'clickable';
       tr.dataset.id = row.id;
       tr.setAttribute('tabindex', '0');
@@ -1897,6 +1931,51 @@ function tableSection(title, columns, rows, onRow) {
   h.textContent = title;
   section.appendChild(h);
   section.appendChild(objectTable(columns, rows, onRow));
+  return section;
+}
+
+/**
+ * 「途中で止まった操作」。2ファイルへの書き込みが片方で止まり、同じ行が未解決と解決済の両方に残っている。
+ * サーバが毎回見つけて返すので、ページを開き直しても出る。どちらかを選ぶと、既存の送り直しで揃う（サーバは冪等）。
+ */
+function pendingSection(pending) {
+  var section = document.createElement('div');
+  var h = document.createElement('h3');
+  h.textContent = '途中で止まった操作';
+  section.appendChild(h);
+  var note = document.createElement('div');
+  note.className = 'table-note';
+  note.textContent = '書き込みが途中で止まっています。どちらかを選ぶと完了します。';
+  section.appendChild(note);
+  var table = document.createElement('table');
+  table.appendChild(tableHead(['ID', 'タイトル', '']));
+  var tbody = document.createElement('tbody');
+  pending.forEach(function (p) {
+    var tr = document.createElement('tr');
+    var idTd = document.createElement('td');
+    idTd.textContent = p.id;
+    tr.appendChild(idTd);
+    var titleTd = document.createElement('td');
+    titleTd.textContent = p.open.title;
+    tr.appendChild(titleTd);
+    var actionTd = document.createElement('td');
+    var done = document.createElement('button');
+    done.id = 'imp-pending-resolve-' + p.id;
+    done.type = 'button';
+    fillButton(done, 'check', '解決済として完了');
+    done.addEventListener('click', function () { retryResolveImp(p.id, p.resolved.resolution, p.open); });
+    var back = document.createElement('button');
+    back.id = 'imp-pending-unresolve-' + p.id;
+    back.type = 'button';
+    fillButton(back, 'undo', '未解決に戻す');
+    back.addEventListener('click', function () { unresolveImp(p.open, p.resolved); });
+    actionTd.appendChild(done);
+    actionTd.appendChild(back);
+    tr.appendChild(actionTd);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  section.appendChild(table);
   return section;
 }
 
@@ -1933,6 +2012,7 @@ function renderTable(view) {
     add.addEventListener('click', function () { openImpPanel(null); });
     actions.appendChild(add);
     host.appendChild(actions);
+    if (view.pending && view.pending.length > 0) host.appendChild(pendingSection(view.pending));
     host.appendChild(tableSection('未解決', view.columns, view.open, function (row) { openImpPanel(row.id); }));
     host.appendChild(tableSection('解決済', view.columns, view.resolved));
     return;
@@ -2050,7 +2130,8 @@ document.addEventListener('keydown', function (ev) {
   if (ev.key !== 'Escape') return;
   // 一番手前にあるものから閉じる。補足は通知（z-index: 10）より上（20）に出る。
   if (closeOpenHelp()) return;
-  if (!document.getElementById('toast').hidden) { hideToast(); return; }
+  // 「完了する」の通知は閉じない（完了させる手段が他に無い）。普通の通知だけ閉じる。
+  if (!document.getElementById('toast').hidden && !shownIsSticky) { hideToast(); return; }
   if (!document.getElementById('panel').hidden) { closePanel(); return; }
   if (!document.getElementById('imp-panel').hidden) closeImpPanel();
 });

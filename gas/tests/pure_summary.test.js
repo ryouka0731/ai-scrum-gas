@@ -92,7 +92,7 @@ test('障害物の要約はファイル別に数え、雛形行を除く', () =>
 });
 
 test('障害物の要約は空でも 0 で返る', () => {
-  assert.deepEqual(summarizeImpediment(null, null), { open: 0, resolved: 0 });
+  assert.deepEqual(summarizeImpediment(null, null), { open: 0, resolved: 0, pending: 0 });
 });
 
 // ---------------------------------------------------------------------------
@@ -149,5 +149,24 @@ test('sprint_backlog.md が名乗っていなければ、そのままゴール�
 test('障害物の要約は、両方にある ID を未解決に数えない', () => {
   const row = (id) => ({ id: id, title: 'T', reported_at: '2026-10-01' });
   assert.deepEqual(summarizeImpediment([row('IMP-002'), row('IMP-003')], [row('IMP-002')]),
-    { open: 1, resolved: 1 });
+    { open: 1, resolved: 1, pending: 1 });
+});
+
+test('障害物の要約: 同じ ID でも中身が違えば未解決に数える', () => {
+  const row = (title) => ({ id: 'IMP-002', title: title, reported_at: '2026-10-01' });
+  assert.deepEqual(summarizeImpediment([row('A')], [row('A')]), { open: 0, resolved: 1, pending: 1 });
+  assert.deepEqual(summarizeImpediment([row('A')], [row('B')]), { open: 1, resolved: 1, pending: 0 });
+});
+
+test('障害物の要約: 途中で止まった操作（同じ ID・同じ中身が両方にある）を pending に数える', () => {
+  const row = (id) => ({ id: id, title: 'T', reported_at: '2026-10-01' });
+  const s = summarizeImpediment([row('IMP-002'), row('IMP-003')], [row('IMP-002'), row('IMP-009')]);
+  assert.equal(s.pending, 1);
+  assert.equal(s.open, 1);
+  assert.equal(s.resolved, 2);
+});
+
+test('障害物の要約: 未解決に同じ ID が複数あれば、隠さず未解決に数え、pending にしない', () => {
+  const row = { id: 'IMP-002', title: 'T', reported_at: '2026-10-01' };
+  assert.deepEqual(summarizeImpediment([row, row], [row]), { open: 2, resolved: 1, pending: 0 });
 });
