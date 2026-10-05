@@ -143,3 +143,63 @@ test('Escape で障害物パネルが閉じる。タブを移っても閉じる'
   h.clickTab('やること');
   assert.equal(h.hiddenOf('imp-panel'), true);
 });
+
+test('解決策の入力中は他の4欄を塞ぎ、通知の題は編集欄ではなく moved.title を使う', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.setValue('i-title', '書きかけの題');
+  h.click('imp-panel-resolve');
+  ['i-title', 'i-description', 'i-reported-by', 'i-sprint'].forEach((id) => {
+    assert.equal(h.disabledOf(id), true, id + ' が塞がれていない');
+  });
+  assert.equal(h.disabledOf('i-resolution'), false);
+  h.setValue('i-resolution', '再起動した');
+  h.click('imp-panel-resolve');
+  const resolvedRow = Object.assign({}, ROW, { status: 'Resolved', resolution: '再起動した' });
+  latest(h).handlers.success(Object.assign(impResponse([], [resolvedRow]), { moved: ROW, resolvedRow: resolvedRow }));
+  assert.ok(h.textOf('toast-text').indexOf('止まっている') !== -1);
+  assert.ok(h.textOf('toast-text').indexOf('書きかけの題') === -1);
+});
+
+test('新規の既定スプリントは、unknown でない最後のもの', () => {
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL), summary: null });
+  h.clickTab('障害物');
+  latest(h).handlers.success(Object.assign(impResponse([ROW]), { sprintChoices: [
+    { value: '', label: '（未割り当て）' },
+    { value: 'sprint001', label: 'sprint001', unknown: false },
+    { value: '旧', label: '旧', unknown: true },
+  ] }));
+  h.clickImpAdd();
+  assert.equal(h.valueOf('i-sprint'), 'sprint001');
+});
+
+test('書き込みが2つ飛んでいて古い応答が後から届いても、表は新しい方のまま', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-save');
+  const first = latest(h);
+  h.pressKey('Escape');
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-save');
+  const second = h.calls[h.calls.length - 1];
+  assert.notEqual(first, second);
+  second.handlers.success(impResponse([Object.assign({}, ROW, { title: '新' })]));
+  first.handlers.success(impResponse([Object.assign({}, ROW, { title: '旧' })]));
+  assert.equal(h.tableRowsOf('table-view')[0][1].text, '新');
+});
+
+test('障害物の応答は PBI パネルのスプリント選択肢を書き換えない', () => {
+  const CARD = { id: 'PBI-001', title: 'a', description: '', acceptance: '', priority: 'Medium', size: '', sprint: '', updated_at: 'x' };
+  const cols = INITIAL.map((c) => c.status === 'New' ? { status: 'New', cards: [CARD] } : c);
+  const h = createHarness(cols);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(cols), summary: null, sprintChoices: CHOICES });
+  h.clickTab('障害物');
+  latest(h).handlers.success(Object.assign(impResponse([ROW]), { sprintChoices: [{ value: 'other', label: 'other' }] }));
+  h.clickTab('やること');
+  latest(h).handlers.success({ ok: true, name: 'board', view: h.boardOf(cols), summary: null });
+  h.openCard('PBI-001');
+  assert.deepEqual(h.optionsOf('f-sprint').map((o) => o.value), ['', 'sprint001']);
+});

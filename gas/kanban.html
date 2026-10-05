@@ -1349,6 +1349,8 @@ function restorePbi(row) {
 var impView = null;   // 最後に描いた障害物のビュー（パネルの値の出どころ）
 var impPanelState = { id: null, expected: null, resolving: false };
 var impPanelSeq = 0;
+var impSprintChoices = [];   // 障害物の応答が運ぶ選択肢（PBI パネルの sprintChoices とは別）
+var impWriteIssued = 0;      // 障害物の書き込みを発行した通し番号（古い応答で表を戻さないため）
 var IMP_FORM_FIELD_IDS = ['i-title', 'i-description', 'i-reported-by', 'i-sprint', 'i-resolution'];
 
 function findImpRow(id) {
@@ -1363,17 +1365,27 @@ function setImpPanelMessage(text, kind) {
   el.className = kind || 'info';
 }
 
+var impPanelBusy = false;
+
+/** 送信中は全部、解決策の入力中は解決策以外の欄を塞ぐ（送らない編集を黙って捨てないため）。 */
+function applyImpLocks() {
+  document.getElementById('imp-panel-save').disabled = impPanelBusy;
+  document.getElementById('imp-panel-resolve').disabled = impPanelBusy;
+  IMP_FORM_FIELD_IDS.forEach(function (id) {
+    document.getElementById(id).disabled = impPanelBusy || (impPanelState.resolving && id !== 'i-resolution');
+  });
+}
+
 function setImpPanelBusy(busy) {
-  document.getElementById('imp-panel-save').disabled = busy;
-  document.getElementById('imp-panel-resolve').disabled = busy;
-  IMP_FORM_FIELD_IDS.forEach(function (id) { document.getElementById(id).disabled = busy; });
+  impPanelBusy = busy;
+  applyImpLocks();
 }
 
 function fillImpSprintSelect(value) {
   var el = document.getElementById('i-sprint');
   clearHost(el);
   var seen = false;
-  sprintChoices.forEach(function (c) {
+  impSprintChoices.forEach(function (c) {
     var o = document.createElement('option');
     o.value = c.value;
     o.textContent = c.label;
@@ -1393,6 +1405,7 @@ function fillImpSprintSelect(value) {
 function setImpResolving(on) {
   impPanelState.resolving = on;
   document.getElementById('i-resolution-field').hidden = !on;
+  applyImpLocks();
   fillButton(document.getElementById('imp-panel-resolve'), 'check', on ? '解決を確定' : '解決する');
 }
 
@@ -1409,7 +1422,9 @@ function openImpPanel(id) {
   document.getElementById('i-reported-by').value = (row && row.reported_by) || '';
   document.getElementById('i-resolution').value = '';
   // 既定は最新のスプリント（選択肢の末尾）。既存の行はその値のまま。
-  var latestSprint = sprintChoices.length ? sprintChoices[sprintChoices.length - 1].value : '';
+  // 速度表に無いスプリント（unknown）は既定にしない。
+  var latestSprint = '';
+  impSprintChoices.forEach(function (c) { if (c.value !== '' && c.unknown !== true) latestSprint = c.value; });
   fillImpSprintSelect(row ? String(row.sprint || '').trim() : latestSprint);
   document.getElementById('imp-panel-resolve').hidden = !id;
   setImpResolving(false);
@@ -1438,9 +1453,11 @@ function readImpForm() {
  * 障害物の書き込みの応答を受ける共通部分。表と要約は、今も障害物のビューを見ているときだけ
  * 描き直す（応答待ちの間に別タブへ移っていれば、そのタブの表と要約を上書きしない）。
  */
-function applyImpResponse(res) {
-  if (res.sprintChoices) sprintChoices = res.sprintChoices;
+function applyImpResponse(res, issued) {
+  if (res.sprintChoices) impSprintChoices = res.sprintChoices;
   if (!res.view) return;
+  // 後から発行した書き込みがあるなら、この応答は古い。表と要約を戻さない。
+  if (issued !== impWriteIssued) return;
   impView = res.view;
   if (activeView === 'impediment') {
     renderTable(res.view);
@@ -1451,17 +1468,18 @@ function applyImpResponse(res) {
 /** 書き込みを送る。after(res) は成功時にパネルが同じものなら呼ばれる。 */
 function sendImpWrite(method, args, label, after) {
   var seq = impPanelSeq;
+  var issued = ++impWriteIssued;
   setImpPanelBusy(true);
   var runner = google.script.run
     .withSuccessHandler(function (res) {
       var mine = (seq === impPanelSeq);
       if (mine) setImpPanelBusy(false);
       if (res.ok) writeSeq++;
-      applyImpResponse(res);
+      applyImpResponse(res, issued);
       if (res.ok) { after(res, mine); return; }
       // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
       if (mine && impPanelState.id) {
-        var latest = findImpRow(impPanelState.id);
+        var latest = findImpRow(impPanelState.id);   // 古い応答なら表は戻していないので、最新のまま
         if (latest) impPanelState.expected = latest;
       }
       if (mine) setImpPanelMessage(res.message, 'error');
@@ -1503,21 +1521,24 @@ function resolveImp() {
     document.getElementById('i-resolution').focus();
     return;
   }
-  var title = document.getElementById('i-title').value;
   var resolution = document.getElementById('i-resolution').value;
-  sendImpWrite('apiResolveImpediment', [id, resolution, impPanelState.expected], '解決', function (res, mine) {
+  var expected = impPanelState.expected;
+  sendImpWrite('apiResolveImpediment', [id, resolution, expected], '解決', function (res, mine) {
     if (mine) closeImpPanel();
+    // 通知の題は送った側の行から取る（編集欄の値ではない）。
+    var title = (res.moved && res.moved.title) || (expected && expected.title) || '';
     showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); });
   });
 }
 
 function unresolveImp(moved, resolvedRow) {
   if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  var issued = ++impWriteIssued;
   setMessage(moved.id + ' を戻しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
       if (res.ok) writeSeq++;
-      applyImpResponse(res);
+      applyImpResponse(res, issued);
       setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
     })
     .withFailureHandler(function (err) {
@@ -1703,7 +1724,11 @@ function loadView() {
         }
         // スプリントの選択肢。盤面の応答だけが運ぶため、載っているときだけ入れ替える
         // （載っていない応答で空にすると、次に開くパネルが選択肢を失う）。
-        if (res.sprintChoices) sprintChoices = res.sprintChoices;
+        // 障害物の応答の選択肢は障害物パネル専用の変数へ入れ、PBI パネルのものと混ぜない。
+        if (res.sprintChoices) {
+          if (requestedView === 'impediment') impSprintChoices = res.sprintChoices;
+          else sprintChoices = res.sprintChoices;
+        }
         // hidden の切替と要約のクリアは showView() が発行前（クリック時点）に済ませている。
         // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
         // 操作可能な盤面や表が残ってしまう）。
