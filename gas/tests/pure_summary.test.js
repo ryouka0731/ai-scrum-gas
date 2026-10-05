@@ -145,3 +145,9 @@ test('sprint_backlog.md が名乗っていなければ、そのままゴール�
   const s = summarizeSprint(VEL2, '## スプリントゴール\n\n動くものを出す\n');
   assert.equal(s.goal, '動くものを出す');
 });
+
+test('障害物の要約は、両方にある ID を未解決に数えない', () => {
+  const row = (id) => ({ id: id, title: 'T', reported_at: '2026-10-01' });
+  assert.deepEqual(summarizeImpediment([row('IMP-002'), row('IMP-003')], [row('IMP-002')]),
+    { open: 1, resolved: 1 });
+});

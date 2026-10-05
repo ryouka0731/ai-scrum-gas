@@ -30,7 +30,7 @@
     }
   }
   /* 作成者オリジンの display 指定は UA スタイルシートの [hidden]{display:none} に
-     常に優先するため、hidden 属性だけでは隠れない要素（#panel / #toast / button 等の
+     常に優先するため、hidden 属性だけでは隠れない要素（.side-panel / #toast / button 等の
      display: flex 指定を持つもの）向けに明示しておく。 */
   [hidden] { display: none !important; }
   * { box-sizing: border-box; }
@@ -117,7 +117,7 @@
     #table-view { width: 100%; }
   }
 
-  #panel {
+  .side-panel {
     /* min-width を切らないと、flex 項目の自動的な最小の幅（= min-content）が下限になり、
        flex-basis の 380px を上回って居座る（実測で 557px。901px の画面では盤面が
        280px しか残らず、5列が各 40px まで潰れていた）。#board / .column / .row > .field と
@@ -127,7 +127,7 @@
     box-shadow: var(--shadow-1); padding: var(--sp-4);
     display: flex; flex-direction: column; gap: var(--sp-3);
   }
-  #panel h2 { font-size: 15px; margin: 0; }
+  .side-panel h2 { font-size: 15px; margin: 0; }
   .panel-head { display: flex; align-items: center; gap: var(--sp-3); }
   .field { display: flex; flex-direction: column; gap: var(--sp-2); }
   .field label { font-size: 12px; color: var(--ink-2); }
@@ -144,10 +144,10 @@
   .row > .field { flex: 1; min-width: 0; }
   .panel-foot { display: flex; gap: var(--sp-3); align-items: center; margin-top: auto; padding-top: var(--sp-3); }
   .panel-foot .spacer { flex: 1; }
-  #panel-message { font-size: 12px; min-height: 18px; white-space: pre-line; }
-  #panel-message.error { color: var(--danger); }
+  #panel-message, #imp-panel-message { font-size: 12px; min-height: 18px; white-space: pre-line; }
+  #panel-message.error, #imp-panel-message.error { color: var(--danger); }
   @media (max-width: 900px) {
-    #panel { flex: 1 1 auto; width: 100%; }
+    .side-panel { flex: 1 1 auto; width: 100%; }
   }
 
   #toast {
@@ -202,11 +202,17 @@
      margin-inline: auto がその帯の中で中央に置いてくれる（帯より広い文面は帯で折り返る）。
      パネルが閉じているときは動かさない（画面の中央のままにする）。 */
   @media (min-width: 901px) {
-    #main:has(#panel:not([hidden])) ~ #toast {
+    #main:has(.side-panel:not([hidden])) ~ #toast {
       left: var(--sp-5);
       right: calc(var(--panel-w) + var(--sp-4) + var(--sp-5));   /* パネル + #main の gap + 余白 */
     }
   }
+
+  /* 障害物の未解決の行は押すとパネルが開く。解決済の行は押せない（閲覧のみ）。 */
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td, tr.clickable:focus td { background: var(--card-2); }
+  tr.clickable:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .table-actions { margin: var(--sp-3) 0; }
 
   .tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--line); }
   .tabs button {
@@ -284,7 +290,7 @@
 <div id="main">
   <div id="board"></div>
   <div id="table-view" class="table-wrap" hidden></div>
-  <aside id="panel" hidden aria-label="PBI の詳細">
+  <aside id="panel" class="side-panel" hidden aria-label="PBI の詳細">
     <div class="panel-head">
       <h2 id="panel-title">PBI</h2>
       <span class="spacer"></span>
@@ -338,6 +344,41 @@
       <button id="panel-delete" class="danger" type="button"></button>
     </div>
   </aside>
+  <aside id="imp-panel" class="side-panel" hidden aria-label="障害物の詳細">
+    <div class="panel-head">
+      <h2 id="imp-panel-title">障害物</h2>
+      <span class="spacer"></span>
+      <button id="imp-panel-close" class="icon-only" type="button" aria-label="閉じる"></button>
+    </div>
+    <div class="field">
+      <label for="i-title">タイトル</label>
+      <input id="i-title" type="text">
+    </div>
+    <div class="field">
+      <label for="i-description">説明</label>
+      <textarea id="i-description"></textarea>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="i-reported-by">報告者</label>
+        <input id="i-reported-by" type="text">
+      </div>
+      <div class="field">
+        <label for="i-sprint">スプリント</label>
+        <select id="i-sprint"></select>
+      </div>
+    </div>
+    <div id="i-resolution-field" class="field" hidden>
+      <label for="i-resolution">解決策</label>
+      <textarea id="i-resolution"></textarea>
+    </div>
+    <div id="imp-panel-message" class="info"></div>
+    <div class="panel-foot">
+      <button id="imp-panel-save" class="primary" type="button"></button>
+      <span class="spacer"></span>
+      <button id="imp-panel-resolve" type="button"></button>
+    </div>
+  </aside>
 </div>
 <div id="toast" hidden role="status">
   <span id="toast-text"></span>
@@ -353,6 +394,7 @@ var ICON_PATHS = {
            'M5.5 3v3.2h4.2V3', 'M5.5 13V9.6h5V13'],
   trash:  ['M2.8 4.4h10.4', 'M6.4 4.4V2.9h3.2v1.5', 'M4.2 4.4 4.8 13.2h6.4l.6-8.8'],
   close:  ['M4 4l8 8', 'M12 4l-8 8'],
+  check:  ['M3 8.4 6.4 11.6 13 4.8'],
   reload: ['M13 8a5 5 0 1 1-1.7-3.75', 'M13.2 2v3.1h-3.1'],
   undo:   ['M3.2 7.2h7a3 3 0 0 1 0 6H7', 'M6 4.4 3.2 7.2 6 10']
 };
@@ -1053,6 +1095,7 @@ function writeForm(card, status) {
 
 /** id が null なら新規作成。presetStatus は新規作成時の初期ステータス。 */
 function openPanel(id, presetStatus) {
+  closeImpPanel();   // 障害物のパネルと同時には開かない
   var card = id ? findCard(board, id) : null;
   if (id && !card) return;
   var status = id ? columnStatusOf(board, id) : (presetStatus || STATUS_OPTIONS[0]);
@@ -1178,14 +1221,20 @@ var UNDO_SECONDS = 10;
 // 全体メッセージで知らせる。
 var activeToastText = null;
 
-/** 取り消せる通知を出す。時間が過ぎたら消える。 */
-function showUndoToast(text, onUndo) {
+/**
+ * 取り消せる通知を出す。時間が過ぎたら消える。
+ * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）、
+ * iconName はそのアイコン（既定は undo。「完了する」は check）。
+ */
+function showUndoToast(text, onUndo, actionLabel, iconName) {
   if (toastTimer && activeToastText) {
-    setMessage(activeToastText + '（この削除はもう取り消せません）', 'info');
+    setMessage(activeToastText + '（もう取り消せません）', 'info');
   }
   var el = document.getElementById('toast');
   document.getElementById('toast-text').textContent = text;
   var btn = document.getElementById('toast-undo');
+  btn.innerHTML = '';
+  fillButton(btn, iconName || 'undo', actionLabel || '取り消す');
   btn.onclick = function () { hideToast(); onUndo(); };
   el.hidden = false;
   activeToastText = text;
@@ -1300,6 +1349,264 @@ function restorePbi(row) {
     .apiRestorePbi(row);
 }
 
+// --- 障害物パネル -----------------------------------------------------------
+// PBI のパネルとは項目も競合判定も違う（障害物の CSV には updated_at が無く、
+// 見た行の全列を送り返して比べる）ため、状態を分けて持つ。
+var impView = null;   // 最後に描いた障害物のビュー（パネルの値の出どころ）
+var impPanelState = { id: null, expected: null, resolving: false };
+var impPanelSeq = 0;
+var impSprintChoices = [];   // 障害物の応答が運ぶ選択肢（PBI パネルの sprintChoices とは別）
+var impWriteIssued = 0;      // 障害物の書き込みを発行した通し番号（古い応答で表を戻さないため）
+var lastAppliedImp = 0;      // 表に反映した応答のうち、最も新しい書き込みの通し番号
+var IMP_FORM_FIELD_IDS = ['i-title', 'i-description', 'i-reported-by', 'i-sprint', 'i-resolution'];
+
+function findImpRow(id) {
+  var rows = (impView && impView.open) || [];
+  for (var i = 0; i < rows.length; i++) if (rows[i].id === id) return rows[i];
+  return null;
+}
+
+function setImpPanelMessage(text, kind) {
+  var el = document.getElementById('imp-panel-message');
+  el.textContent = text || '';
+  el.className = kind || 'info';
+}
+
+var impPanelBusy = false;
+
+/** 送信中は全部、解決策の入力中は解決策以外の欄を塞ぐ（送らない編集を黙って捨てないため）。 */
+function applyImpLocks() {
+  // 解決策の入力中は保存を押せない（保存して閉じると、打った解決策を黙って捨てるため）。
+  document.getElementById('imp-panel-save').disabled = impPanelBusy || impPanelState.resolving;
+  document.getElementById('imp-panel-resolve').disabled = impPanelBusy;
+  IMP_FORM_FIELD_IDS.forEach(function (id) {
+    document.getElementById(id).disabled = impPanelBusy || (impPanelState.resolving && id !== 'i-resolution');
+  });
+}
+
+function setImpPanelBusy(busy) {
+  impPanelBusy = busy;
+  applyImpLocks();
+}
+
+function fillImpSprintSelect(value) {
+  var el = document.getElementById('i-sprint');
+  clearHost(el);
+  var seen = false;
+  impSprintChoices.forEach(function (c) {
+    var o = document.createElement('option');
+    o.value = c.value;
+    o.textContent = c.label;
+    if (c.value === value) seen = true;
+    el.appendChild(o);
+  });
+  // 今の値が選択肢に無くても失わない（PBI の fillSprintSelect と同じ考え方）。
+  if (!seen && value) {
+    var extra = document.createElement('option');
+    extra.value = value;
+    extra.textContent = value;
+    el.appendChild(extra);
+  }
+  el.value = value;
+}
+
+function setImpResolving(on) {
+  impPanelState.resolving = on;
+  document.getElementById('i-resolution-field').hidden = !on;
+  applyImpLocks();
+  var btn = document.getElementById('imp-panel-resolve');
+  btn.innerHTML = '';   // fillButton は追記するだけ。空にしないと文言が積み重なる
+  fillButton(btn, 'check', on ? '解決を確定' : '解決する');
+}
+
+/** id が null なら新規作成。 */
+function openImpPanel(id) {
+  var row = id ? findImpRow(id) : null;
+  if (id && !row) return;
+  closePanel();   // PBI のパネルと同時には開かない
+  impPanelSeq++;
+  impPanelState = { id: id, expected: row, resolving: false };
+  document.getElementById('imp-panel-title').textContent = id ? id : '新しい障害物';
+  document.getElementById('i-title').value = (row && row.title) || '';
+  document.getElementById('i-description').value = (row && row.description) || '';
+  document.getElementById('i-reported-by').value = (row && row.reported_by) || '';
+  document.getElementById('i-resolution').value = '';
+  // 既定は最新のスプリント（選択肢の末尾）。既存の行はその値のまま。
+  // 速度表に無いスプリント（unknown）は既定にしない。
+  var latestSprint = '';
+  impSprintChoices.forEach(function (c) { if (c.value !== '' && c.unknown !== true) latestSprint = c.value; });
+  fillImpSprintSelect(row ? String(row.sprint || '').trim() : latestSprint);
+  document.getElementById('imp-panel-resolve').hidden = !id;
+  setImpResolving(false);
+  setImpPanelMessage('', 'info');
+  setImpPanelBusy(false);
+  document.getElementById('imp-panel').hidden = false;
+  document.getElementById('i-title').focus();
+}
+
+function closeImpPanel() {
+  document.getElementById('imp-panel').hidden = true;
+  impPanelSeq++;
+  impPanelState = { id: null, expected: null, resolving: false };
+}
+
+function readImpForm() {
+  return {
+    title: document.getElementById('i-title').value,
+    description: document.getElementById('i-description').value,
+    reported_by: document.getElementById('i-reported-by').value,
+    sprint: document.getElementById('i-sprint').value,
+  };
+}
+
+/**
+ * 障害物の書き込みの応答を受ける共通部分。表と要約は、今も障害物のビューを見ているときだけ
+ * 描き直す（応答待ちの間に別タブへ移っていれば、そのタブの表と要約を上書きしない）。
+ */
+function applyImpResponse(res, issued) {
+  if (res.sprintChoices) impSprintChoices = res.sprintChoices;
+  if (!res.view) return;
+  // 後から発行した書き込みの応答を既に反映しているなら、この応答は古い。表と要約を戻さない。
+  // （後の書き込みがビュー無しで返った場合は、この応答が最新の手がかりなので反映する）
+  if (issued <= lastAppliedImp) return;
+  lastAppliedImp = issued;
+  impView = res.view;
+  if (activeView === 'impediment') {
+    renderTable(res.view);
+    renderSummary(res.summary);
+  }
+}
+
+/**
+ * 書き込みを送る。after(res, mine) は成功時に呼ばれる（mine はパネルが今も同じものか）。
+ * onPartial(res, mine) を渡すと、途中で止まった応答（partial）をそちらで扱う。
+ */
+function sendImpWrite(method, args, label, after, onPartial) {
+  var seq = impPanelSeq;
+  var issued = ++impWriteIssued;
+  setImpPanelBusy(true);
+  var runner = google.script.run
+    .withSuccessHandler(function (res) {
+      var mine = (seq === impPanelSeq);
+      if (mine) setImpPanelBusy(false);
+      if (res.ok) writeSeq++;
+      applyImpResponse(res, issued);
+      if (res.ok) { after(res, mine); return; }
+      if (res.reason === 'partial' && onPartial) { onPartial(res, mine); return; }
+      // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
+      if (mine && impPanelState.id) {
+        var latest = findImpRow(impPanelState.id);   // 古い応答なら表は戻していないので、最新のまま
+        if (latest) impPanelState.expected = latest;
+      }
+      if (mine) setImpPanelMessage(res.message, 'error');
+      else setMessage(res.message, 'error');
+    })
+    .withFailureHandler(function (err) {
+      if (seq === impPanelSeq) {
+        setImpPanelBusy(false);
+        setImpPanelMessage(label + 'に失敗しました: ' + err.message, 'error');
+      } else {
+        setMessage(label + 'に失敗しました: ' + err.message, 'error');
+      }
+    });
+  runner[method].apply(runner, args);
+}
+
+function saveImpPanel() {
+  var id = impPanelState.id;
+  var fields = readImpForm();
+  if (id) {
+    sendImpWrite('apiUpdateImpediment', [id, fields, impPanelState.expected], '保存', function (res, mine) {
+      if (mine) closeImpPanel();
+      setMessage(id + ' を保存しました。', 'info');
+    });
+  } else {
+    sendImpWrite('apiCreateImpediment', [fields], '作成', function (res, mine) {
+      if (mine) closeImpPanel();
+      setMessage(res.id + ' を作成しました。', 'info');
+    });
+  }
+}
+
+/** 1回目は解決策の欄を出すだけ。2回目で送る（取り消せるが、誤って押しただけで解決させない）。 */
+function resolveImp() {
+  var id = impPanelState.id;
+  if (!id) return;
+  if (!impPanelState.resolving) {
+    setImpResolving(true);
+    document.getElementById('i-resolution').focus();
+    return;
+  }
+  var resolution = document.getElementById('i-resolution').value;
+  var expected = impPanelState.expected;
+  sendImpWrite('apiResolveImpediment', [id, resolution, expected], '解決', function (res, mine) {
+    if (mine) closeImpPanel();
+    showResolveOutcome(id, resolution, expected, res);
+  }, function (res, mine) {
+    // 解決済に足した行が正になり、未解決には出なくなる。パネルを開いたままにしない。
+    if (mine) closeImpPanel();
+    showResolveOutcome(id, resolution, expected, res);
+  });
+}
+
+/**
+ * 解決の応答（成功・途中で停止）を通知に出す。パネルが閉じていても使えるよう、
+ * 送り直しに要る値（id / 解決策 / 見た行）は引数で受け取る。
+ */
+function showResolveOutcome(id, resolution, expected, res) {
+  if (res.ok) {
+    // 通知の題は送った側の行から取る（編集欄の値ではない）。
+    var title = (res.moved && res.moved.title) || (expected && expected.title) || '';
+    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); });
+    return;
+  }
+  setMessage(res.message, 'error');
+  showUndoToast(id + ' の解決が途中で止まりました。',
+    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check');
+}
+
+/** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
+function retryResolveImp(id, resolution, expected) {
+  var issued = ++impWriteIssued;
+  setMessage(id + ' の解決を完了しています…', 'info');
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (res.ok) writeSeq++;
+      applyImpResponse(res, issued);
+      if (res.ok || res.reason === 'partial') {
+        if (res.ok) setMessage(id + ' を解決しました。', 'info');
+        showResolveOutcome(id, resolution, expected, res);
+        return;
+      }
+      setMessage(res.message, 'error');
+    })
+    .withFailureHandler(function (err) {
+      setMessage('解決に失敗しました: ' + err.message, 'error');
+    })
+    .apiResolveImpediment(id, resolution, expected);
+}
+
+function unresolveImp(moved, resolvedRow) {
+  if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  var issued = ++impWriteIssued;
+  setMessage(moved.id + ' を戻しています…', 'info');
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (res.ok) writeSeq++;
+      applyImpResponse(res, issued);
+      setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
+      if (res.reason === 'partial') {
+        // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
+        showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
+          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check');
+      }
+    })
+    .withFailureHandler(function (err) {
+      setMessage('取り消せませんでした: ' + err.message, 'error');
+    })
+    .apiUnresolveImpediment(moved, resolvedRow);
+}
+
 function renderTabs() {
   var tabs = document.getElementById('tabs');
   tabs.innerHTML = '';
@@ -1341,6 +1648,7 @@ function switchTab(tabId) {
   activeTab = tabId;
   activeView = tab.views[0].id;
   closePanel();
+  closeImpPanel();
   renderTabs();
   showView(activeView);
   loadView();
@@ -1349,6 +1657,7 @@ function switchTab(tabId) {
 function switchView(viewId) {
   activeView = viewId;
   closePanel();
+  closeImpPanel();
   renderTabs();
   showView(activeView);
   loadView();
@@ -1475,12 +1784,18 @@ function loadView() {
         }
         // スプリントの選択肢。盤面の応答だけが運ぶため、載っているときだけ入れ替える
         // （載っていない応答で空にすると、次に開くパネルが選択肢を失う）。
-        if (res.sprintChoices) sprintChoices = res.sprintChoices;
+        // 障害物の応答の選択肢は障害物パネル専用の変数へ入れ、PBI パネルのものと混ぜない。
+        if (res.sprintChoices) {
+          if (requestedView === 'impediment') impSprintChoices = res.sprintChoices;
+          else sprintChoices = res.sprintChoices;
+        }
         // hidden の切替と要約のクリアは showView() が発行前（クリック時点）に済ませている。
         // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
         // 操作可能な盤面や表が残ってしまう）。
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
         renderSummary(res.summary);
+        // 障害物の読み直しは、発行済みの書き込みより新しい状態。遅れて届く古い書き込みの応答で表を戻さない。
+        if (requestedView === 'impediment') lastAppliedImp = impWriteIssued;
         setMessage('', 'info');
       } else {
         // 失敗が確定した（＝捨てるべき応答ではない）。placeholder が出ていれば畳む。
@@ -1546,8 +1861,8 @@ function gridTable(headers, rows, marks) {
   return table;
 }
 
-/** columns（{field,label}の配列）と rows（オブジェクトの配列）から表を作る。一覧/完了/障害物用。 */
-function objectTable(columns, rows) {
+/** columns と rows から表を作る。onRow があれば各行を押せる行にする（障害物の未解決）。 */
+function objectTable(columns, rows, onRow) {
   if (!rows || rows.length === 0) return emptyTableRow('ありません。');
   var table = document.createElement('table');
   table.appendChild(tableHead(columns.map(function (c) { return c.label; })));
@@ -1560,6 +1875,15 @@ function objectTable(columns, rows) {
       td.textContent = (v === null || v === undefined) ? '' : String(v);
       tr.appendChild(td);
     });
+    if (onRow) {
+      tr.className = 'clickable';
+      tr.dataset.id = row.id;
+      tr.setAttribute('tabindex', '0');
+      tr.addEventListener('click', function () { onRow(row); });
+      tr.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { if (ev.preventDefault) ev.preventDefault(); onRow(row); }
+      });
+    }
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
@@ -1567,12 +1891,12 @@ function objectTable(columns, rows) {
 }
 
 /** 見出し付きの表。障害物の未解決/解決済のように、同じ列定義の表を複数並べるときに使う。 */
-function tableSection(title, columns, rows) {
+function tableSection(title, columns, rows, onRow) {
   var section = document.createElement('div');
   var h = document.createElement('h3');
   h.textContent = title;
   section.appendChild(h);
-  section.appendChild(objectTable(columns, rows));
+  section.appendChild(objectTable(columns, rows, onRow));
   return section;
 }
 
@@ -1597,9 +1921,19 @@ function renderTable(view) {
     note.textContent = view.notice;
     host.appendChild(note);
   }
-  // 障害物は未解決と解決済の2つの表になる。
+  // 障害物は未解決と解決済の2つの表になる。未解決の行だけ押せる。
   if (view.open !== undefined && view.resolved !== undefined) {
-    host.appendChild(tableSection('未解決', view.columns, view.open));
+    impView = view;
+    var actions = document.createElement('div');
+    actions.className = 'table-actions';
+    var add = document.createElement('button');
+    add.id = 'imp-add';
+    add.type = 'button';
+    fillButton(add, 'plus', '障害物を追加');
+    add.addEventListener('click', function () { openImpPanel(null); });
+    actions.appendChild(add);
+    host.appendChild(actions);
+    host.appendChild(tableSection('未解決', view.columns, view.open, function (row) { openImpPanel(row.id); }));
     host.appendChild(tableSection('解決済', view.columns, view.resolved));
     return;
   }
@@ -1678,6 +2012,11 @@ window.addEventListener('resize', function () { closeOpenHelp(); });
 document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
+fillButton(document.getElementById('imp-panel-save'), 'save', '保存');
+document.getElementById('imp-panel-close').appendChild(makeIcon('close'));
+document.getElementById('imp-panel-close').addEventListener('click', closeImpPanel);
+document.getElementById('imp-panel-save').addEventListener('click', saveImpPanel);
+document.getElementById('imp-panel-resolve').addEventListener('click', resolveImp);
 document.getElementById('panel-close').addEventListener('click', closePanel);
 document.getElementById('panel-save').addEventListener('click', savePanel);
 fillButton(document.getElementById('toast-undo'), 'undo', '取り消す');
@@ -1712,7 +2051,8 @@ document.addEventListener('keydown', function (ev) {
   // 一番手前にあるものから閉じる。補足は通知（z-index: 10）より上（20）に出る。
   if (closeOpenHelp()) return;
   if (!document.getElementById('toast').hidden) { hideToast(); return; }
-  if (!document.getElementById('panel').hidden) closePanel();
+  if (!document.getElementById('panel').hidden) { closePanel(); return; }
+  if (!document.getElementById('imp-panel').hidden) closeImpPanel();
 });
 renderTabs();
 showView(activeView);

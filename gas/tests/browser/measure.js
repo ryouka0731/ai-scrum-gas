@@ -95,6 +95,9 @@ async function measureOne(session, html, spec) {
   // kanban_browser.test.js の「パネルが閉じているときは、通知が画面の中央のまま」参照）。
   const toastClosed = await session.evaluate('return window.__probe.toastCenteredWhilePanelClosed();');
 
+  // 障害物パネルの幅。タブを切り替えて状態を変えるので最後に測る。
+  toast.impPanelWidth = await session.evaluate('return window.__probe.impPanelWidth();');
+
   return {
     width: spec.width, height: spec.height || HEIGHT, scheme: spec.scheme,
     where: where, token: opened.token, actualViewport: opened.viewport,

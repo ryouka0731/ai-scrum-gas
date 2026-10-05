@@ -50,3 +50,20 @@ test('どちらも無ければ空で返る', () => {
   assert.deepEqual(v.resolved, []);
   assert.ok(v.columns.length > 0);
 });
+
+const { openImpedimentsShown } = require('../pure_view_impediment.js');
+
+test('行は表に出さない status も含めて全列を持つ（画面が競合判定の基準として送り返す）', () => {
+  const v = buildImpedimentView([imp()], []);
+  assert.deepEqual(Object.keys(v.open[0]).sort(),
+    ['description', 'id', 'reported_at', 'reported_by', 'resolution', 'resolved_at', 'sprint', 'status', 'title']);
+  assert.equal(v.open[0].status, 'Open');
+});
+
+test('両方にある ID は未解決から隠し、解決済にだけ出す（書き込みが途中で止まった状態）', () => {
+  const v = buildImpedimentView([imp({ id: 'IMP-002' }), imp({ id: 'IMP-003' })],
+    [imp({ id: ' IMP-002 ', status: 'Resolved' })]);
+  assert.deepEqual(v.open.map((r) => r.id), ['IMP-003']);
+  assert.deepEqual(v.resolved.map((r) => r.id.trim()), ['IMP-002']);
+  assert.deepEqual(openImpedimentsShown([imp({ id: 'IMP-002' })], [imp({ id: 'IMP-002' })]), []);
+});

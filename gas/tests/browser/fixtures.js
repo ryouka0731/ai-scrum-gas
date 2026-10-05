@@ -78,13 +78,16 @@ const SPRINT_MD = [
   '', '## PBI', '',
 ].join('\n');
 
+// 障害物の CSV と同じ全列（IMPEDIMENT_FIELDS）を持たせる。未解決は必ず1件以上
+// 置くこと（障害物パネルの幅の検査が、未解決の行を押して開くため）。
 const IMPEDIMENT_OPEN = [
-  { id: 'IMP-001', title: 'Drive の共有設定が分からない', detail: '配布先の権限', raised_by: 'マヤ',
-    raised_at: '2026-09-01', owner: 'ケンジ', due: '2026-09-08', status: 'open' },
+  { id: 'IMP-001', title: 'Drive の共有設定が分からない', description: '配布先の権限', reported_by: 'マヤ',
+    reported_at: '2026-09-01', status: 'open', resolved_at: '', resolution: '', sprint: 'sprint003' },
 ];
 const IMPEDIMENT_RESOLVED = [
-  { id: 'IMP-000', title: 'clasp のログインが通らない', detail: '個人アカウント', raised_by: 'ダイチ',
-    raised_at: '2026-08-20', owner: 'ケンジ', due: '2026-08-22', status: 'resolved' },
+  { id: 'IMP-000', title: 'clasp のログインが通らない', description: '個人アカウント', reported_by: 'ダイチ',
+    reported_at: '2026-08-20', status: 'resolved', resolved_at: '2026-08-22', resolution: '管理者のアカウントで通した',
+    sprint: 'sprint002' },
 ];
 
 function viewFor(name) {
@@ -99,9 +102,11 @@ function viewFor(name) {
     case 'burndown': return { view: buildBurndownView(SPRINT_MD), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
     case 'velocity': return { view: buildVelocityView(VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
     case 'roadmap': return { view: buildRoadmapView(ROWS, VELOCITY), summary: summarizeSprint(VELOCITY, SPRINT_MD) };
+    // impedimentPayload_（web_app.js）と同じ形: view / summary / sprintChoices。
     case 'impediment':
       return { view: buildImpedimentView(IMPEDIMENT_OPEN, IMPEDIMENT_RESOLVED),
-        summary: summarizeImpediment(IMPEDIMENT_OPEN, IMPEDIMENT_RESOLVED) };
+        summary: summarizeImpediment(IMPEDIMENT_OPEN, IMPEDIMENT_RESOLVED),
+        sprintChoices: sprintChoices(VELOCITY, IMPEDIMENT_OPEN.concat(IMPEDIMENT_RESOLVED)) };
     default: return { view: null, summary: null };
   }
 }
@@ -114,6 +119,7 @@ function responses() {
   VIEW_NAMES.forEach(function (name) {
     const r = viewFor(name);
     out[name] = { ok: true, name: name, view: r.view, summary: r.summary };
+    if (r.sprintChoices) out[name].sprintChoices = r.sprintChoices;
   });
   // スプリントの選択肢は盤面の応答だけが運ぶ（サーバ側が完成させて返す）。
   out.board.sprintChoices = sprintChoices(VELOCITY, ROWS);

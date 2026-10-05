@@ -157,7 +157,7 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
         });
 
         test('パネルの幅は、宣言どおり（380px）になる', () => {
-          // 901px 以上でだけ判定する。900px 以下は #panel { flex: 1 1 auto; width: 100%; }
+          // 901px 以上でだけ判定する。900px 以下は .side-panel { flex: 1 1 auto; width: 100%; }
           // で全幅にする設計で、380px と一致しないのが正しい（別の検査が既にその全幅を見ている）。
           if (width <= 900) return;
           const p = measured[where].toast.panelWidth;
@@ -165,6 +165,12 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
           assert.equal(p.actual, 380,
             where + ': パネルの実測幅が宣言（380px）と違う（' + p.actual
             + 'px）。flex 項目の自動的な最小の幅が下限になっている可能性がある');
+        });
+
+        test('障害物パネルの幅も、宣言どおり（380px）になる', () => {
+          if (width <= 900) return;   // 900px 以下は全幅にする設計
+          assert.equal(measured[where].toast.impPanelWidth, 380,
+            where + ': 障害物パネルの実測幅が宣言と違う（.side-panel の規則が効いていない）');
         });
 
         test('表は枠の中で横スクロールし、ページを横に伸ばさない', () => {
@@ -288,7 +294,7 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
         });
 
         test('パネルが閉じているときは、通知が画面の中央のまま', () => {
-          // `@media (min-width: 901px) #main:has(#panel:not([hidden])) ~ #toast` は
+          // `@media (min-width: 901px) #main:has(.side-panel:not([hidden])) ~ #toast` は
           // パネルが開いている間だけ通知を寄せる意図（:not([hidden]) がその境目）。
           // 上のテストはパネルが開いた状態でしか見ていないため、この境目が壊れて
           // 閉じていても寄ったまま（またはその逆）になる退行を検出できない。

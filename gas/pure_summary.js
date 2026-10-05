@@ -25,6 +25,9 @@ if (typeof require !== 'undefined' && typeof normalizeSprint === 'undefined') {
 if (typeof require !== 'undefined' && typeof isImpedimentPlaceholder === 'undefined') {
   var { isImpedimentPlaceholder } = require('./pure_grid_report.js');
 }
+if (typeof require !== 'undefined' && typeof openImpedimentsShown === 'undefined') {
+  var { openImpedimentsShown } = require('./pure_view_impediment.js');
+}
 
 /** やることの要約。ステータスの語彙は引数で受け取る（KANBAN_STATUSES は const のため）。 */
 function summarizeBacklog(rows, statuses) {
@@ -105,12 +108,10 @@ function summarizeSprint(velocityRows, sprintBacklogMd) {
   };
 }
 
-/** 障害物の要約。件数はファイル別に数える（status 列では分かれていない）。 */
+/** 障害物の要約。件数はファイル別。両方にある ID は解決済として数える（ビューと同じ規則）。 */
 function summarizeImpediment(openRows, resolvedRows) {
-  const count = function (rows) {
-    return (rows || []).filter(function (r) { return !isImpedimentPlaceholder(r); }).length;
-  };
-  return { open: count(openRows), resolved: count(resolvedRows) };
+  const resolved = (resolvedRows || []).filter(function (r) { return !isImpedimentPlaceholder(r); });
+  return { open: openImpedimentsShown(openRows, resolvedRows).length, resolved: resolved.length };
 }
 
 if (typeof module !== 'undefined') { module.exports = { summarizeBacklog, summarizeSprint, summarizeImpediment }; }

@@ -535,7 +535,7 @@
       var ur = undo.getBoundingClientRect();
       // パネルは今まさに開いている（このすぐ上で next.click() した）。この幅の
       // 検査だけのために開閉をやり直すのは無駄なので、ここで一緒に測る。
-      // 900px 以下は #panel { flex: 1 1 auto; width: 100%; } で全幅にする設計なので
+      // 900px 以下は .side-panel { flex: 1 1 auto; width: 100%; } で全幅にする設計なので
       // 380px と一致しない（意図どおり）。判定は呼び出し側で幅を見て行う。
       var panelRect = panel.getBoundingClientRect();
       return {
@@ -570,9 +570,9 @@
     /**
      * パネルが閉じている状態で通知が中央にあるか測る。
      *
-     * `@media (min-width: 901px) #main:has(#panel:not([hidden])) ~ #toast` は
+     * `@media (min-width: 901px) #main:has(.side-panel:not([hidden])) ~ #toast` は
      * パネルが開いている間**だけ**通知を寄せる意図（`:not([hidden])`）。閉じている
-     * ときにこの上書きが誤って効く（例: `:not([hidden])` を落として `:has(#panel)`
+     * ときにこの上書きが誤って効く（例: `:not([hidden])` を落として `:has(.side-panel)`
      * にする）と、通知は画面の中央から動いたままになるが、`toastOverPanel()` は
      * パネルを開いた状態でしか測っていないため、その退行を検出できない。
      *
@@ -642,6 +642,29 @@
         message: txt(message),
         messageKind: message.className,
       };
+    },
+
+    /**
+     * 障害物パネル（#imp-panel）の実測幅。.side-panel の規則が効いているかを見る。
+     * 障害物タブへ切り替え、未解決の最初の行を押して開き、測ったら Escape で閉じる。
+     * 画面の状態を変えるので、他の測定が済んだあとに呼ぶこと。
+     */
+    impPanelWidth: async function () {
+      var tab = list('button', document.getElementById('tabs')).filter(function (x) { return txt(x) === '障害物'; })[0];
+      if (!tab) throw new Error('#tabs に「障害物」のボタンがありません');
+      tab.click();
+      var until = Date.now() + 3000;
+      var row;
+      while (!(row = document.querySelector('#table-view tr.clickable')) && Date.now() < until) await sleep(20);
+      if (!row) throw new Error('障害物の未解決の行（tr.clickable）が描かれませんでした');
+      row.click();
+      await frame();
+      var panel = document.getElementById('imp-panel');
+      if (panel.hidden) throw new Error('障害物パネルが開きませんでした');
+      var width = Math.round(panel.getBoundingClientRect().width * 100) / 100;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await frame();
+      return width;
     },
 
     /** #tabs / #views のボタンをラベルで押す。 */

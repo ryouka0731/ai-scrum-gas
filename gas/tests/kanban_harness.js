@@ -224,7 +224,7 @@ const VOID_TAGS = { input: true, img: true, br: true, hr: true, meta: true, link
  * 追跡する。id が無い要素をスタックから丸ごと飛ばしていた頃は、
  * `<div hidden><span><button id="x">` のような構造で `#x` の祖先探索が
  * `<div hidden>` を素通りしていた（今の kanban.html では hidden が付くのは
- * `#table-view`/`#panel`/`#toast` の3つだけなので実害は無いが、id を持たない
+ * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field` だけなので実害は無いが、id を持たない
  * 祖先に hidden が増えた瞬間にシムだけが実ブラウザとずれる）。
  * 親子は parentNode だけで結び、children には積まない — 積むと `clearHost()` の
  * innerHTML = '' が静的な子まで消してしまう。
@@ -300,7 +300,8 @@ function isHidden(el) {
 // 実装が呼ぶサーバ側 API。ここに無い名前を呼ぶと TypeError になり、取りこぼしに気づける。
 const API_METHODS = [
   'apiGetView', 'apiUpdateStatus', 'apiUpdatePbi',
-  'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi'
+  'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi',
+  'apiCreateImpediment', 'apiUpdateImpediment', 'apiResolveImpediment', 'apiUnresolveImpediment'
 ];
 
 /** 呼び出しをキューに積むだけの google.script.run を作る。 */
@@ -597,6 +598,20 @@ function createHarness(initialColumns) {
       fireVisible(hit[0], 'click', {}, 'ビュー「' + label + '」');
     },
 
+    /** #table-view の中の、data-id がその値の行を押す（障害物の未解決の行）。 */
+    clickImpRow: function (id) {
+      const hit = collect(byId['table-view'], function (e) { return e.tagName === 'tr' && e.dataset.id === id; });
+      if (hit.length !== 1) throw new Error('行 ' + id + ' が ' + hit.length + ' 件見つかりました');
+      fireVisible(hit[0], 'click', {}, '行 ' + id);
+    },
+
+    /** 障害物タブの「障害物を追加」を押す。 */
+    clickImpAdd: function () {
+      const hit = collect(byId['table-view'], function (e) { return e.id === 'imp-add'; });
+      if (hit.length !== 1) throw new Error('「障害物を追加」が ' + hit.length + ' 件見つかりました');
+      fireVisible(hit[0], 'click', {}, '「障害物を追加」');
+    },
+
     /** #tabs / #views のボタンのラベルと選択状態（aria-selected）を DOM から読む。 */
     tabState: function () {
       const state = function (container) {
@@ -755,6 +770,16 @@ function createHarness(initialColumns) {
       return hit[0];
     },
 
+    /** ボタンの直下の span（ラベル）の文字だけを連結して返す。 */
+    labelOf: function (id) {
+      return el(id).children.filter(function (c) { return c.tagName === 'span'; })
+        .map(function (c) { return c.textContent; }).join('');
+    },
+    /** ボタンの先頭のアイコン（svg）の最初の path の d を返す。 */
+    iconPathOf: function (id) {
+      const svg = el(id).children.filter(function (c) { return c.tagName === 'svg'; })[0];
+      return svg ? svg.children[0].getAttribute('d') : null;
+    },
     /** id の要素の下にあるテキストをすべて（DOM 順に空白区切りで）連結して読む。 */
     textTreeOf: function (hostId) {
       const texts = [];
