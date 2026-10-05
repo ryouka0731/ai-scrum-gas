@@ -9,18 +9,17 @@
  * （足す側 → 消す側）に任せる。書かなくてよいファイルは null で返す。
  */
 
-// Node テスト用: グローバルに参照を置く（GAS は const で宣言済みなのでここでは何もしない）
-if (typeof require !== 'undefined') {
-  if (typeof IMPEDIMENT_FIELDS === 'undefined') {
-    var g = require('./pure_grid_report.js');
-    var v = require('./pure_impediment_validate.js');
-    var i = require('./pure_impediment_id.js');
-    if (typeof globalThis !== 'undefined') {
-      globalThis.IMPEDIMENT_FIELDS = g.IMPEDIMENT_FIELDS;
-      globalThis.IMPEDIMENT_EDITABLE_FIELDS = v.IMPEDIMENT_EDITABLE_FIELDS;
-      globalThis.IMPEDIMENT_ID_NUM_RE = i.IMPEDIMENT_ID_NUM_RE;
-    }
-  }
+// Node テスト用: グローバルに参照を置く（GAS は const で宣言済みなのでここでは何もしない）。
+// var で同名の定数を宣言すると GAS のグローバルスコープで再宣言エラーになるため、
+// 1文字の仲介変数を使わずに globalThis に直接代入する。
+if (typeof require !== 'undefined' && typeof IMPEDIMENT_FIELDS === 'undefined') {
+  globalThis.IMPEDIMENT_FIELDS = require('./pure_grid_report.js').IMPEDIMENT_FIELDS;
+}
+if (typeof require !== 'undefined' && typeof IMPEDIMENT_EDITABLE_FIELDS === 'undefined') {
+  globalThis.IMPEDIMENT_EDITABLE_FIELDS = require('./pure_impediment_validate.js').IMPEDIMENT_EDITABLE_FIELDS;
+}
+if (typeof require !== 'undefined' && typeof IMPEDIMENT_ID_NUM_RE === 'undefined') {
+  globalThis.IMPEDIMENT_ID_NUM_RE = require('./pure_impediment_id.js').IMPEDIMENT_ID_NUM_RE;
 }
 
 function impText_(v) { return v === undefined || v === null ? '' : String(v); }
