@@ -69,3 +69,7 @@ test('障害物の2ファイルにも書ける', () => {
   assert.doesNotThrow(() => assertWritableFileName('impediment_log_resolved.csv'));
   assert.throws(() => assertWritableFileName('velocity.csv'));
 });
+
+test('comments.csv は書き込める（第5段階）', function () {
+  assert.doesNotThrow(function () { assertWritableFileName('comments.csv'); });
+});

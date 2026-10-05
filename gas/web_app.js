@@ -126,6 +126,7 @@ function apiGetView(name) {
       // 選択肢は「完成した形」で渡す — 組み立ての規則を画面側に写すと、サーバ側だけを
       // 直したときに黙ってずれる（ロードマップには出るのに選択肢には出ないスプリント等）。
       // velocity.csv が無くても盤面は読める（未割り当て＋PBI に付いている名前だけになる）。
+      out.comments = commentsPayload_();
       if (key === 'board') {
         out.sprintChoices = sprintChoices(readCsvRowsBestEffort_(VELOCITY_CSV_NAME), rows);
       }
@@ -391,6 +392,7 @@ function impedimentPayload_(openRows, resolvedRows) {
     view: buildImpedimentView(openRows, resolvedRows),
     summary: summarizeImpediment(openRows, resolvedRows),
     sprintChoices: sprintChoices(readCsvRowsBestEffort_(VELOCITY_CSV_NAME), openRows.concat(resolvedRows)),
+    comments: commentsPayload_(),
   };
 }
 
@@ -534,5 +536,91 @@ function apiUnresolveImpediment(moved, resolvedRow) {
       return { ok: false, reason: r.reason, message: message };
     }
     return { ok: true, open: r.open, resolved: r.resolved };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// コメント（第5段階）
+// ---------------------------------------------------------------------------
+
+const COMMENT_CSV_NAME = 'comments.csv';
+
+/** ログイン中のメール。取れなければ空文字（誰のコメントも消せない側に倒す）。 */
+function currentUserEmail_() {
+  try { return String(Session.getActiveUser().getEmail() || ''); } catch (e) { return ''; }
+}
+
+/** 全対象のコメント。ファイルが無い・壊れていても空にする（他の表示を巻き添えにしない）。 */
+function commentsPayload_() {
+  return groupComments(readCsvRowsBestEffort_(COMMENT_CSV_NAME), currentUserEmail_());
+}
+
+/** CMT- + UUID の先頭8桁。 */
+function newCommentId_() {
+  return 'CMT-' + String(Utilities.getUuid()).replace(/-/g, '').slice(0, 8).toLowerCase();
+}
+
+/**
+ * コメントの書き込みの共通手順。ロックを取り、読み直し、ヘッダーを検査してから mutate(rows) を呼ぶ。
+ * mutate は { ok:true, rows, extra? } か { ok:false, reason, message } を返す。rows が null なら書かない。
+ */
+function withCommentWrite_(mutate) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return { ok: false, reason: 'busy', message: '他の更新が実行中です。少し待って再試行してください。' };
+  }
+  try {
+    const text = readTextFile_(getScrumFolder_(), COMMENT_CSV_NAME);
+    if (text === null) {
+      return { ok: false, reason: 'error', message: 'scrum/' + COMMENT_CSV_NAME + ' が見つかりません。配布し直してください。' };
+    }
+    assertHeaderMatches(text, COMMENT_FIELDS);
+    const rows = csvToObjects(text);
+    const me = currentUserEmail_();
+    const result = mutate(rows, me);
+    if (!result.ok) return { ok: false, reason: result.reason, message: result.message, comments: groupComments(rows, me) };
+    if (result.rows) writeScrumFile_(COMMENT_CSV_NAME, toCsv(result.rows, COMMENT_FIELDS));
+    return Object.assign({ ok: true, comments: groupComments(result.rows || rows, me) }, result.extra || {});
+  } catch (e) {
+    return { ok: false, reason: 'error', message: e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** コメントを足す。ID・書いた人・時刻はサーバが決める。 */
+function apiAddComment(targetId, body) {
+  return withCommentWrite_(function (rows, me) {
+    const v = validateComment(targetId, body);
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+    const r = appendComment(rows, newCommentId_(), targetId, me, String(body), nowText_());
+    return { ok: true, rows: r.rows, extra: { comment: r.comment } };
+  });
+}
+
+/** 自分のコメントを消す。取り消しに使うため、消した行を返す。 */
+function apiDeleteComment(commentId) {
+  return withCommentWrite_(function (rows, me) {
+    const r = deleteComment(rows, commentId, me);
+    if (!r.ok) {
+      return { ok: false, reason: r.reason,
+        message: r.reason === 'forbidden' ? '自分のコメントだけ削除できます。' : 'このコメントが見つかりません。' };
+    }
+    return { ok: true, rows: r.rows, extra: { removed: r.removed } };
+  });
+}
+
+/**
+ * 削除したコメントを戻す。通知の「取り消す」から呼ばれる。
+ * 戻せるのは自分のコメントだけ（他人の名前で行を作らせない）。
+ */
+function apiRestoreComment(row) {
+  return withCommentWrite_(function (rows, me) {
+    if (!me || String((row || {}).author || '') !== me) {
+      return { ok: false, reason: 'forbidden', message: '自分のコメントだけ戻せます。' };
+    }
+    const r = restoreComment(rows, row);
+    if (!r.ok) return { ok: false, reason: 'invalid', message: '戻す内容が不正です。' };
+    return { ok: true, rows: r.unchanged ? null : r.rows };
   });
 }

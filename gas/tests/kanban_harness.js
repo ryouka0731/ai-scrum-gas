@@ -301,7 +301,8 @@ function isHidden(el) {
 const API_METHODS = [
   'apiGetView', 'apiUpdateStatus', 'apiUpdatePbi',
   'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi',
-  'apiCreateImpediment', 'apiUpdateImpediment', 'apiResolveImpediment', 'apiUnresolveImpediment'
+  'apiCreateImpediment', 'apiUpdateImpediment', 'apiResolveImpediment', 'apiUnresolveImpediment',
+  'apiAddComment', 'apiDeleteComment', 'apiRestoreComment'
 ];
 
 /** 呼び出しをキューに積むだけの google.script.run を作る。 */
