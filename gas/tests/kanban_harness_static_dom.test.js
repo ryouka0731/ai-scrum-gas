@@ -8,8 +8,8 @@ const { parseStaticElements, isHidden } = require('./kanban_harness.js');
  * 判定できるのは、id を持たない祖先の hidden も含めて isHidden() が正しく祖先を
  * 辿れているときだけ。id 付き要素だけを Element にしていた頃は、id の無い祖先を
  * 飛ばして親子を結んでいたため、その祖先の hidden を isHidden() が見落としていた
- * （今の kanban.html では hidden が付く要素が `#table-view`/`#panel`/`#toast` の
- * 3つとも id 付きなので実害は無いが、`<div hidden><button id="x">` のような
+ * （今の kanban.html では hidden が付く要素が `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field` は
+ * 全て id 付きなので実害は無いが、`<div hidden><button id="x">` のような
  * 構造が増えた瞬間にシムだけが実ブラウザとずれる）。
  */
 

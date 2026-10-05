@@ -535,7 +535,7 @@
       var ur = undo.getBoundingClientRect();
       // パネルは今まさに開いている（このすぐ上で next.click() した）。この幅の
       // 検査だけのために開閉をやり直すのは無駄なので、ここで一緒に測る。
-      // 900px 以下は #panel { flex: 1 1 auto; width: 100%; } で全幅にする設計なので
+      // 900px 以下は .side-panel { flex: 1 1 auto; width: 100%; } で全幅にする設計なので
       // 380px と一致しない（意図どおり）。判定は呼び出し側で幅を見て行う。
       var panelRect = panel.getBoundingClientRect();
       return {
@@ -570,9 +570,9 @@
     /**
      * パネルが閉じている状態で通知が中央にあるか測る。
      *
-     * `@media (min-width: 901px) #main:has(#panel:not([hidden])) ~ #toast` は
+     * `@media (min-width: 901px) #main:has(.side-panel:not([hidden])) ~ #toast` は
      * パネルが開いている間**だけ**通知を寄せる意図（`:not([hidden])`）。閉じている
-     * ときにこの上書きが誤って効く（例: `:not([hidden])` を落として `:has(#panel)`
+     * ときにこの上書きが誤って効く（例: `:not([hidden])` を落として `:has(.side-panel)`
      * にする）と、通知は画面の中央から動いたままになるが、`toastOverPanel()` は
      * パネルを開いた状態でしか測っていないため、その退行を検出できない。
      *

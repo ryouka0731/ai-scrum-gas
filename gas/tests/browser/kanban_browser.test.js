@@ -157,7 +157,7 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
         });
 
         test('パネルの幅は、宣言どおり（380px）になる', () => {
-          // 901px 以上でだけ判定する。900px 以下は #panel { flex: 1 1 auto; width: 100%; }
+          // 901px 以上でだけ判定する。900px 以下は .side-panel { flex: 1 1 auto; width: 100%; }
           // で全幅にする設計で、380px と一致しないのが正しい（別の検査が既にその全幅を見ている）。
           if (width <= 900) return;
           const p = measured[where].toast.panelWidth;
@@ -288,7 +288,7 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
         });
 
         test('パネルが閉じているときは、通知が画面の中央のまま', () => {
-          // `@media (min-width: 901px) #main:has(#panel:not([hidden])) ~ #toast` は
+          // `@media (min-width: 901px) #main:has(.side-panel:not([hidden])) ~ #toast` は
           // パネルが開いている間だけ通知を寄せる意図（:not([hidden]) がその境目）。
           // 上のテストはパネルが開いた状態でしか見ていないため、この境目が壊れて
           // 閉じていても寄ったまま（またはその逆）になる退行を検出できない。

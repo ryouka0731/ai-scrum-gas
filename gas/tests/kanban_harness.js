@@ -224,7 +224,7 @@ const VOID_TAGS = { input: true, img: true, br: true, hr: true, meta: true, link
  * 追跡する。id が無い要素をスタックから丸ごと飛ばしていた頃は、
  * `<div hidden><span><button id="x">` のような構造で `#x` の祖先探索が
  * `<div hidden>` を素通りしていた（今の kanban.html では hidden が付くのは
- * `#table-view`/`#panel`/`#toast` の3つだけなので実害は無いが、id を持たない
+ * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field` だけなので実害は無いが、id を持たない
  * 祖先に hidden が増えた瞬間にシムだけが実ブラウザとずれる）。
  * 親子は parentNode だけで結び、children には積まない — 積むと `clearHost()` の
  * innerHTML = '' が静的な子まで消してしまう。
@@ -300,7 +300,8 @@ function isHidden(el) {
 // 実装が呼ぶサーバ側 API。ここに無い名前を呼ぶと TypeError になり、取りこぼしに気づける。
 const API_METHODS = [
   'apiGetView', 'apiUpdateStatus', 'apiUpdatePbi',
-  'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi'
+  'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi',
+  'apiCreateImpediment', 'apiUpdateImpediment', 'apiResolveImpediment', 'apiUnresolveImpediment'
 ];
 
 /** 呼び出しをキューに積むだけの google.script.run を作る。 */
@@ -595,6 +596,20 @@ function createHarness(initialColumns) {
       const hit = byId.views.children.filter(function (b) { return b.textContent === label; });
       if (hit.length !== 1) throw new Error('ビュー「' + label + '」が ' + hit.length + ' 件見つかりました');
       fireVisible(hit[0], 'click', {}, 'ビュー「' + label + '」');
+    },
+
+    /** #table-view の中の、data-id がその値の行を押す（障害物の未解決の行）。 */
+    clickImpRow: function (id) {
+      const hit = collect(byId['table-view'], function (e) { return e.tagName === 'tr' && e.dataset.id === id; });
+      if (hit.length !== 1) throw new Error('行 ' + id + ' が ' + hit.length + ' 件見つかりました');
+      fireVisible(hit[0], 'click', {}, '行 ' + id);
+    },
+
+    /** 障害物タブの「障害物を追加」を押す。 */
+    clickImpAdd: function () {
+      const hit = collect(byId['table-view'], function (e) { return e.id === 'imp-add'; });
+      if (hit.length !== 1) throw new Error('「障害物を追加」が ' + hit.length + ' 件見つかりました');
+      fireVisible(hit[0], 'click', {}, '「障害物を追加」');
     },
 
     /** #tabs / #views のボタンのラベルと選択状態（aria-selected）を DOM から読む。 */
