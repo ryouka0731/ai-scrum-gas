@@ -770,7 +770,6 @@ function createHarness(initialColumns) {
       return hit[0];
     },
 
-    /** id の要素の下にあるテキストをすべて（DOM 順に空白区切りで）連結して読む。 */
     /** ボタンの直下の span（ラベル）の文字だけを連結して返す。 */
     labelOf: function (id) {
       return el(id).children.filter(function (c) { return c.tagName === 'span'; })
@@ -781,6 +780,7 @@ function createHarness(initialColumns) {
       const svg = el(id).children.filter(function (c) { return c.tagName === 'svg'; })[0];
       return svg ? svg.children[0].getAttribute('d') : null;
     },
+    /** id の要素の下にあるテキストをすべて（DOM 順に空白区切りで）連結して読む。 */
     textTreeOf: function (hostId) {
       const texts = [];
       (function walk(e) {
