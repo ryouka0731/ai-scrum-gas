@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { launch, chromePath } = require('./chrome_session.js');
 const { buildStandalonePage } = require('./standalone_page.js');
+const { COMMENT_PBI } = require('./fixtures.js');
 
 const PROBE_SOURCE = fs.readFileSync(path.join(__dirname, 'probe_source.js'), 'utf8');
 
@@ -64,6 +65,12 @@ async function measureOne(session, html, spec) {
     pressCardHelp: await session.evaluate(
       'return window.__probe.pressHelp(' + JSON.stringify(HELP_PRESS_SPOTS.card) + ');'),
   };
+
+  // コメントの多いパネル。開いて Escape で閉じるので、盤面の状態は変わらない。
+  // 先頭のカードを消す測定（下の toast）より前に行う（対象の PBI が残っている間に測る）。
+  await session.evaluate('window.scrollTo(0, 0); return 1;');
+  board.commentPanel = await session.evaluate(
+    'return window.__probe.commentPanel(' + JSON.stringify(COMMENT_PBI) + ');');
 
   await session.evaluate('window.scrollTo(0, 0); return 1;');
   await session.evaluate('return window.__probe.clickIn("views", ' + JSON.stringify(TABLE_VIEW_LABEL) + ');');

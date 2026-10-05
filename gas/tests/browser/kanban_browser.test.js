@@ -32,7 +32,7 @@ const assert = require('node:assert/strict');
 
 const { chromePath, launch, chromeArgs } = require('./chrome_session.js');
 const { buildStandalonePage, viewportContentFromDoGet } = require('./standalone_page.js');
-const { responses, VIEW_NAMES } = require('./fixtures.js');
+const { responses, VIEW_NAMES, COMMENT_COUNT } = require('./fixtures.js');
 const {
   measureOne, installProbe, WIDTHS, SCHEMES, HEIGHT, TABLE_VIEW_LABEL, HELP_PRESS_SPOTS,
 } = require('./measure.js');
@@ -171,6 +171,32 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
           if (width <= 900) return;   // 900px 以下は全幅にする設計
           assert.equal(measured[where].toast.impPanelWidth, 380,
             where + ': 障害物パネルの実測幅が宣言と違う（.side-panel の規則が効いていない）');
+        });
+
+        test('コメントが20件あるパネルでも、保存まで届く', () => {
+          const c = measured[where].board.commentPanel;
+          // 空振り防止: 20件が描かれ、そのうち長い URL を持つ本文もあること。
+          assert.equal(c.count, COMMENT_COUNT, where + ': コメントが ' + c.count + ' 件しか描かれていない');
+          assert.ok(c.urlBodies >= 1, where + ': 長い URL を持つ本文が測れていない');
+          if (width > 900) {
+            // 901px 以上はパネルが内側でスクロールする設計。内側に溢れていなければ
+            // 「届く」は自明に通ってしまうので、本当にスクロールしていることも見る。
+            assert.equal(c.panelOverflowY, 'auto', where + ': .side-panel の overflow-y が auto でない（' + c.panelOverflowY + '）');
+            assert.ok(c.panelScrollHeight > c.panelClientHeight,
+              where + ': パネルが内側でスクロールしていない（scrollHeight ' + c.panelScrollHeight
+              + ' <= clientHeight ' + c.panelClientHeight + '）');
+          }
+          assert.equal(c.saveInViewport, true,
+            where + ': scrollIntoView しても「保存」が画面の外にある: ' + JSON.stringify(c.save) + ' viewport ' + JSON.stringify(c.viewport));
+          assert.equal(c.saveInPanel, true,
+            where + ': scrollIntoView しても「保存」がパネルの見える範囲の外にある: ' + JSON.stringify(c.save) + ' panel ' + JSON.stringify(c.panelBox));
+        });
+
+        test('コメントの長い URL は節の幅を超えず、ページも横に伸びない', () => {
+          const c = measured[where].board.commentPanel;
+          assert.equal(c.overflowing, 0, where + ': 節の幅を超えるコメント本文が ' + c.overflowing + ' 件ある');
+          assert.ok(c.docScrollWidth <= c.docClientWidth,
+            where + ': ページが横に伸びている（scrollWidth ' + c.docScrollWidth + ' > clientWidth ' + c.docClientWidth + '）');
         });
 
         test('表は枠の中で横スクロールし、ページを横に伸ばさない', () => {

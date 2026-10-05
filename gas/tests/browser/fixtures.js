@@ -17,6 +17,7 @@ const { buildImpedimentView } = require('../../pure_view_impediment.js');
 const { summarizeBacklog, summarizeSprint, summarizeImpediment } = require('../../pure_summary.js');
 const { KANBAN_STATUSES } = require('../../pure_grid_board.js');
 const { sprintChoices } = require('../../pure_sprint_options.js');
+const { groupComments } = require('../../pure_comment.js');
 
 const ROWS = [
   { id: 'PBI-001', title: '同期の失敗を画面に出す', status: 'New', priority: 'High', size: '3',
@@ -90,6 +91,32 @@ const IMPEDIMENT_RESOLVED = [
     sprint: 'sprint002' },
 ];
 
+// コメントを大量に持たせる PBI。パネルが縦に伸びて「保存」へ届くかを実ブラウザで見るために在る。
+// 他の検査（先頭のカードを削除する、2枚目を開く等）の対象と重ならない Ready の列の PBI を選ぶ。
+// **消さない・件数を減らさないこと。** 減らすと 901px 以上でパネルが内側でスクロールしなくなり、
+// 「届く」の検査が空振りになる（kanban_browser.test.js が scrollHeight > clientHeight を見ている）。
+const COMMENT_PBI = 'PBI-004';
+const COMMENT_ME = 'マヤ';
+const COMMENT_COUNT = 20;
+const LONG_URL = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefghijKLMNOPQRSTUVWXYZ/edit#gid=0&range=A1:Z999';
+
+/** groupComments が食う行（comments.csv と同じ列）。手書きの応答は作らず、これを通して組み立てる。 */
+function commentRows() {
+  const rows = [];
+  for (let i = 1; i <= COMMENT_COUNT; i++) {
+    const n = ('0' + i).slice(-2);
+    rows.push({
+      id: 'CMT-' + n, target_id: COMMENT_PBI,
+      author: i % 3 === 0 ? COMMENT_ME : 'ダイチ',
+      created_at: '2026-09-10 10:' + n + ':00',
+      // 3の倍数は改行を含む、4の倍数は途中で折り返せない長い URL を含む。
+      body: (i % 4 === 0 ? '確認用: ' + LONG_URL : 'コメント' + n + '件目。')
+        + (i % 3 === 0 ? '\n2行目です。\n\n4行目（空行の後）。' : ''),
+    });
+  }
+  return rows;
+}
+
 function viewFor(name) {
   switch (name) {
     case 'board': return { view: buildBoardData(ROWS), summary: summarizeBacklog(ROWS, KANBAN_STATUSES) };
@@ -118,7 +145,8 @@ function responses() {
   const out = {};
   VIEW_NAMES.forEach(function (name) {
     const r = viewFor(name);
-    out[name] = { ok: true, name: name, view: r.view, summary: r.summary };
+    out[name] = { ok: true, name: name, view: r.view, summary: r.summary,
+      comments: groupComments(commentRows(), COMMENT_ME) };
     if (r.sprintChoices) out[name].sprintChoices = r.sprintChoices;
   });
   // スプリントの選択肢は盤面の応答だけが運ぶ（サーバ側が完成させて返す）。
@@ -126,4 +154,4 @@ function responses() {
   return out;
 }
 
-module.exports = { responses: responses, VIEW_NAMES: VIEW_NAMES, ROWS: ROWS, VELOCITY: VELOCITY };
+module.exports = { responses: responses, COMMENT_PBI: COMMENT_PBI, COMMENT_COUNT: COMMENT_COUNT, VIEW_NAMES: VIEW_NAMES, ROWS: ROWS, VELOCITY: VELOCITY };
