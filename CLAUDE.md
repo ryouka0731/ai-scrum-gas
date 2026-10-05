@@ -7,9 +7,8 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
 - **スクラムチームの各ロール**: `.claude/agents/<slug>.md`（Agent ツールの `subagent_type`）
 - **可視化・操作**: `gas/` の Apps Script が Drive の `scrum/` を読み、共有スプレッドシート（DB）を
   再構築する。人は PBI の作成・編集・削除・状態変更を `gas/web_app.js` が提供する
-  **Web アプリ**（「やること」タブの盤面）から行う。Web アプリには他に「スプリント」
-  （バーンダウン・ベロシティ・ロードマップ）「障害物」（一覧）のタブもあるが、
-  こちらは閲覧専用（障害物の作成・編集・解決は未対応）。
+  **Web アプリ**（「やること」タブの盤面）から行い、障害物の作成・編集・解決も
+  「障害物」タブから行う。「スプリント」タブ（バーンダウン・ベロシティ・ロードマップ）は閲覧専用。
   スプレッドシート側は編集しない ― 次回同期で失われる仕様のため
 
 人がやること・エージェント（あなた）がやることの分担は次の通り。
@@ -17,9 +16,12 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
 - ローカルの Claude Code（あなた）は従来どおり `scrum/` のファイルを直接読み書きする。ここは変わらない
 - 人は Web アプリのカンバンから PBI を作成・編集・削除し、状態（New/Ready/In Progress/Review/Done）
   を変える。この操作は `scrum/product_backlog.csv` へ即座に書き戻される。
-  **Web アプリが読み書きするのはこの1ファイルだけ**で、共有スプレッドシートには触れない
+  障害物も同様に、作成・編集は `scrum/impediment_log.csv` へ、解決は未解決の行を
+  `scrum/impediment_log_resolved.csv` へ移す形で書き戻される。
+  **Web アプリが読み書きするのは `product_backlog.csv`・`impediment_log.csv`・
+  `impediment_log_resolved.csv` の3ファイルだけ**で、共有スプレッドシートには触れない
 - Web アプリからの変更も同じファイルに入るため、**あなたは何もしなくても人の操作結果を
-  次に `scrum/product_backlog.csv` を読んだときに見られる**。同期の仕組みを意識する必要はない
+  次にそれらのファイルを読んだときに見られる**。同期の仕組みを意識する必要はない
 - 共有スプレッドシートは `scrum/` の内容を `syncAll`（既存の同期）が**一方向で作り直したもの**であり、
   Web アプリでの書き戻しとは別経路・別タイミングで動く。カンバンでの変更が直後にスプレッドシートへ
   反映されるとは限らない
