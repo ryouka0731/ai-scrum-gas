@@ -299,3 +299,76 @@ test('コメントの送信中に出した障害物の書き込みの応答の c
   assert.deepEqual(h.commentsIn('imp-panel-comments').map(function (c) { return c.id; }),
     ['CMT-0000000a', 'CMT-0000000e']);
 });
+
+// ---------------------------------------------------------------------------
+// 最終レビュー I1: 古い（発行順で負けた）応答でも、その書き込み自身の操作は反映する
+// ---------------------------------------------------------------------------
+
+const ids = function (h, hostId) { return h.commentsIn(hostId).map(function (c) { return c.id; }); };
+
+test('削除(#1)→追加(#2)。#2 の応答（削除前の写し）が先に届き、#1 が後でも、消したものは消え、足したものは残る', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.clickCommentDelete('panel-comments', 'CMT-00000002');
+  const del = callOf(h, 'apiDeleteComment');
+  h.setCommentInput('panel-comments', '追加');
+  h.clickCommentSend('panel-comments');
+  const add = callOf(h, 'apiAddComment');
+  const added = { id: 'CMT-00000003', target_id: 'PBI-001', author: 'me@example.com',
+    created_at: '2026-10-06 11:00:00', body: '追加' };
+  // サーバは #2 を先に処理した（写しにはまだ C2 が残っている）。
+  add.handlers.success({ ok: true, comment: added,
+    comments: { 'PBI-001': [C1, C2, Object.assign({ mine: true }, added)] } });
+  del.handlers.success({ ok: true, removed: C2, comments: { 'PBI-001': [C1] } });
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000001', 'CMT-00000003'],
+    '自分の削除が古い応答と一緒に捨てられた');
+  assert.equal(h.cardCommentCountOf('PBI-001'), 'コメント 2');
+});
+
+test('追加(#1)→追加(#2)。#2 の応答（#1 を含まない写し）が先でも、#1 の応答で足したものが出る', () => {
+  const h = ready();
+  h.openCard('PBI-002');
+  h.setCommentInput('panel-comments', '一つ目');
+  h.clickCommentSend('panel-comments');
+  const first = callOf(h, 'apiAddComment');
+  h.openCard('PBI-001');
+  h.setCommentInput('panel-comments', '二つ目');
+  h.clickCommentSend('panel-comments');
+  const second = h.calls.filter(function (c) { return c.method === 'apiAddComment'; })[1];
+  const a1 = { id: 'CMT-00000003', target_id: 'PBI-002', author: 'me@example.com',
+    created_at: '2026-10-06 11:00:00', body: '一つ目' };
+  const a2 = { id: 'CMT-00000004', target_id: 'PBI-001', author: 'me@example.com',
+    created_at: '2026-10-06 11:00:01', body: '二つ目' };
+  second.handlers.success({ ok: true, comment: a2,
+    comments: { 'PBI-001': [C1, C2, Object.assign({ mine: true }, a2)] } });
+  first.handlers.success({ ok: true, comment: a1,
+    comments: { 'PBI-001': [C1, C2], 'PBI-002': [Object.assign({ mine: true }, a1)] } });
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000001', 'CMT-00000002', 'CMT-00000004']);
+  assert.equal(h.cardCommentCountOf('PBI-002'), 'コメント 1', '先に送った追加が消えた');
+  h.openCard('PBI-002');
+  assert.deepEqual(h.commentsIn('panel-comments'), [
+    { id: 'CMT-00000003', author: 'me', body: '一つ目', canDelete: true },
+  ]);
+});
+
+test('取り消し（戻す）の応答が古くても、戻したコメントは作成日時の順に入る', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.clickCommentDelete('panel-comments', 'CMT-00000002');
+  const removed = { id: C2.id, target_id: C2.target_id, author: C2.author, created_at: C2.created_at, body: C2.body };
+  callOf(h, 'apiDeleteComment').handlers.success({ ok: true, removed: removed, comments: { 'PBI-001': [C1] } });
+  h.click('toast-undo');
+  const restore = callOf(h, 'apiRestoreComment');
+  h.setCommentInput('panel-comments', '後から');
+  h.clickCommentSend('panel-comments');
+  const added = cmt('CMT-00000003', 'PBI-001', 'me@example.com', '2026-10-06 11:00:00', '後から', true);
+  // 追加が先に処理された（戻す前の写し）。戻す応答は写しを運ばない（rows が変わらない場合など）。
+  callOf(h, 'apiAddComment').handlers.success({ ok: true, comment: added, comments: { 'PBI-001': [C1, added] } });
+  restore.handlers.success({ ok: true, comments: { 'PBI-001': [C1] } });
+  assert.deepEqual(h.commentsIn('panel-comments'), [
+    { id: 'CMT-00000001', author: 'maya', body: '先に書いた', canDelete: false },
+    { id: 'CMT-00000002', author: 'me', body: '後で書いた', canDelete: true },
+    { id: 'CMT-00000003', author: 'me', body: '後から', canDelete: true },
+  ]);
+});
+

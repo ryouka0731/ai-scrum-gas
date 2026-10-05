@@ -1885,10 +1885,51 @@ function applyComments(comments, issued) {
   if (!comments || issued <= lastAppliedComment) return false;
   lastAppliedComment = issued;
   commentsByTarget = comments;
+  redrawComments();
+  return true;
+}
+
+/** 件数（盤面・障害物の表）と開いている節を、今の commentsByTarget から描き直す。 */
+function redrawComments() {
   if (activeView === 'board') render(board);
   else if (activeView === 'impediment' && impView && !tableLoading) renderTable(impView);
   refreshOpenComments();
-  return true;
+}
+
+/**
+ * 写しとしては古い（後から発行した書き込みの応答を既に反映した）成功の応答でも、その書き込み
+ * 自身の操作だけは一覧へ入れる。サーバは同時に出した書き込みを発行順に処理するとは限らず、
+ * 先に反映した写しがこの書き込みを含まないことがあるため。何度当てても同じ結果になるようにする。
+ * add: comment を足す（同じ id が無ければ。作成日時の古い順、同じ日時なら既存の後ろ）。
+ * remove: id の行を外す（あれば）。
+ */
+function applyOwnComment(add, removeId) {
+  var next = {};
+  Object.keys(commentsByTarget || {}).forEach(function (k) { next[k] = commentsByTarget[k]; });
+  var changed = false;
+  if (removeId) {
+    Object.keys(next).forEach(function (k) {
+      var list = Array.isArray(next[k]) ? next[k] : [];
+      var kept = list.filter(function (c) { return c.id !== removeId; });
+      if (kept.length !== list.length) { next[k] = kept; changed = true; }
+    });
+  }
+  if (add && add.id && add.target_id) {
+    var cur = Array.isArray(next[add.target_id]) ? next[add.target_id] : [];
+    var exists = cur.some(function (c) { return c.id === add.id; });
+    if (!exists) {
+      var row = Object.assign({}, add, { mine: true });   // 自分の追加・取り消しだけがここへ来る
+      var at = cur.length;
+      for (var i = 0; i < cur.length; i++) {
+        if (String(cur[i].created_at || '') > String(row.created_at || '')) { at = i; break; }
+      }
+      next[add.target_id] = cur.slice(0, at).concat([row], cur.slice(at));
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  commentsByTarget = next;
+  redrawComments();
 }
 
 function sendComment(hostId, targetId) {
@@ -1914,7 +1955,10 @@ function sendComment(hostId, targetId) {
         var cur = commentUiFor(hostId, targetId);
         if (cur) cur.input.value = '';   // 描き直しで引き継がれないよう、先に空にする
       }
-      if (!applyComments(res.comments, issued)) refreshOpenComments();
+      if (!applyComments(res.comments, issued)) {
+        if (res.ok) applyOwnComment(res.comment, null);
+        refreshOpenComments();
+      }
       var now = commentUiFor(hostId, targetId);
       if (res.ok) {
         if (now) setCommentMessage(now, '', 'info');
@@ -1956,7 +2000,10 @@ function deleteComment(hostId, targetId, commentId) {
     .withSuccessHandler(function (res) {
       settle();
       if (res.ok) writeSeq++;
-      if (!applyComments(res.comments, issued)) refreshOpenComments();
+      if (!applyComments(res.comments, issued)) {
+        if (res.ok) applyOwnComment(null, res.removed && res.removed.id);
+        refreshOpenComments();
+      }
       if (res.ok) showUndoToast('コメントを削除しました。', function () { restoreComment(res.removed); });
       else fail(res.message);
     })
@@ -1978,7 +2025,8 @@ function restoreComment(row) {
     .withSuccessHandler(function (res) {
       delete commentPending[issued];
       if (res.ok) writeSeq++;
-      applyComments(res.comments, issued);
+      // 戻す応答は戻した行を運ばない。送った行（row）を使う。
+      if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
       setMessage(res.ok ? 'コメントを戻しました。' : res.message, res.ok ? 'info' : 'error');
     })
     .withFailureHandler(function (err) {
