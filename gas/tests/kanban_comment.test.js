@@ -221,3 +221,81 @@ test('comments を持たない応答（完了のビュー・PBI の保存）で�
   assert.equal(h.commentsIn('panel-comments').length, 2);
   assert.equal(h.cardCommentCountOf('PBI-001'), 'コメント 2');
 });
+
+/** 未応答の呼び出しのうち、その API のものをちょうど1件返す。 */
+function callOf(h, method) {
+  const hit = h.calls.filter(function (c) { return c.method === method; });
+  assert.equal(hit.length, 1, method + ' の未応答が ' + hit.length + ' 件');
+  return hit[0];
+}
+
+test('追加の送信中に届いた読み直し（追加を含まない）で、追加の応答が捨てられない', () => {
+  const h = ready();
+  h.openCard('PBI-002');
+  h.setCommentInput('panel-comments', '送信中');
+  h.clickCommentSend('panel-comments');
+  h.click('reload');
+  callOf(h, 'apiGetView').handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL),
+    summary: null, comments: COMMENTS });
+  const added = cmt('CMT-00000003', 'PBI-002', 'me@example.com', '2026-10-06 11:00:00', '送信中', true);
+  callOf(h, 'apiAddComment').handlers.success({ ok: true, comment: added,
+    comments: Object.assign({}, COMMENTS, { 'PBI-002': [added] }) });
+  assert.deepEqual(h.commentsIn('panel-comments').map(function (c) { return c.id; }), ['CMT-00000003'],
+    '送ったコメントが消えた（入力は空になるので、もう一度送られてしまう）');
+  assert.equal(h.cardCommentCountOf('PBI-002'), 'コメント 1');
+});
+
+test('削除の送信中に届いた読み直し（削除前の写し）で、削除の応答が捨てられない', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.clickCommentDelete('panel-comments', 'CMT-00000002');
+  h.click('reload');
+  callOf(h, 'apiGetView').handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL),
+    summary: null, comments: COMMENTS });
+  callOf(h, 'apiDeleteComment').handlers.success({ ok: true, removed: C2, comments: { 'PBI-001': [C1] } });
+  assert.deepEqual(h.commentsIn('panel-comments').map(function (c) { return c.id; }), ['CMT-00000001'],
+    '消したコメントが戻った');
+  assert.equal(h.cardCommentCountOf('PBI-001'), 'コメント 1');
+});
+
+const IMP_VIEW_COLUMNS = [{ field: 'id', label: 'ID' }, { field: 'title', label: 'タイトル' }];
+function impWriteResponse(open, comments, extra) {
+  return Object.assign({ ok: true,
+    view: { columns: IMP_VIEW_COLUMNS, open: open, resolved: [IMP_DONE], pending: [] },
+    summary: { open: open.length, resolved: 1, pending: 0 }, sprintChoices: [], comments: comments }, extra || {});
+}
+
+test('障害物の書き込みの応答の comments は、コメントの書き込みと競らなければ件数と開いている節を差し替える', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-save');
+  const other = cmt('CMT-0000000d', 'IMP-002', 'ken@example.com', '2026-10-06 10:00:00', '別の人', false);
+  const fresh = Object.assign({}, IMP_COMMENTS, { 'IMP-002': IMP_COMMENTS['IMP-002'].concat([other]) });
+  // 競合（パネルは開いたまま）。応答はビューとコメントの全体を運ぶ。
+  callOf(h, 'apiUpdateImpediment').handlers.success(impWriteResponse([IMP], fresh,
+    { ok: false, reason: 'conflict', message: '他の変更が先に入っています。' }));
+  assert.equal(h.hiddenOf('imp-panel'), false);
+  assert.deepEqual(h.commentsIn('imp-panel-comments').map(function (c) { return c.id; }),
+    ['CMT-0000000a', 'CMT-0000000d']);
+  assert.deepEqual(h.commentCountsIn('table-view'), ['コメント 2', 'コメント 2']);
+});
+
+test('コメントの送信中に出した障害物の書き込みの応答の comments は使わない', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.setCommentInput('imp-panel-comments', '送信中');
+  h.clickCommentSend('imp-panel-comments');
+  h.click('imp-panel-save');
+  // 障害物の写しは、送信中のコメントより前に読まれたかもしれない（ここでは IMP-002 のコメントが無い）。
+  const stale = { 'IMP-001': IMP_COMMENTS['IMP-001'] };
+  callOf(h, 'apiUpdateImpediment').handlers.success(impWriteResponse([IMP], stale,
+    { ok: false, reason: 'conflict', message: '他の変更が先に入っています。' }));
+  assert.deepEqual(h.commentsIn('imp-panel-comments').map(function (c) { return c.id; }), ['CMT-0000000a'],
+    '競りうる写しで一覧が戻った');
+  assert.deepEqual(h.commentCountsIn('table-view'), ['コメント 1', 'コメント 2']);
+  const added = cmt('CMT-0000000e', 'IMP-002', 'me@example.com', '2026-10-06 11:00:00', '送信中', true);
+  callOf(h, 'apiAddComment').handlers.success({ ok: true, comment: added,
+    comments: Object.assign({}, IMP_COMMENTS, { 'IMP-002': IMP_COMMENTS['IMP-002'].concat([added]) }) });
+  assert.deepEqual(h.commentsIn('imp-panel-comments').map(function (c) { return c.id; }),
+    ['CMT-0000000a', 'CMT-0000000e']);
+});

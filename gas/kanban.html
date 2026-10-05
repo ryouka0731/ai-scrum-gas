@@ -150,8 +150,9 @@
      パネルの中でスクロールさせ、ページの上端から見て画面に収める。引く 280px は
      #main より上の帯の実測（盤面で 251px。901 / 1024 / 1440px 幅、高さ 800 / 900 で同じ。
      障害物はビューの切替が無いので 200px）に body の下の余白 24px を足して丸めたもの。
-     帯が低い障害物のタブでも同じ値を使う（少し短くなるだけで、はみ出しはしない）。 */
-  .side-panel { max-height: calc(100vh - 280px); overflow-y: auto; }
+     帯が低い障害物のタブでも同じ値を使う（少し短くなるだけで、はみ出しはしない）。
+     低い画面（高さ 520px 未満）で潰れきらないよう、下限を 240px にする。 */
+  .side-panel { max-height: max(240px, calc(100vh - 280px)); overflow-y: auto; }
   /* 高さが詰まったとき、欄が縮んで潰れないようにする（縮むのではなくスクロールさせる）。 */
   .side-panel > * { flex-shrink: 0; }
   @media (max-width: 900px) {
@@ -1434,6 +1435,17 @@ var impPanelSeq = 0;
 var impSprintChoices = [];   // 障害物の応答が運ぶ選択肢（PBI パネルの sprintChoices とは別）
 var impWriteIssued = 0;      // 障害物の書き込みを発行した通し番号（古い応答で表を戻さないため）
 var lastAppliedImp = 0;      // 表に反映した応答のうち、最も新しい書き込みの通し番号
+var impPending = {};         // 送信中の障害物の書き込みの発行番号 → true（応答・失敗のどちらでも外す）
+
+/**
+ * 読み込み（loadView）が「ここまでの書き込みは反映済み」とみなしてよい発行番号。
+ * 送信中の書き込みがあれば、その最小の番号の手前まで。読み込みを出した時点で送信中だった
+ * 書き込みは、読み込みの写しより後に処理されたかもしれないので、その応答を捨てさせない。
+ */
+function seqFloor(pending, issuedNow) {
+  var keys = Object.keys(pending).map(Number);
+  return keys.length ? Math.min.apply(null, keys) - 1 : issuedNow;
+}
 var IMP_FORM_FIELD_IDS = ['i-title', 'i-description', 'i-reported-by', 'i-sprint', 'i-resolution'];
 
 function findImpRow(id) {
@@ -1566,7 +1578,7 @@ function applyImpResponse(res, issued, commentSeen) {
 
 /** 障害物の書き込みを出す時点で控える値。送信中のコメントがあれば -1（応答のコメントを使わない）。 */
 function commentSeenNow() {
-  return commentInflight === 0 ? commentWriteIssued : -1;
+  return Object.keys(commentPending).length === 0 ? commentWriteIssued : -1;
 }
 
 /**
@@ -1576,10 +1588,12 @@ function commentSeenNow() {
 function sendImpWrite(method, args, label, after, onPartial) {
   var seq = impPanelSeq;
   var issued = ++impWriteIssued;
+  impPending[issued] = true;
   var commentSeen = commentSeenNow();
   setImpPanelBusy(true);
   var runner = google.script.run
     .withSuccessHandler(function (res) {
+      delete impPending[issued];
       var mine = (seq === impPanelSeq);
       if (mine) setImpPanelBusy(false);
       if (res.ok) writeSeq++;
@@ -1595,6 +1609,7 @@ function sendImpWrite(method, args, label, after, onPartial) {
       else setMessage(res.message, 'error');
     })
     .withFailureHandler(function (err) {
+      delete impPending[issued];
       if (seq === impPanelSeq) {
         setImpPanelBusy(false);
         setImpPanelMessage(label + 'に失敗しました: ' + err.message, 'error');
@@ -1661,10 +1676,12 @@ function showResolveOutcome(id, resolution, expected, res) {
 /** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
 function retryResolveImp(id, resolution, expected) {
   var issued = ++impWriteIssued;
+  impPending[issued] = true;
   var commentSeen = commentSeenNow();
   setMessage(id + ' の解決を完了しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
+      delete impPending[issued];
       if (res.ok) writeSeq++;
       applyImpResponse(res, issued, commentSeen);
       if (res.ok || res.reason === 'partial') {
@@ -1676,6 +1693,7 @@ function retryResolveImp(id, resolution, expected) {
       setMessage(res.message, 'error');
     })
     .withFailureHandler(function (err) {
+      delete impPending[issued];
       setMessage('解決に失敗しました: ' + err.message, 'error');
     })
     .apiResolveImpediment(id, resolution, expected);
@@ -1684,10 +1702,12 @@ function retryResolveImp(id, resolution, expected) {
 function unresolveImp(moved, resolvedRow) {
   if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   var issued = ++impWriteIssued;
+  impPending[issued] = true;
   var commentSeen = commentSeenNow();
   setMessage(moved.id + ' を戻しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
+      delete impPending[issued];
       if (res.ok) writeSeq++;
       applyImpResponse(res, issued, commentSeen);
       setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
@@ -1698,6 +1718,7 @@ function unresolveImp(moved, resolvedRow) {
       }
     })
     .withFailureHandler(function (err) {
+      delete impPending[issued];
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
     .apiUnresolveImpediment(moved, resolvedRow);
@@ -1709,7 +1730,7 @@ function unresolveImp(moved, resolvedRow) {
 var commentsByTarget = {};
 var commentWriteIssued = 0;   // コメントの書き込みを発行した通し番号（古い応答で一覧を戻さないため）
 var lastAppliedComment = 0;   // 反映した応答のうち、最も新しい書き込みの通し番号
-var commentInflight = 0;      // 送信中のコメントの書き込みの数
+var commentPending = {};      // 送信中のコメントの書き込みの発行番号 → true（応答・失敗のどちらでも外す）
 var commentSending = {};      // target_id → 送信中の本文（送信中は入力を塞ぎ、その本文を出し続ける）
 var commentDeleting = {};     // コメントの id → true（削除の送信中は削除ボタンを塞ぐ）
 var commentUi = {};           // 節の id → { targetId, input, send, message }（最後に描いたもの）
@@ -1877,13 +1898,13 @@ function sendComment(hostId, targetId) {
   if (body.trim() === '' || Object.prototype.hasOwnProperty.call(commentSending, targetId)) return;
   commentSending[targetId] = body;
   var issued = ++commentWriteIssued;
-  commentInflight++;
+  commentPending[issued] = true;
   setCommentMessage(ui, 'コメントを送っています…', 'info');
   renderComments(hostId, targetId, false);   // 入力と送信ボタンを塞ぐ
 
   var settle = function () {
     delete commentSending[targetId];
-    commentInflight--;
+    delete commentPending[issued];
   };
   google.script.run
     .withSuccessHandler(function (res) {
@@ -1920,11 +1941,11 @@ function deleteComment(hostId, targetId, commentId) {
   if (commentDeleting[commentId]) return;
   commentDeleting[commentId] = true;
   var issued = ++commentWriteIssued;
-  commentInflight++;
+  commentPending[issued] = true;
   refreshOpenComments();   // 削除ボタンを塞ぐ
   var settle = function () {
     delete commentDeleting[commentId];
-    commentInflight--;
+    delete commentPending[issued];
   };
   var fail = function (text) {
     var now = commentUiFor(hostId, targetId);
@@ -1951,17 +1972,17 @@ function deleteComment(hostId, targetId, commentId) {
 function restoreComment(row) {
   if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   var issued = ++commentWriteIssued;
-  commentInflight++;
+  commentPending[issued] = true;
   setMessage('コメントを戻しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
-      commentInflight--;
+      delete commentPending[issued];
       if (res.ok) writeSeq++;
       applyComments(res.comments, issued);
       setMessage(res.ok ? 'コメントを戻しました。' : res.message, res.ok ? 'info' : 'error');
     })
     .withFailureHandler(function (err) {
-      commentInflight--;
+      delete commentPending[issued];
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
     .apiRestoreComment(row);
@@ -2124,6 +2145,11 @@ function loadView() {
   // 書き込みを見分けられない。盤面だけでなく表のビューでも同じ扱いにする。
   var seenSeq = writeSeq;
   var requestedView = activeView;
+  // 応答で「ここまでは反映済み」とみなす発行番号は、読み込みを出した時点で控える。
+  // 出した時点で送信中だった書き込みと、出したあとの書き込みの応答は、引き続き使えるようにする
+  // （応答時の発行番号まで進めると、送信中に書いたコメントが応答ごと捨てられて消える）。
+  var commentFloor = seqFloor(commentPending, commentWriteIssued);
+  var impFloor = seqFloor(impPending, impWriteIssued);
   viewSeq++;
   var seq = viewSeq;   // この読み込みが今も最新かを応答時に見分ける通し番号（panelSeq と同型）
   setMessage('読み込んでいます…', 'info');
@@ -2154,16 +2180,16 @@ function loadView() {
         // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
         // 操作可能な盤面や表が残ってしまう）。
         // コメントは board / list / impediment の応答だけが運ぶ。件数を描く前に差し替える。
-        // 読み込みは発行済みのコメントの書き込みより新しい状態（lastAppliedImp と同じ考え方）。
+        // 読み込みは、出した時点で確定していたコメントの書き込みより新しい状態。
         if (res.comments) {
           commentsByTarget = res.comments;
-          lastAppliedComment = commentWriteIssued;
+          lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
         }
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
         renderSummary(res.summary);
         if (res.comments) refreshOpenComments();
-        // 障害物の読み直しは、発行済みの書き込みより新しい状態。遅れて届く古い書き込みの応答で表を戻さない。
-        if (requestedView === 'impediment') lastAppliedImp = impWriteIssued;
+        // 障害物の読み直しは、出した時点で確定していた書き込みより新しい状態。それより古い応答で表を戻さない。
+        if (requestedView === 'impediment') lastAppliedImp = Math.max(lastAppliedImp, impFloor);
         setMessage('', 'info');
       } else {
         // 失敗が確定した（＝捨てるべき応答ではない）。placeholder が出ていれば畳む。

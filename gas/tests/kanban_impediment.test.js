@@ -303,17 +303,21 @@ test('解決策の入力中は「保存」を押せない。開き直すと戻�
   assert.equal(h.disabledOf('imp-panel-save'), false);
 });
 
-test('書き込みの発行後に読み直した表は、後から届く古い書き込みの応答で戻されない', () => {
+// 読み直しは、出した時点で送信中だった書き込みより新しいとは言えない（読み込みはロックを取らず、
+// 書き込みの前に読んだかもしれない）。その書き込みの応答を捨てると、保存した内容が表から消える。
+test('保存の送信中に出した読み直しが先に届いても、あとの保存の応答で表が保存後になる', () => {
   const h = onImpediment();
   h.clickImpRow('IMP-002');
+  h.setValue('i-title', '新しい題');
   h.click('imp-panel-save');
   const write = latest(h);
+  assert.equal(write.method, 'apiUpdateImpediment');
   h.click('reload');
   const load = latest(h);
-  assert.notEqual(write, load);
-  load.handlers.success(impResponse([Object.assign({}, ROW, { title: '読み直した題' })]));
-  write.handlers.success(impResponse([Object.assign({}, ROW, { title: '古い応答' })]));
-  assert.equal(h.tableRowsOf('table-view')[0][1].text, '読み直した題');
+  assert.equal(load.method, 'apiGetView');
+  load.handlers.success(impResponse([ROW]));   // 保存前の写し
+  write.handlers.success(impResponse([Object.assign({}, ROW, { title: '新しい題' })]));
+  assert.equal(h.tableRowsOf('table-view')[0][1].text, '新しい題', '保存した内容が表に出ていない');
 });
 
 test('「完了する」の通知はチェックのアイコン、「取り消す」は元のアイコン', () => {
