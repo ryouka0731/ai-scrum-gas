@@ -441,7 +441,7 @@ function withImpedimentWrite_(first, mutate) {
         if (writes[0].key === 'open') open = writes[0].rows; else resolved = writes[0].rows;
         return Object.assign({
           ok: false, reason: 'partial',
-          message: '途中で止まりました。通知の「完了する」を押すと完了します。（' + e.message + '）',
+          message: '途中で止まりました（scrum/' + writes[i].name + ' に書けませんでした）。通知の「完了する」を押すと完了します。',
         }, impedimentPayload_(open, resolved));
       }
     }

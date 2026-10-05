@@ -143,3 +143,8 @@ test('取り消し: open に同じ ID で中身の違う行があれば conflict
   assert.equal(m.planUnresolve([other], [resolvedRow], imp(), resolvedRow).reason, 'conflict');
   assert.equal(m.planUnresolve([other], [], imp(), resolvedRow).reason, 'conflict');
 });
+
+test('更新は雛形の行を編集させない（not_found）', () => {
+  const tpl = imp({ id: 'IMP-001', title: '（障害物タイトル）', reported_at: 'YYYY-MM-DD' });
+  assert.equal(m.updateImpediment([tpl], 'IMP-001', { title: '乗っ取り' }, tpl).reason, 'not_found');
+});

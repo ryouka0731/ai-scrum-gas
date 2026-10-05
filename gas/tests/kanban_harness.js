@@ -771,6 +771,16 @@ function createHarness(initialColumns) {
     },
 
     /** id の要素の下にあるテキストをすべて（DOM 順に空白区切りで）連結して読む。 */
+    /** ボタンの直下の span（ラベル）の文字だけを連結して返す。 */
+    labelOf: function (id) {
+      return el(id).children.filter(function (c) { return c.tagName === 'span'; })
+        .map(function (c) { return c.textContent; }).join('');
+    },
+    /** ボタンの先頭のアイコン（svg）の最初の path の d を返す。 */
+    iconPathOf: function (id) {
+      const svg = el(id).children.filter(function (c) { return c.tagName === 'svg'; })[0];
+      return svg ? svg.children[0].getAttribute('d') : null;
+    },
     textTreeOf: function (hostId) {
       const texts = [];
       (function walk(e) {

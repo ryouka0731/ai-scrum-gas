@@ -1223,9 +1223,10 @@ var activeToastText = null;
 
 /**
  * 取り消せる通知を出す。時間が過ぎたら消える。
- * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）。
+ * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）、
+ * iconName はそのアイコン（既定は undo。「完了する」は check）。
  */
-function showUndoToast(text, onUndo, actionLabel) {
+function showUndoToast(text, onUndo, actionLabel, iconName) {
   if (toastTimer && activeToastText) {
     setMessage(activeToastText + '（もう取り消せません）', 'info');
   }
@@ -1233,7 +1234,7 @@ function showUndoToast(text, onUndo, actionLabel) {
   document.getElementById('toast-text').textContent = text;
   var btn = document.getElementById('toast-undo');
   btn.innerHTML = '';
-  fillButton(btn, 'undo', actionLabel || '取り消す');
+  fillButton(btn, iconName || 'undo', actionLabel || '取り消す');
   btn.onclick = function () { hideToast(); onUndo(); };
   el.hidden = false;
   activeToastText = text;
@@ -1375,7 +1376,8 @@ var impPanelBusy = false;
 
 /** 送信中は全部、解決策の入力中は解決策以外の欄を塞ぐ（送らない編集を黙って捨てないため）。 */
 function applyImpLocks() {
-  document.getElementById('imp-panel-save').disabled = impPanelBusy;
+  // 解決策の入力中は保存を押せない（保存して閉じると、打った解決策を黙って捨てるため）。
+  document.getElementById('imp-panel-save').disabled = impPanelBusy || impPanelState.resolving;
   document.getElementById('imp-panel-resolve').disabled = impPanelBusy;
   IMP_FORM_FIELD_IDS.forEach(function (id) {
     document.getElementById(id).disabled = impPanelBusy || (impPanelState.resolving && id !== 'i-resolution');
@@ -1412,7 +1414,9 @@ function setImpResolving(on) {
   impPanelState.resolving = on;
   document.getElementById('i-resolution-field').hidden = !on;
   applyImpLocks();
-  fillButton(document.getElementById('imp-panel-resolve'), 'check', on ? '解決を確定' : '解決する');
+  var btn = document.getElementById('imp-panel-resolve');
+  btn.innerHTML = '';   // fillButton は追記するだけ。空にしないと文言が積み重なる
+  fillButton(btn, 'check', on ? '解決を確定' : '解決する');
 }
 
 /** id が null なら新規作成。 */
@@ -1558,7 +1562,7 @@ function showResolveOutcome(id, resolution, expected, res) {
   }
   setMessage(res.message, 'error');
   showUndoToast(id + ' の解決が途中で止まりました。',
-    function () { retryResolveImp(id, resolution, expected); }, '完了する');
+    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check');
 }
 
 /** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
@@ -1594,7 +1598,7 @@ function unresolveImp(moved, resolvedRow) {
       if (res.reason === 'partial') {
         // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
         showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
-          function () { unresolveImp(moved, resolvedRow); }, '完了する');
+          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check');
       }
     })
     .withFailureHandler(function (err) {
@@ -1790,6 +1794,8 @@ function loadView() {
         // 操作可能な盤面や表が残ってしまう）。
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
         renderSummary(res.summary);
+        // 障害物の読み直しは、発行済みの書き込みより新しい状態。遅れて届く古い書き込みの応答で表を戻さない。
+        if (requestedView === 'impediment') lastAppliedImp = impWriteIssued;
         setMessage('', 'info');
       } else {
         // 失敗が確定した（＝捨てるべき応答ではない）。placeholder が出ていれば畳む。

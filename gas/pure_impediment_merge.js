@@ -96,7 +96,7 @@ function appendImpediment(rows, id, fields, todayText) {
 
 function updateImpediment(rows, id, fields, expected) {
   const list = rows || [];
-  const i = impIndex_(list, id);
+  const i = impRealIndex_(list, id);   // 雛形の行は編集させない
   if (i === -1) return { ok: false, reason: 'not_found' };
   if (!impedimentRowsEqual(list[i], expected)) return { ok: false, reason: 'conflict' };
   const next = list.map(impCopy_);

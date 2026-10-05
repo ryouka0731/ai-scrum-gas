@@ -644,6 +644,8 @@ test('解決: 2つ目（未解決から消す）で失敗すると partial。「
   const res = first.ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
   assert.equal(res.reason, 'partial');
   assert.ok(res.message.indexOf('「完了する」') !== -1, res.message);
+  assert.ok(res.message.indexOf('impediment_log.csv') !== -1, res.message);
+  assert.equal(res.message.split('（').length, 2, '括弧が二重になっている: ' + res.message);
   assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '未解決に残っている前提');
   assert.ok(f['impediment_log_resolved.csv'].indexOf('IMP-002') !== -1, '解決済に足された前提');
   assert.deepEqual(plain(res.view.open).map((r) => r.id), [], '両方にある間は未解決に出さない');

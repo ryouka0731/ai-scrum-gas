@@ -280,3 +280,49 @@ test('新しい書き込みがビュー無しで先に返り、古い成功が�
   first.handlers.success(impResponse([Object.assign({}, ROW, { title: '保存できた題' })]));
   assert.equal(h.tableRowsOf('table-view')[0][1].text, '保存できた題');
 });
+
+test('解決ボタンの文言は積み重ならない。1回目で「解決を確定」、開き直すと「解決する」', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  assert.equal(h.labelOf('imp-panel-resolve'), '解決する');
+  h.click('imp-panel-resolve');
+  assert.equal(h.labelOf('imp-panel-resolve'), '解決を確定');
+  h.pressKey('Escape');
+  h.clickImpRow('IMP-002');
+  assert.equal(h.labelOf('imp-panel-resolve'), '解決する');
+});
+
+test('解決策の入力中は「保存」を押せない。開き直すと戻る', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  assert.equal(h.disabledOf('imp-panel-save'), false);
+  h.click('imp-panel-resolve');
+  assert.equal(h.disabledOf('imp-panel-save'), true, '解決策を黙って捨てて保存できてしまう');
+  h.pressKey('Escape');
+  h.clickImpRow('IMP-002');
+  assert.equal(h.disabledOf('imp-panel-save'), false);
+});
+
+test('書き込みの発行後に読み直した表は、後から届く古い書き込みの応答で戻されない', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-save');
+  const write = latest(h);
+  h.click('reload');
+  const load = latest(h);
+  assert.notEqual(write, load);
+  load.handlers.success(impResponse([Object.assign({}, ROW, { title: '読み直した題' })]));
+  write.handlers.success(impResponse([Object.assign({}, ROW, { title: '古い応答' })]));
+  assert.equal(h.tableRowsOf('table-view')[0][1].text, '読み直した題');
+});
+
+test('「完了する」の通知はチェックのアイコン、「取り消す」は元のアイコン', () => {
+  const h = onImpediment();
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  const undoIcon = h.iconPathOf('toast-undo');
+  h.click('toast-undo');
+  latest(h).handlers.success(partial([ROW], [RESOLVED_ROW]));
+  assert.equal(h.labelOf('toast-undo'), '完了する');
+  assert.notEqual(h.iconPathOf('toast-undo'), undoIcon);
+  assert.equal(h.iconPathOf('toast-undo'), 'M3 8.4 6.4 11.6 13 4.8');
+});

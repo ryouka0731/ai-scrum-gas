@@ -18,7 +18,7 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
   を変える。この操作は `scrum/product_backlog.csv` へ即座に書き戻される。
   障害物も同様に、作成・編集は `scrum/impediment_log.csv` へ、解決は未解決の行を
   `scrum/impediment_log_resolved.csv` へ移す形で書き戻される。
-  **Web アプリが読み書きするのは `product_backlog.csv`・`impediment_log.csv`・
+  **Web アプリが書き戻すのは `product_backlog.csv`・`impediment_log.csv`・
   `impediment_log_resolved.csv` の3ファイルだけ**で、共有スプレッドシートには触れない
 - Web アプリからの変更も同じファイルに入るため、**あなたは何もしなくても人の操作結果を
   次にそれらのファイルを読んだときに見られる**。同期の仕組みを意識する必要はない
