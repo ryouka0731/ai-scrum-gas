@@ -396,3 +396,23 @@ test('表の読み込み中にコメントの追加が成功しても、表は�
   assert.deepEqual(ids(h, 'imp-panel-comments'), ['CMT-0000000a', 'CMT-0000000e'], '追加が読み込みの写しで消えた');
 });
 
+// ---------------------------------------------------------------------------
+// 最終レビュー M1: 描き直しで入力欄を作り直さない（書きかけ・フォーカス・変換中を保つ）
+// ---------------------------------------------------------------------------
+
+test('一覧が描き直されても、入力欄は同じ要素のままで書きかけが残る', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.setCommentInput('panel-comments', '書きかけ');
+  const before = h.commentInputElement('panel-comments');
+  h.clickCommentDelete('panel-comments', 'CMT-00000002');
+  callOf(h, 'apiDeleteComment').handlers.success({ ok: true, removed: C2, comments: { 'PBI-001': [C1] } });
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000001']);
+  const after = h.commentInputElement('panel-comments');
+  assert.equal(after, before, '入力欄が作り直された');
+  assert.equal(after.value, '書きかけ');
+  assert.equal(h.commentFormOf('panel-comments').sendDisabled, false);
+  // 別の対象を開けば作り直す（前の書きかけを持ち込まない）。
+  h.openCard('PBI-002');
+  assert.equal(h.commentFormOf('panel-comments').inputValue, '');
+});

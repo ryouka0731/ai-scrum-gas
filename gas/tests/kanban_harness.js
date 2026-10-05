@@ -855,6 +855,11 @@ function createHarness(initialColumns) {
       fireVisible(btns[0], 'click', {}, 'コメント ' + id + ' の削除');
     },
 
+    /** 入力欄の要素そのもの（描き直しで同じ要素が使われ続けるかを見るため）。 */
+    commentInputElement: function (hostId) {
+      return commentPart(el(hostId), 'comment-input', hostId);
+    },
+
     /** 入力欄・送信ボタン・節のメッセージの状態を読む。 */
     commentFormOf: function (hostId) {
       const host = el(hostId);

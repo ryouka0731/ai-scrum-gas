@@ -165,6 +165,7 @@
   .comments { display: flex; flex-direction: column; gap: var(--sp-2);
     border-top: 1px solid var(--line); padding-top: var(--sp-3); }
   .comments h3 { font-size: 13px; margin: 0; }
+  .comment-list-box { display: contents; }   /* 一覧だけを作り直すための入れ物。並びは .comments の gap に任せる */
   .comment-list { list-style: none; margin: 0; padding: 0; }
   .comment-list li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
   .comment-list li:last-child { border-bottom: none; }
@@ -1784,14 +1785,19 @@ function commentUiFor(hostId, targetId) {
 }
 
 /**
- * コメント節を描く（中身を作り直す）。targetId が空（新規作成中）なら節ごと隠す。
- * fresh が偽で同じ対象を描き直すときは、書きかけの入力と節のメッセージを引き継ぐ
- * （応答で一覧が差し替わるたびに書きかけが消えないように）。
+ * コメント節を描く。targetId が空（新規作成中）なら節ごと隠す。
+ * fresh が偽で同じ対象を描き直すときは、一覧だけを作り直し、入力欄・送信ボタン・節のメッセージは
+ * 同じ要素のまま残す（応答で一覧が差し替わるたびに、書きかけ・フォーカス・選択・変換中の文字が
+ * 失われないように）。
  */
 function renderComments(hostId, targetId, fresh) {
   var host = document.getElementById(hostId);
   var prev = commentUi[hostId];
-  var keep = (!fresh && prev && prev.targetId === targetId) ? prev : null;
+  if (!fresh && targetId && prev && prev.targetId === targetId) {
+    fillCommentList(prev.list, hostId, targetId);
+    syncCommentForm(prev);
+    return;
+  }
   host.innerHTML = '';
   commentUi[hostId] = null;
   host.hidden = !targetId;
@@ -1801,6 +1807,48 @@ function renderComments(hostId, targetId, fresh) {
   h.textContent = 'コメント';
   host.appendChild(h);
 
+  var listBox = document.createElement('div');
+  listBox.className = 'comment-list-box';
+  host.appendChild(listBox);
+  fillCommentList(listBox, hostId, targetId);
+
+  var input = document.createElement('textarea');
+  input.className = 'comment-input';
+  input.setAttribute('aria-label', 'コメントを書く');
+  host.appendChild(input);
+
+  var actions = document.createElement('div');
+  actions.className = 'comment-actions';
+  var send = document.createElement('button');
+  send.type = 'button';
+  send.className = 'comment-send primary';
+  fillButton(send, 'plus', 'コメントする');
+  actions.appendChild(send);
+  host.appendChild(actions);
+
+  var message = document.createElement('div');
+  host.appendChild(message);
+
+  var ui = { targetId: targetId, list: listBox, input: input, send: send, message: message };
+  setCommentMessage(ui, '', 'info');
+  syncCommentForm(ui);
+  input.addEventListener('input', function () { syncCommentForm(ui); });
+  send.addEventListener('click', function () { sendComment(hostId, targetId); });
+  commentUi[hostId] = ui;
+}
+
+/** 送信中かどうかに合わせて、入力欄と送信ボタンを塞ぐ・開ける。送信中は送った本文を出し続ける。 */
+function syncCommentForm(ui) {
+  var sending = Object.prototype.hasOwnProperty.call(commentSending, ui.targetId);
+  // 同じ値を入れ直すとカーソル位置が動くブラウザがあるため、違うときだけ入れる。
+  if (sending && ui.input.value !== commentSending[ui.targetId]) ui.input.value = commentSending[ui.targetId];
+  ui.input.disabled = sending;
+  ui.send.disabled = sending || ui.input.value.trim() === '';
+}
+
+/** 一覧（box の中身）を、今の commentsByTarget から作り直す。 */
+function fillCommentList(box, hostId, targetId) {
+  box.innerHTML = '';
   var list = commentsOf(targetId);
   var ul = document.createElement('ul');
   ul.className = 'comment-list';
@@ -1836,42 +1884,13 @@ function renderComments(hostId, targetId, fresh) {
     li.appendChild(body);
     ul.appendChild(li);
   });
-  host.appendChild(ul);
+  box.appendChild(ul);
   if (list.length === 0) {
     var empty = document.createElement('div');
     empty.className = 'comment-empty';
     empty.textContent = 'まだコメントはありません。';
-    host.appendChild(empty);
+    box.appendChild(empty);
   }
-
-  var input = document.createElement('textarea');
-  input.className = 'comment-input';
-  input.setAttribute('aria-label', 'コメントを書く');
-  host.appendChild(input);
-
-  var actions = document.createElement('div');
-  actions.className = 'comment-actions';
-  var send = document.createElement('button');
-  send.type = 'button';
-  send.className = 'comment-send primary';
-  fillButton(send, 'plus', 'コメントする');
-  actions.appendChild(send);
-  host.appendChild(actions);
-
-  var message = document.createElement('div');
-  host.appendChild(message);
-
-  var ui = { targetId: targetId, input: input, send: send, message: message };
-  var sending = Object.prototype.hasOwnProperty.call(commentSending, targetId);
-  input.value = sending ? commentSending[targetId] : (keep ? keep.input.value : '');
-  if (keep) setCommentMessage(ui, keep.message.textContent, keep.message.className.indexOf('error') !== -1 ? 'error' : 'info');
-  else setCommentMessage(ui, '', 'info');
-  input.disabled = sending;
-  var syncSend = function () { send.disabled = sending || input.value.trim() === ''; };
-  syncSend();
-  input.addEventListener('input', syncSend);
-  send.addEventListener('click', function () { sendComment(hostId, targetId); });
-  commentUi[hostId] = ui;
 }
 
 /** 開いているパネルのコメント節を、今の commentsByTarget から描き直す。 */
