@@ -23,11 +23,20 @@ const plain = (o) => Object.assign({}, o);
 const CONFLICT_MSG = '他の変更が先に入っています。最新の内容に更新しました。';
 const BUSY_MSG = '他の更新が実行中です。少し待って再試行してください。';
 
+// パネルのスプリント欄は velocity.csv から選ばせる（自由入力ではない）。盤面の応答が
+// 完成した選択肢を運ぶので、初期読み込みの応答に載せる。載せないと select に選択肢が
+// 無く、実ブラウザ同様、値を入れても空になる。
+const CHOICES = [
+  { value: '', label: '（未割り当て）', unknown: false },
+  { value: 'sprint001', label: 'sprint001', unknown: false },
+  { value: 'sprint002', label: 'sprint002', unknown: false },
+];
+
 /** 初期読み込みを済ませたハーネスを返す。 */
 function ready() {
   const h = createHarness(INITIAL);
   h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  h.calls[0].handlers.success({ ok: true, view: h.boardOf(INITIAL), sprintChoices: CHOICES });
   return h;
 }
 
@@ -220,7 +229,8 @@ test('カードを開くと、その内容が入力欄に入る', () => {
   const initial = cols({ Review: [FULL_CARD] });
   const h = createHarness(initial);
   h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.boardOf(initial) });
+  // スプリント欄はプルダウン。選択肢はサーバが完成させて盤面の応答で運ぶ。
+  h.calls[0].handlers.success({ ok: true, view: h.boardOf(initial), sprintChoices: CHOICES });
 
   h.openCard('PBI-009');
   assert.equal(h.valueOf('f-title'), 'ぜんぶ');
@@ -265,7 +275,7 @@ test('編集は触っていない項目を送らない（優先度が語彙外�
   const initial = cols({ New: [CARD_C] });
   const h = createHarness(initial);
   h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, board: h.boardOf(initial) });
+  h.calls[0].handlers.success({ ok: true, view: h.boardOf(initial) });
 
   h.openCard('PBI-003');
   // 前提: 語彙外の priority は select 上で選べず空欄になる（実ブラウザの select と同じ）。
@@ -651,9 +661,10 @@ test('取り消しの送信中に最新にしても、戻ってきたカード�
 
   h.click('reload');                     // 応答を待つ間に「最新にする」を押す
   const reload = h.calls[h.calls.length - 1];
-  assert.equal(reload.method, 'apiGetBoard');
+  assert.equal(reload.method, 'apiGetView');
+  assert.deepEqual(reload.args, ['board'], 'load() がどのビューを取るか渡していない');
   // サーバでは取り消しが既に反映済みで、PBI-002 が戻って届く。
-  reload.handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  reload.handlers.success({ ok: true, view: h.boardOf(INITIAL) });
 
   h.openCard('PBI-002');
   assert.equal(h.hiddenOf('panel'), false, '戻ってきたカードが開けない（送信中扱いになっている）');
@@ -798,7 +809,9 @@ test('期限が過ぎた通知からは取り消せない', () => {
   const h = deleted();
   h.flushTimers();
   const before = h.calls.length;
-  h.click('toast-undo');
+  // 実ブラウザでは #toast[hidden] が display: none なのでボタンへ届かない。ここでは
+  // その手前の守り（onclick を外していること）を見たいので、あえて raw で押す。
+  h.raw.click('toast-undo');
   assert.equal(h.calls.length, before, '期限切れの通知から取り消せてしまう');
 });
 
@@ -891,7 +904,7 @@ test('3操作を commit順6 × 到達順6 で回しても、画面がサーバ�
       const label = 'commit=[' + commit + '] deliver=[' + deliver + ']';
       const h = createHarness(INITIAL3);
       h.sandbox.load();
-      h.calls[0].handlers.success({ ok: true, board: h.boardOf(INITIAL3) });
+      h.calls[0].handlers.success({ ok: true, view: h.boardOf(INITIAL3) });
 
       // 3操作を重ねて送る（どれも応答待ちのまま置く）
       h.drag('PBI-001', 'Ready');
@@ -1047,7 +1060,7 @@ test('別のパネルへ切り替えたあとの競合応答は、そのパネ�
 // load() を会計に載せる（writeSeq）
 // ---------------------------------------------------------------------------
 //
-// apiGetBoard はロックを取らないため、書き込み中の古い CSV を読める。ドラッグ等の
+// apiGetView はロックを取らないため、書き込み中の古い CSV を読める。ドラッグ等の
 // 送信中に「最新にする」を押すと、load() の応答がその書き込みを含まない古い board を
 // 運んでくることがある。inflight（応答時点で送信中の要求が無いか）だけでは、発行後に
 // 確定して既に終わった書き込みを見分けられない。この画面で4回踏んだ「応答の到達順で
@@ -1060,7 +1073,8 @@ test('ドラッグの送信中に最新にすると、確定後に届く古い b
 
   h.click('reload');                     // ドラッグの送信中に「最新にする」
   const loadCall = h.calls[h.calls.length - 1];
-  assert.equal(loadCall.method, 'apiGetBoard');
+  assert.equal(loadCall.method, 'apiGetView');
+  assert.deepEqual(loadCall.args, ['board'], 'load() がどのビューを取るか渡していない');
 
   // ドラッグが先に確定する。
   const moved = cols({ Done: [CARD_A], New: [CARD_B] });
@@ -1068,7 +1082,7 @@ test('ドラッグの送信中に最新にすると、確定後に届く古い b
   assert.equal(fmt(h.screen()), fmt(h.columnsOf(moved)), '前提: ドラッグの応答で画面が動いていない');
 
   // load() の応答は、発行後に確定したこのドラッグを含まない古い board。
-  loadCall.handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  loadCall.handlers.success({ ok: true, view: h.boardOf(INITIAL) });
 
   assert.equal(fmt(h.screen()), fmt(h.columnsOf(moved)),
     '確定した書き込みが古い board で巻き戻ってしまう');
@@ -1084,7 +1098,7 @@ test('送信中に何も確定していなければ、最新にした結果は�
 
   h.click('reload');
   const loadCall = h.calls[h.calls.length - 1];
-  loadCall.handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  loadCall.handlers.success({ ok: true, view: h.boardOf(INITIAL) });
 
   assert.equal(fmt(h.screen()), fmt(h.columnsOf(INITIAL)), '確定した書き込みが無いのに描かなかった');
   assert.equal(h.textOf('message'), '', '巻き戻り検知の文面が誤って出ている');
@@ -1106,7 +1120,7 @@ test('保存の送信中に最新にしても、確定していなければそ�
   saveCall.handlers.success({ ok: true, board: h.boardOf(savedBoard) });
 
   // load() の応答が、保存の確定後に届いた古い board。
-  loadCall.handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  loadCall.handlers.success({ ok: true, view: h.boardOf(INITIAL) });
 
   assert.equal(fmt(h.screen()), fmt(h.columnsOf(savedBoard)), '保存の確定が古い board で巻き戻った');
   assert.ok(h.textOf('message').indexOf('もう一度') !== -1, '利用者への手がかりが無い');
