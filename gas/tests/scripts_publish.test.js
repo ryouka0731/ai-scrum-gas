@@ -155,3 +155,28 @@ test('Web アプリが書き戻す4ファイルも、配布先に無ければ作
     dest.cleanup();
   }
 });
+
+test('Web アプリが書き戻すファイルが配布先に空（0 バイト・空白のみ）であれば、雛形で置き直す。中身があれば残す', () => {
+  const src = makeTmpDir();
+  const dest = makeTmpDir();
+  try {
+    const srcRoot = path.join(src.dir, 'scrum');
+    const destRoot = path.join(dest.dir, 'scrum');
+    fs.mkdirSync(srcRoot, { recursive: true });
+    fs.mkdirSync(destRoot, { recursive: true });
+    LIVE_FILES.forEach(function (n) { fs.writeFileSync(path.join(srcRoot, n), '雛形\n', 'utf8'); });
+    fs.writeFileSync(path.join(destRoot, 'product_backlog.csv'), '', 'utf8');
+    fs.writeFileSync(path.join(destRoot, 'impediment_log.csv'), ' \n\t\n', 'utf8');
+    fs.writeFileSync(path.join(destRoot, 'impediment_log_resolved.csv'), '書いた内容\n', 'utf8');
+    const lines = captureLog(function () { copyRecursive(srcRoot, destRoot, 'scrum'); });
+    assert.equal(fs.readFileSync(path.join(destRoot, 'product_backlog.csv'), 'utf8'), '雛形\n');
+    assert.equal(fs.readFileSync(path.join(destRoot, 'impediment_log.csv'), 'utf8'), '雛形\n');
+    assert.equal(fs.readFileSync(path.join(destRoot, 'impediment_log_resolved.csv'), 'utf8'), '書いた内容\n');
+    assert.ok(lines.indexOf('scrum/product_backlog.csv は空だったので雛形で置き直しました') !== -1, JSON.stringify(lines));
+    assert.ok(lines.indexOf('scrum/impediment_log.csv は空だったので雛形で置き直しました') !== -1, JSON.stringify(lines));
+    assert.ok(lines.indexOf('scrum/impediment_log_resolved.csv は配布先の内容を残しました（Web アプリが書き戻すファイルのため）') !== -1);
+  } finally {
+    src.cleanup();
+    dest.cleanup();
+  }
+});

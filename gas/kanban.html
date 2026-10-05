@@ -2043,17 +2043,25 @@ function restoreComment(row) {
   var issued = ++commentWriteIssued;
   commentPending[issued] = true;
   setMessage('コメントを戻しています…', 'info');
+  // 失敗は、その対象のコメント節が開いていればそこへ、開いていなければ全体のメッセージへ出す。
+  var failRestore = function (text) {
+    var host = openCommentHost();
+    var ui = host && host.targetId === row.target_id ? commentUiFor(host.hostId, host.targetId) : null;
+    if (ui) setCommentMessage(ui, text, 'error');
+    else setMessage(text, 'error');
+  };
   google.script.run
     .withSuccessHandler(function (res) {
       delete commentPending[issued];
       if (res.ok) commentWritesDone++;
       // 戻す応答は戻した行を運ばない。送った行（row）を使う。
       if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
-      setMessage(res.ok ? 'コメントを戻しました。' : res.message, res.ok ? 'info' : 'error');
+      if (res.ok) setMessage('コメントを戻しました。', 'info');
+      else failRestore(res.message);
     })
     .withFailureHandler(function (err) {
       delete commentPending[issued];
-      setMessage('取り消せませんでした: ' + err.message, 'error');
+      failRestore('取り消せませんでした: ' + err.message);
     })
     .apiRestoreComment(row);
 }

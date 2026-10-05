@@ -90,8 +90,12 @@ function copyRecursive(src, dest, relPath) {
     return { copiedCount: copiedCount, skippedLinkCount: skippedLinkCount };
   }
   if (relPath !== undefined && KEEP_IF_EXISTS.indexOf(relPath) !== -1 && fs.existsSync(dest)) {
-    console.log(relPath + ' は配布先の内容を残しました（Web アプリが書き戻すファイルのため）');
-    return { copiedCount: 0, skippedLinkCount: 0 };
+    // 空（0 バイト・空白のみ）のファイルは残す価値がない。雛形で置き直す。
+    if (fs.readFileSync(dest, 'utf8').trim() !== '') {
+      console.log(relPath + ' は配布先の内容を残しました（Web アプリが書き戻すファイルのため）');
+      return { copiedCount: 0, skippedLinkCount: 0 };
+    }
+    console.log(relPath + ' は空だったので雛形で置き直しました');
   }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);

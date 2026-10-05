@@ -15,6 +15,9 @@ test('検証: 対象の形・空・2000字超', () => {
   assert.deepEqual(c.validateComment('PBI-001', '  ').errors, ['コメントを入力してください。']);
   assert.deepEqual(c.validateComment('PBI-001', 'あ'.repeat(2001)).errors, ['コメントは2000字以内で入力してください。']);
   assert.equal(c.validateComment('PBI-001', 'あ'.repeat(2000)).ok, true);
+  // 字数はコードポイントで数える（絵文字は UTF-16 で2単位だが1字）。
+  assert.equal(c.validateComment('PBI-001', '😀'.repeat(2000)).ok, true);
+  assert.equal(c.validateComment('PBI-001', '😀'.repeat(2001)).ok, false);
   assert.deepEqual(c.validateComment('X-1', 'よい').errors, ['コメントの対象が不正です: X-1']);
   assert.equal(c.validateComment(null, null).ok, false);
 });
@@ -25,7 +28,10 @@ test('追記: 末尾に足し、引数を変えない', () => {
   assert.equal(r.ok, true);
   assert.deepEqual(r.comment, { id: 'CMT-0000000b', target_id: 'PBI-001', author: 'b@x.jp', created_at: '2026-10-06 11:00:00', body: '次' });
   assert.equal(r.rows.length, 2);
+  assert.deepEqual(r.rows[0], row(), '既存の行が変わった');
+  assert.deepEqual(r.rows[1], r.comment);
   assert.equal(rows.length, 1);
+  assert.deepEqual(rows, [row()], '引数の行が変わった');
 });
 
 test('削除: 本人だけ。他人は forbidden、無ければ not_found', () => {

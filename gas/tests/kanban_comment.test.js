@@ -416,3 +416,33 @@ test('一覧が描き直されても、入力欄は同じ要素のままで書�
   h.openCard('PBI-002');
   assert.equal(h.commentFormOf('panel-comments').inputValue, '');
 });
+
+// ---------------------------------------------------------------------------
+// PR #7 レビュー: 取り消しの失敗は、コメント節が開いていればその節に出す
+// ---------------------------------------------------------------------------
+
+function deletedThenUndo() {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.clickCommentDelete('panel-comments', 'CMT-00000002');
+  const removed = { id: C2.id, target_id: C2.target_id, author: C2.author, created_at: C2.created_at, body: C2.body };
+  latest(h).handlers.success({ ok: true, removed: removed, comments: { 'PBI-001': [C1] } });
+  h.click('toast-undo');
+  return h;
+}
+
+test('取り消しが ok:false で失敗したら、開いているコメント節にエラーを出す', () => {
+  const h = deletedThenUndo();
+  callOf(h, 'apiRestoreComment').handlers.success({ ok: false, message: '戻せませんでした（理由）' });
+  const form = h.commentFormOf('panel-comments');
+  assert.equal(form.message, '戻せませんでした（理由）');
+  assert.match(form.messageClass, /error/);
+});
+
+test('取り消しが通信失敗したら、開いているコメント節にエラーを出す', () => {
+  const h = deletedThenUndo();
+  callOf(h, 'apiRestoreComment').handlers.failure(new Error('切れた'));
+  const form = h.commentFormOf('panel-comments');
+  assert.equal(form.message, '取り消せませんでした: 切れた');
+  assert.match(form.messageClass, /error/);
+});

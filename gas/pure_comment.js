@@ -25,7 +25,7 @@ function validateComment(targetId, body) {
   const b = cmtText_(body);
   if (!COMMENT_TARGET_RE.test(t)) errors.push('コメントの対象が不正です: ' + t);
   if (!b.trim()) errors.push('コメントを入力してください。');
-  else if (b.length > COMMENT_BODY_MAX) errors.push('コメントは' + COMMENT_BODY_MAX + '字以内で入力してください。');
+  else if (Array.from(b).length > COMMENT_BODY_MAX) errors.push('コメントは' + COMMENT_BODY_MAX + '字以内で入力してください。');
   return { ok: errors.length === 0, errors: errors };
 }
 
