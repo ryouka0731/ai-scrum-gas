@@ -21,6 +21,9 @@ if (typeof require !== 'undefined' && typeof IMPEDIMENT_EDITABLE_FIELDS === 'und
 if (typeof require !== 'undefined' && typeof IMPEDIMENT_ID_NUM_RE === 'undefined') {
   globalThis.IMPEDIMENT_ID_NUM_RE = require('./pure_impediment_id.js').IMPEDIMENT_ID_NUM_RE;
 }
+if (typeof require !== 'undefined' && typeof isImpedimentPlaceholder === 'undefined') {
+  var { isImpedimentPlaceholder } = require('./pure_grid_report.js');
+}
 
 function impText_(v) { return v === undefined || v === null ? '' : String(v); }
 
@@ -37,6 +40,28 @@ function impIndex_(rows, id) {
     if (String(rows[i].id || '').trim() === key) return i;
   }
   return -1;
+}
+
+/** 雛形の行を飛ばして ID を探す。配布の雛形 IMP-001 を本物の行と取り違えないため。 */
+function impRealIndex_(rows, id) {
+  const key = String(id || '').trim();
+  if (!key) return -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (!isImpedimentPlaceholder(rows[i]) && String(rows[i].id || '').trim() === key) return i;
+  }
+  return -1;
+}
+
+/**
+ * 解決・取り消しで変わらない列（status / resolved_at / resolution 以外）が同じか。
+ * 同じなら「同じ障害物が途中まで移った」とみなす。違えば別の行なので触らない。
+ */
+function impSameIdentity_(a, b) {
+  const x = a || {};
+  const y = b || {};
+  return ['id', 'title', 'description', 'reported_by', 'reported_at', 'sprint'].every(function (f) {
+    return impText_(x[f]) === impText_(y[f]);
+  });
 }
 
 function impCopy_(row) {
@@ -84,12 +109,14 @@ function updateImpediment(rows, id, fields, expected) {
 function planResolve(openRows, resolvedRows, id, resolution, expected, todayText) {
   const open = openRows || [];
   const resolved = resolvedRows || [];
-  const oi = impIndex_(open, id);
-  const ri = impIndex_(resolved, id);
+  const oi = impRealIndex_(open, id);
+  const ri = impRealIndex_(resolved, id);
   if (oi === -1) return { ok: false, reason: ri === -1 ? 'not_found' : 'conflict' };
   if (!impedimentRowsEqual(open[oi], expected)) return { ok: false, reason: 'conflict' };
   const moved = impPick_(open[oi]);
   if (ri !== -1) {
+    // 同じ ID でも中身が違えば別の行。消すと解決策ごと失われるため触らない。
+    if (!impSameIdentity_(resolved[ri], open[oi])) return { ok: false, reason: 'conflict' };
     // 前回の解決が「resolved に足した」ところで止まっている。足し直さず、消すだけで完了させる。
     return { ok: true, open: impWithout_(open, oi), resolved: null, moved: moved, resolvedRow: impPick_(resolved[ri]) };
   }
@@ -115,8 +142,10 @@ function planUnresolve(openRows, resolvedRows, moved, resolvedRow) {
       id !== String((resolvedRow || {}).id || '').trim()) {
     return { ok: false, reason: 'invalid' };
   }
-  const oi = impIndex_(open, id);
-  const ri = impIndex_(resolved, id);
+  const oi = impRealIndex_(open, id);
+  const ri = impRealIndex_(resolved, id);
+  // open に同じ ID でも中身の違う行があれば、取り消しの途中とはみなさない。
+  if (oi !== -1 && !impSameIdentity_(open[oi], src)) return { ok: false, reason: 'conflict' };
   if (ri === -1) {
     // 既に戻っている（前回の取り消しが完了済み）なら、何も書かずに成功とする。
     if (oi !== -1) return { ok: true, open: null, resolved: null };

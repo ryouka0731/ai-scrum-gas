@@ -106,3 +106,40 @@ test('取り消し: 不正な入力は invalid（ID の形・空タイトル・I
   assert.equal(m.planUnresolve([], [resolvedRow], imp({ id: 'IMP-009' }), resolvedRow).reason, 'invalid');
   assert.equal(m.planUnresolve([], [resolvedRow], null, resolvedRow).reason, 'invalid');
 });
+
+// 配布の雛形行（IMP-001 / （障害物タイトル） / YYYY-MM-DD）は本物の行として扱わない。
+const tmpl = (over) => imp(Object.assign({
+  id: 'IMP-001', title: '（障害物タイトル）', reported_by: '（報告者）', reported_at: 'YYYY-MM-DD', sprint: '',
+}, over || {}));
+
+test('解決: resolved に同じ ID の雛形行があっても、本物の行を resolved に足して open から消す', () => {
+  const real = imp({ id: 'IMP-001' });
+  const r = m.planResolve([tmpl(), real], [tmpl({ status: 'Resolved' })], 'IMP-001', '直した', real, '2026-10-05');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.open, [tmpl()], '雛形行は残す');
+  assert.notEqual(r.resolved, null, 'resolved を書かずに open から消すと行が失われる');
+  assert.deepEqual(r.resolved, [tmpl({ status: 'Resolved' }),
+    imp({ id: 'IMP-001', status: 'Resolved', resolved_at: '2026-10-05', resolution: '直した' })]);
+});
+
+test('解決: resolved に同じ ID で中身の違う行があれば conflict（途中で止まった解決とみなさない）', () => {
+  const other = imp({ title: '別の障害物', status: 'Resolved', resolved_at: '2026-09-01', resolution: '昔の' });
+  assert.equal(m.planResolve([imp()], [other], 'IMP-002', 'x', imp(), 'd').reason, 'conflict');
+});
+
+test('取り消し: open に同じ ID の雛形行があっても、取り消し済みとみなさず open に戻す', () => {
+  const real = imp({ id: 'IMP-001' });
+  const done = imp({ id: 'IMP-001', status: 'Resolved', resolved_at: '2026-10-05', resolution: '直した' });
+  const r = m.planUnresolve([tmpl()], [done], real, done);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.open, [tmpl(), real]);
+  assert.deepEqual(r.resolved, []);
+  // resolved 側も雛形しか無ければ「既に戻っている」とみなさない
+  assert.equal(m.planUnresolve([tmpl()], [tmpl({ status: 'Resolved' })], real, done).reason, 'not_found');
+});
+
+test('取り消し: open に同じ ID で中身の違う行があれば conflict', () => {
+  const other = imp({ title: '別の障害物' });
+  assert.equal(m.planUnresolve([other], [resolvedRow], imp(), resolvedRow).reason, 'conflict');
+  assert.equal(m.planUnresolve([other], [], imp(), resolvedRow).reason, 'conflict');
+});
