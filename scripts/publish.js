@@ -17,11 +17,12 @@
 //
 // 配布先にあってリポジトリに無いファイルは消さない。メンバーが scrum/ 配下に作った
 // 成果物（sprintXXX/ など）を守るため。
+// Web アプリが書き戻すファイル（KEEP_IF_EXISTS）は、配布先に既にあれば上書きしない。
 //
 // Mac / Windows どちらでも動く。
 //
 // このファイルは require() されたときは副作用（実際のコピーやプロセス終了）を起こさず、
-// copyRecursive のみをテスト用に公開する（gas/tests/scripts_publish.test.js 参照）。
+// copyRecursive と KEEP_IF_EXISTS のみをテスト用に公開する（gas/tests/scripts_publish.test.js 参照）。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -29,6 +30,17 @@ const { spawnSync } = require('node:child_process');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const PUBLISH_ITEMS = ['.claude', 'scrum', 'CLAUDE.md', 'README.md'];
+
+// 配布先に既にあればコピーしないファイル（配布物の中での相対パス、区切りは /）。
+// Web アプリが配布先（Drive）のこれらへ直接書き戻すため、上書きすると人の編集やコメントが
+// 消える（comments.csv はリポジトリ側がヘッダーだけなので、全件が消える）。配布先に無いときだけ
+// 雛形として作る。雛形を変えたときは、Drive 側へ手で反映する。
+const KEEP_IF_EXISTS = [
+  'scrum/product_backlog.csv',
+  'scrum/impediment_log.csv',
+  'scrum/impediment_log_resolved.csv',
+  'scrum/comments.csv',
+];
 
 /** git コマンドを実行し、標準出力（trim 済み）を返す。取得できなければ null。 */
 function gitOutput(args) {
@@ -54,9 +66,12 @@ function nowText() {
  * 素朴に `fs.statSync` / `fs.copyFileSync` を使うとリンク先（リポジトリ外の任意の
  * ファイル）の実体が複製されてしまう。判定には必ずリンク自体を見る `fs.lstatSync` を使う。
  *
+ * relPath（配布物の中での src の相対パス。例: 'scrum'）を渡すと、KEEP_IF_EXISTS に当たる
+ * ファイルは dest に既にあればコピーせず、残したことを1行出す。
+ *
  * 戻り値: このコール（src 配下全体）分の集計 { copiedCount, skippedLinkCount }。
  */
-function copyRecursive(src, dest) {
+function copyRecursive(src, dest, relPath) {
   const stat = fs.lstatSync(src);
   if (stat.isSymbolicLink()) {
     console.warn('シンボリックリンクのためコピーをスキップしました: ' + src);
@@ -67,11 +82,16 @@ function copyRecursive(src, dest) {
     let copiedCount = 0;
     let skippedLinkCount = 0;
     fs.readdirSync(src).forEach(function (name) {
-      const result = copyRecursive(path.join(src, name), path.join(dest, name));
+      const childRel = relPath === undefined ? undefined : relPath + '/' + name;
+      const result = copyRecursive(path.join(src, name), path.join(dest, name), childRel);
       copiedCount += result.copiedCount;
       skippedLinkCount += result.skippedLinkCount;
     });
     return { copiedCount: copiedCount, skippedLinkCount: skippedLinkCount };
+  }
+  if (relPath !== undefined && KEEP_IF_EXISTS.indexOf(relPath) !== -1 && fs.existsSync(dest)) {
+    console.log(relPath + ' は配布先の内容を残しました（Web アプリが書き戻すファイルのため）');
+    return { copiedCount: 0, skippedLinkCount: 0 };
   }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);
@@ -103,7 +123,7 @@ function main(destArg) {
         console.error('リポジトリに ' + item + ' が見つかりません。スキップします。');
         return;
       }
-      const result = copyRecursive(src, path.join(DEST_DIR, item));
+      const result = copyRecursive(src, path.join(DEST_DIR, item), item);
       copiedCount += result.copiedCount;
       skippedLinkCount += result.skippedLinkCount;
     });
@@ -133,4 +153,4 @@ if (require.main === module) {
   main(process.argv[2]);
 }
 
-module.exports = { copyRecursive };
+module.exports = { copyRecursive, KEEP_IF_EXISTS };

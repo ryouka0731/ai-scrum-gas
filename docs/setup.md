@@ -27,6 +27,11 @@ git を操作すると、コミット中に書き換わる `.git` 配下を Driv
    （メンバーが `scrum/` に作った `sprintXXX/` などの成果物）は消えない。配布記録として
    `scrum/.published.json` を書き、内容はダッシュボードの「配布日時」に表示される
 
+   ただし Web アプリが書き戻す4つ（`scrum/product_backlog.csv`・`scrum/impediment_log.csv`・
+   `scrum/impediment_log_resolved.csv`・`scrum/comments.csv`）は、配布先に既にあれば上書きしない
+   （画面での編集やコメントを消さないため。残したものは1行ずつ表示される）。
+   リポジトリ側でこれらの雛形を変えたときは、Drive 上のファイルへ手で反映する
+
 4. スプレッドシート・Apps Script プロジェクト・Web アプリを作る
 
    ```bash
@@ -88,7 +93,8 @@ git を操作すると、コミット中に書き換わる `.git` 配下を Driv
 
 ### `.claude` や `scrum` を更新したとき
 
-再配布しないとメンバーの手元には届かない。
+再配布しないとメンバーの手元には届かない。Web アプリが書き戻す4つの CSV は、配布先に既にあれば
+上書きされない（前述の手順3を参照）。
 
 ```bash
 node scripts/publish.js "<共有フォルダのパス>"

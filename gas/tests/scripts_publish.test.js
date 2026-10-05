@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { copyRecursive } = require('../../scripts/publish.js');
+const { copyRecursive, KEEP_IF_EXISTS } = require('../../scripts/publish.js');
 
 /** テスト用の一時ディレクトリを作り、後始末関数を返す。 */
 function makeTmpDir() {
@@ -81,6 +81,75 @@ test('配布先にしか無いファイルは消さない', () => {
 
     assert.equal(fs.readFileSync(path.join(destRoot, 'member_created.md'), 'utf8'), 'メンバーの成果物');
     assert.equal(fs.readFileSync(path.join(destRoot, 'product_goal.md'), 'utf8'), 'ゴール');
+  } finally {
+    src.cleanup();
+    dest.cleanup();
+  }
+});
+
+/** console.log を差し替えて、fn の間に出た行を集める。 */
+function captureLog(fn) {
+  const lines = [];
+  const orig = console.log;
+  console.log = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
+  try { fn(); } finally { console.log = orig; }
+  return lines;
+}
+
+const LIVE_FILES = ['product_backlog.csv', 'impediment_log.csv', 'impediment_log_resolved.csv', 'comments.csv'];
+
+test('Web アプリが書き戻す4ファイルは一覧の定数にまとまっている', () => {
+  assert.deepEqual(KEEP_IF_EXISTS.slice().sort(), LIVE_FILES.map(function (n) { return 'scrum/' + n; }).sort());
+});
+
+test('Web アプリが書き戻す4ファイルは、配布先にあれば残し、1行ずつ知らせる', () => {
+  const src = makeTmpDir();
+  const dest = makeTmpDir();
+  try {
+    const srcRoot = path.join(src.dir, 'scrum');
+    const destRoot = path.join(dest.dir, 'scrum');
+    fs.mkdirSync(srcRoot, { recursive: true });
+    fs.mkdirSync(destRoot, { recursive: true });
+    LIVE_FILES.forEach(function (n) {
+      fs.writeFileSync(path.join(srcRoot, n), 'リポジトリの雛形', 'utf8');
+      fs.writeFileSync(path.join(destRoot, n), 'Web アプリで書いた内容', 'utf8');
+    });
+    let result;
+    const lines = captureLog(function () { result = copyRecursive(srcRoot, destRoot, 'scrum'); });
+    LIVE_FILES.forEach(function (n) {
+      assert.equal(fs.readFileSync(path.join(destRoot, n), 'utf8'), 'Web アプリで書いた内容', n + ' が上書きされた');
+      assert.ok(lines.indexOf('scrum/' + n + ' は配布先の内容を残しました（Web アプリが書き戻すファイルのため）') !== -1,
+        n + ' を残したことが出ていない: ' + JSON.stringify(lines));
+    });
+    assert.equal(result.copiedCount, 0);
+  } finally {
+    src.cleanup();
+    dest.cleanup();
+  }
+});
+
+test('Web アプリが書き戻す4ファイルも、配布先に無ければ作る。他の scrum/ のファイルは従来どおり上書きする', () => {
+  const src = makeTmpDir();
+  const dest = makeTmpDir();
+  try {
+    const srcRoot = path.join(src.dir, 'scrum');
+    const destRoot = path.join(dest.dir, 'scrum');
+    fs.mkdirSync(srcRoot, { recursive: true });
+    fs.mkdirSync(destRoot, { recursive: true });
+    fs.writeFileSync(path.join(srcRoot, 'comments.csv'), 'id,target_id\n', 'utf8');
+    fs.writeFileSync(path.join(srcRoot, 'product_goal.md'), '新しいゴール', 'utf8');
+    fs.writeFileSync(path.join(destRoot, 'product_goal.md'), '古いゴール', 'utf8');
+    // 同じ名前でも scrum/ 直下でなければ対象外（上書きする）。
+    fs.mkdirSync(path.join(srcRoot, 'sprint001'), { recursive: true });
+    fs.mkdirSync(path.join(destRoot, 'sprint001'), { recursive: true });
+    fs.writeFileSync(path.join(srcRoot, 'sprint001', 'comments.csv'), '新', 'utf8');
+    fs.writeFileSync(path.join(destRoot, 'sprint001', 'comments.csv'), '旧', 'utf8');
+
+    const result = copyRecursive(srcRoot, destRoot, 'scrum');
+    assert.equal(fs.readFileSync(path.join(destRoot, 'comments.csv'), 'utf8'), 'id,target_id\n');
+    assert.equal(fs.readFileSync(path.join(destRoot, 'product_goal.md'), 'utf8'), '新しいゴール');
+    assert.equal(fs.readFileSync(path.join(destRoot, 'sprint001', 'comments.csv'), 'utf8'), '新');
+    assert.deepEqual(result, { copiedCount: 3, skippedLinkCount: 0 });
   } finally {
     src.cleanup();
     dest.cleanup();

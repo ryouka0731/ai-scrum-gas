@@ -48,7 +48,9 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
 `.git` はここには無い。メンバーは会社の制約で GitHub を使えず、git 操作は一切不要である。
 - `scrum/` を書き換えると、数分以内に共有スプレッドシートへ反映される
 - 変更は管理者のリポジトリで行われ、`node scripts/publish.js` でこのフォルダへ配布される。
-  再配布されるまで、ここでの手作業の変更は次回配布で上書きされる
+  再配布されるまで、ここでの手作業の変更は次回配布で上書きされる。ただし Web アプリが書き戻す
+  `scrum/product_backlog.csv`・`scrum/impediment_log.csv`・`scrum/impediment_log_resolved.csv`・
+  `scrum/comments.csv` は、ここに既にあれば上書きされない（雛形の変更は管理者が手で反映する）
 - スプレッドシート上の編集は次回同期で失われる。ただし「メモ」列だけは ID をキーに引き継がれる
 - ダッシュボードの「配布日時」で、この内容がいつ配布されたものかを確認できる
 
