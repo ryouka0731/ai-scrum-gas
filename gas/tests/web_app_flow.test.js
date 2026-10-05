@@ -123,7 +123,8 @@ function createTestContext(files, opts) {
     },
     Utilities: {
       // 呼ぶたびに決まった並びの UUID を返す。
-      getUuid: (function () { let n = 0; return function () { n++; return ('0000000' + n.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; }; })(),
+      // opts.uuids: 指定すると順に返し、尽きたら最後の値を返し続ける（ID 衝突の再現用）。
+      getUuid: (function () { let n = 0; return function () { if (opts.uuids) return opts.uuids[Math.min(n++, opts.uuids.length - 1)]; n++; return ('0000000' + n.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; }; })(),
       // テスト用の簡易実装。yyyy-MM-dd HH:mm:ss を返せれば十分。
       formatDate: function (date) {
         function pad(n) { return n < 10 ? '0' + n : String(n); }
@@ -852,4 +853,28 @@ test('障害物の応答にも comments が載る', () => {
     { 'impediment_log.csv': IMP_HEADER + IMP2, 'impediment_log_resolved.csv': IMP_HEADER }));
   const res = ctx.apiGetView('impediment');
   assert.equal(plain(res.comments)['IMP-002'][0].mine, true);
+});
+
+test('追加: ログインが取れないと forbidden で何も書かない', () => {
+  const { ctx, files } = createTestContext(cmtFiles(), { user: '' });
+  const res = ctx.apiAddComment('PBI-001', 'x');
+  assert.equal(res.reason, 'forbidden');
+  assert.equal(files['comments.csv'], CMT_HEADER);
+});
+
+test('追加: ID が衝突し続けたら error で書かず、1回だけなら引き直す', () => {
+  const row = 'CMT-00000001,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\n';
+  const same = '00000001-0000-4000-8000-000000000000';
+  const a = createTestContext(cmtFiles(row), { uuids: [same] });
+  const ng = a.ctx.apiAddComment('PBI-001', 'x');
+  assert.equal(ng.reason, 'error');
+  assert.ok(ng.message.indexOf('ID が重複しました') !== -1);
+  assert.equal(a.files['comments.csv'], CMT_HEADER + row);
+  const b = createTestContext(cmtFiles(row), { uuids: [same, '00000002-0000-4000-8000-000000000000'] });
+  assert.equal(b.ctx.apiAddComment('PBI-001', 'x').comment.id, 'CMT-00000002');
+});
+
+test('apiGetView(list) も comments を載せる', () => {
+  const { ctx } = createTestContext(cmtFiles('CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\n'));
+  assert.equal(plain(ctx.apiGetView('list').comments)['PBI-001'].length, 1);
 });

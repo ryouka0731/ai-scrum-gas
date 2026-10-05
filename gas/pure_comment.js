@@ -9,6 +9,7 @@ const COMMENT_FIELDS = ['id', 'target_id', 'author', 'created_at', 'body'];
 const COMMENT_TARGET_RE = /^(PBI|IMP)-\d+$/;
 const COMMENT_ID_RE = /^CMT-[0-9a-f]{8}$/;
 const COMMENT_BODY_MAX = 2000;
+const COMMENT_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 function cmtText_(v) { return v === undefined || v === null ? '' : String(v); }
 
@@ -51,7 +52,7 @@ function deleteComment(rows, id, me) {
 
 function restoreComment(rows, row) {
   const src = cmtPick_(row);
-  if (!row || !COMMENT_ID_RE.test(src.id) || !COMMENT_TARGET_RE.test(src.target_id) || !src.body.trim()) {
+  if (!row || !COMMENT_ID_RE.test(src.id) || !validateComment(src.target_id, src.body).ok || !COMMENT_TIME_RE.test(src.created_at)) {
     return { ok: false, reason: 'invalid' };
   }
   const list = (rows || []).map(cmtPick_);

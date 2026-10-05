@@ -126,10 +126,10 @@ function apiGetView(name) {
       // 選択肢は「完成した形」で渡す — 組み立ての規則を画面側に写すと、サーバ側だけを
       // 直したときに黙ってずれる（ロードマップには出るのに選択肢には出ないスプリント等）。
       // velocity.csv が無くても盤面は読める（未割り当て＋PBI に付いている名前だけになる）。
-      out.comments = commentsPayload_();
       if (key === 'board') {
         out.sprintChoices = sprintChoices(readCsvRowsBestEffort_(VELOCITY_CSV_NAME), rows);
       }
+      out.comments = commentsPayload_();
       return out;
     }
     if (key === 'done') {
@@ -591,9 +591,14 @@ function withCommentWrite_(mutate) {
 /** コメントを足す。ID・書いた人・時刻はサーバが決める。 */
 function apiAddComment(targetId, body) {
   return withCommentWrite_(function (rows, me) {
+    if (!me) return { ok: false, reason: 'forbidden', message: 'ログイン情報を取得できないためコメントできません。' };
     const v = validateComment(targetId, body);
     if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
-    const r = appendComment(rows, newCommentId_(), targetId, me, String(body), nowText_());
+    const taken = function (id) { return rows.some(function (r) { return String(r.id || '').trim() === id; }); };
+    let id = newCommentId_();
+    for (let i = 0; i < 4 && taken(id); i++) id = newCommentId_();
+    if (taken(id)) return { ok: false, reason: 'error', message: 'ID が重複しました。もう一度お試しください。' };
+    const r = appendComment(rows, id, targetId, me, String(body), nowText_());
     return { ok: true, rows: r.rows, extra: { comment: r.comment } };
   });
 }
@@ -616,10 +621,11 @@ function apiDeleteComment(commentId) {
  */
 function apiRestoreComment(row) {
   return withCommentWrite_(function (rows, me) {
-    if (!me || String((row || {}).author || '') !== me) {
+    const picked = Object.assign({}, row || {}, { author: String((row || {}).author || '') });
+    if (!me || picked.author !== me) {
       return { ok: false, reason: 'forbidden', message: '自分のコメントだけ戻せます。' };
     }
-    const r = restoreComment(rows, row);
+    const r = restoreComment(rows, picked);
     if (!r.ok) return { ok: false, reason: 'invalid', message: '戻す内容が不正です。' };
     return { ok: true, rows: r.unchanged ? null : r.rows };
   });
