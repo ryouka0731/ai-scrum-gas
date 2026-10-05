@@ -27,3 +27,17 @@ test('表は全セルを無害化し、元の配列は書き換えない', () =>
   assert.deepEqual(out, [['ID', 'タイトル'], ['IMP-002', "'=1+1"], ['IMP-003', 3]]);
   assert.equal(grid[1][1], '=1+1', '引数を書き換えた');
 });
+
+test('先頭の空白・改行の後ろにある数式も無害化する（シートは先頭の空白を読み飛ばしうる）', () => {
+  [' =IMPORTXML("http://x","//a")', '  +1+1', '\n=1', ' \t@SUM(A1)', '\n'].forEach((v) => {
+    assert.equal(escapeSheetCell(v), "'" + v, JSON.stringify(v));
+  });
+});
+
+test('指数表記・小数点始まりの数値はそのまま', () => {
+  ['-1e3', '+2.5E-2', '-.5', '.5', '1.', ' -3 '].forEach((v) => assert.equal(escapeSheetCell(v), v, v));
+});
+
+test('数値に見えて数式になるものは無害化する', () => {
+  ['-1+1', '-1e3+1', '--1'].forEach((v) => assert.equal(escapeSheetCell(v), "'" + v, v));
+});
