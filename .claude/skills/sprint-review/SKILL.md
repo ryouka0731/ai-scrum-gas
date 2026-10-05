@@ -23,6 +23,7 @@ description: スプリントレビューを実施する。インクリメント�
 
 ## 事前確認
 1. `scrum/${sprint_number}/sprint_backlog.md` を読み、完了したPBIと未完了のPBIを確認する
+   - `scrum/comments.csv` から該当 PBI（`target_id`）のコメントを読む
 2. `scrum/product_goal.md` を読み、プロダクトゴールへの進捗を確認する
 3. `scrum/definition_of_done.md` を読み、完成の定義を確認する
 

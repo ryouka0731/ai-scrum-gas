@@ -113,7 +113,11 @@ node scripts/publish.js "<共有フォルダのパス>"
 `gas/pure_write_guard.js` の許可リスト（`WRITABLE_FILES`）に無いファイル名は
 `writeScrumFile_()`（`gas/gas_drive_write.js`）が例外を投げて拒否する。現在許可しているのは
 `scrum/product_backlog.csv`・`scrum/impediment_log.csv`・
-`scrum/impediment_log_resolved.csv` の3つだけである。
+`scrum/impediment_log_resolved.csv`・`scrum/comments.csv` の4つだけである。
+
+既存の Drive の共有フォルダは、`node scripts/publish.js "<共有フォルダのパス>"` で一度配布し直すまで
+`scrum/comments.csv` が無く、コメントを追加すると「scrum/comments.csv が見つかりません。配布し直してください」と出る
+（他の機能は動く）。
 
 **既に運用中のテナントをこのバージョンへ更新する場合、スコープが増えるため、
 メンバーは次に Web アプリを開いたときに再度承認画面を求められる。** 事前に
@@ -167,7 +171,7 @@ Web アプリで操作できるのは PBI（やること）と障害物。スプ
 - 「今すぐ同期」と自動同期、および Web アプリでの書き戻しは、**実行した人の Google Drive 全体への
   読み書き権限**（`oauthScopes` の `drive`）を求める。初回実行時に承認ダイアログが出る。
   フォルダ ID 指定で読むには `drive.file` では足りないため、スコープを絞ることはできない。
-  ただしコード側で書き込み先を上記3ファイルのみに限定している
+  ただしコード側で書き込み先を上記4ファイルのみに限定している
   （詳しくは前述の「Drive への書き込み権限が変わったこと」を参照）
 - Web アプリのカンバンは PC・スマホ・タブレットのいずれからも操作できる。ただし
   ドラッグ&ドロップによる状態変更はスマホ・タブレットでは使えないため、その場合は
