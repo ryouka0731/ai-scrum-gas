@@ -1608,10 +1608,7 @@ function retryResolveImp(id, resolution, expected) {
         showResolveOutcome(id, resolution, expected, res);
         return;
       }
-      if (res.reason === 'conflict') {
-        setMessage(id + ' は他の変更が入ったため完了できませんでした。障害物タブで行を開き、解決し直してください。', 'error');
-        return;
-      }
+      // 「既に解決済みです」など、サーバが使い分けた文言をそのまま出す。
       setMessage(res.message, 'error');
     })
     .withFailureHandler(function (err) {
@@ -1787,6 +1784,7 @@ function renderSummary(summary) {
     // 障害物: 未解決/解決済の件数。
     stat('未解決', summary.open + '件');
     stat('解決済', summary.resolved + '件');
+    if (summary.pending > 0) stat('途中で止まった操作', summary.pending + '件');
   }
 }
 
@@ -1907,9 +1905,11 @@ function objectTable(columns, rows, onRow) {
       var td = document.createElement('td');
       var v = row[c.field];
       td.textContent = (v === null || v === undefined) ? '' : String(v);
+      // ID が重なっている行は、どの行を指すか決められないので押せない行として出す。
+      if (row.duplicate === 'true' && c.field === 'title') td.textContent += '（ID が重複しています。CSV を直してください）';
       tr.appendChild(td);
     });
-    if (onRow) {
+    if (onRow && row.duplicate !== 'true') {
       tr.className = 'clickable';
       tr.dataset.id = row.id;
       tr.setAttribute('tabindex', '0');
@@ -1931,6 +1931,51 @@ function tableSection(title, columns, rows, onRow) {
   h.textContent = title;
   section.appendChild(h);
   section.appendChild(objectTable(columns, rows, onRow));
+  return section;
+}
+
+/**
+ * 「途中で止まった操作」。2ファイルへの書き込みが片方で止まり、同じ行が未解決と解決済の両方に残っている。
+ * サーバが毎回見つけて返すので、ページを開き直しても出る。どちらかを選ぶと、既存の送り直しで揃う（サーバは冪等）。
+ */
+function pendingSection(pending) {
+  var section = document.createElement('div');
+  var h = document.createElement('h3');
+  h.textContent = '途中で止まった操作';
+  section.appendChild(h);
+  var note = document.createElement('div');
+  note.className = 'table-note';
+  note.textContent = '書き込みが途中で止まっています。どちらかを選ぶと完了します。';
+  section.appendChild(note);
+  var table = document.createElement('table');
+  table.appendChild(tableHead(['ID', 'タイトル', '']));
+  var tbody = document.createElement('tbody');
+  pending.forEach(function (p) {
+    var tr = document.createElement('tr');
+    var idTd = document.createElement('td');
+    idTd.textContent = p.id;
+    tr.appendChild(idTd);
+    var titleTd = document.createElement('td');
+    titleTd.textContent = p.open.title;
+    tr.appendChild(titleTd);
+    var actionTd = document.createElement('td');
+    var done = document.createElement('button');
+    done.id = 'imp-pending-resolve-' + p.id;
+    done.type = 'button';
+    fillButton(done, 'check', '解決済として完了');
+    done.addEventListener('click', function () { retryResolveImp(p.id, p.resolved.resolution, p.open); });
+    var back = document.createElement('button');
+    back.id = 'imp-pending-unresolve-' + p.id;
+    back.type = 'button';
+    fillButton(back, 'undo', '未解決に戻す');
+    back.addEventListener('click', function () { unresolveImp(p.open, p.resolved); });
+    actionTd.appendChild(done);
+    actionTd.appendChild(back);
+    tr.appendChild(actionTd);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  section.appendChild(table);
   return section;
 }
 
@@ -1967,6 +2012,7 @@ function renderTable(view) {
     add.addEventListener('click', function () { openImpPanel(null); });
     actions.appendChild(add);
     host.appendChild(actions);
+    if (view.pending && view.pending.length > 0) host.appendChild(pendingSection(view.pending));
     host.appendChild(tableSection('未解決', view.columns, view.open, function (row) { openImpPanel(row.id); }));
     host.appendChild(tableSection('解決済', view.columns, view.resolved));
     return;

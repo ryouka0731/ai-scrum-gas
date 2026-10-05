@@ -11,10 +11,10 @@ const ROW = { id: 'IMP-002', title: '止まっている', description: '', repor
 const COLUMNS = [{ field: 'id', label: 'ID' }, { field: 'title', label: 'タイトル' }];
 const CHOICES = [{ value: '', label: '（未割り当て）' }, { value: 'sprint001', label: 'sprint001' }];
 
-function impResponse(open, resolved) {
+function impResponse(open, resolved, pending) {
   return { ok: true, name: 'impediment',
-    view: { columns: COLUMNS, open: open, resolved: resolved || [] },
-    summary: { open: open.length, resolved: (resolved || []).length }, sprintChoices: CHOICES };
+    view: { columns: COLUMNS, open: open, resolved: resolved || [], pending: pending || [] },
+    summary: { open: open.length, resolved: (resolved || []).length, pending: (pending || []).length }, sprintChoices: CHOICES };
 }
 
 const latest = (h) => h.calls[h.calls.length - 1];
@@ -396,14 +396,6 @@ test('取り消しが途中で止まったときの「完了する」も消え�
   assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') !== -1);
 });
 
-test('通知の「完了する」からの再送が conflict なら、全体メッセージで解決し直しを案内する', () => {
-  const h = stickyShown();
-  h.click('toast-undo');
-  latest(h).handlers.success(Object.assign(impResponse([ROW3], [RESOLVED_ROW]),
-    { ok: false, reason: 'conflict', message: '他の変更が先に入っています。' }));
-  assert.equal(h.textOf('message'), 'IMP-002 は他の変更が入ったため完了できませんでした。障害物タブで行を開き、解決し直してください。');
-});
-
 test('普通の通知が普通の通知を上書きするときは、従来どおり「もう取り消せません」を出す', () => {
   const h = onImpediment({ rows: [ROW, ROW3] });
   sendResolve(h).handlers.success(Object.assign(impResponse([ROW3], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
@@ -413,4 +405,75 @@ test('普通の通知が普通の通知を上書きするときは、従来ど�
   h.click('imp-panel-resolve');
   latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3]), { moved: ROW3, resolvedRow: RESOLVED_ROW3 }));
   assert.ok(h.textOf('message').indexOf('もう取り消せません') !== -1, h.textOf('message'));
+});
+
+// 途中で止まった操作は、サーバが見つけた pending から描く。ページの記憶には頼らない。
+const PENDING = { id: 'IMP-002', open: ROW, resolved: RESOLVED_ROW };
+const withPending = () => impResponse([], [RESOLVED_ROW], [PENDING]);
+
+/** 新しいページを開いた直後（通知も記憶も無い）に、pending 付きの応答が届いた状態。 */
+function reloaded(resp) {
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL),
+    summary: { byStatus: [], total: { count: 0, points: 0 } }, sprintChoices: CHOICES });
+  h.clickTab('障害物');
+  latest(h).handlers.success(resp || withPending());
+  return h;
+}
+
+test('途中で止まった操作の欄が、ID・題と2つのボタンで出る。要約にも件数が出る', () => {
+  const h = reloaded();
+  const tree = h.textTreeOf('table-view');
+  assert.ok(tree.indexOf('途中で止まった操作') !== -1, tree);
+  assert.ok(tree.indexOf('書き込みが途中で止まっています。どちらかを選ぶと完了します。') !== -1);
+  assert.ok(tree.indexOf('IMP-002') !== -1 && tree.indexOf('止まっている') !== -1);
+  assert.ok(tree.indexOf('解決済として完了') !== -1 && tree.indexOf('未解決に戻す') !== -1, tree);
+  h.clickPending('IMP-002', 'resolve');   // 両方のボタンが存在し、押せる
+  h.clickPending('IMP-002', 'unresolve');
+});
+
+test('途中で止まった操作が無ければ欄は出ない', () => {
+  const h = reloaded(impResponse([ROW]));
+  assert.ok(h.textTreeOf('table-view').indexOf('途中で止まった操作') === -1);
+});
+
+test('「解決済として完了」は、解決策と未解決の行を引数に apiResolveImpediment を呼ぶ。成功すれば欄は消える', () => {
+  const h = reloaded();
+  h.clickPending('IMP-002', 'resolve');
+  const c = latest(h);
+  assert.equal(c.method, 'apiResolveImpediment');
+  assert.deepEqual(c.args, ['IMP-002', '再起動した', ROW]);
+  c.handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  assert.ok(h.textTreeOf('table-view').indexOf('途中で止まった操作') === -1, '欄が残っている');
+});
+
+test('「未解決に戻す」は、未解決の行と解決済の行を引数に apiUnresolveImpediment を呼ぶ。成功すれば欄は消える', () => {
+  const h = reloaded();
+  h.clickPending('IMP-002', 'unresolve');
+  const c = latest(h);
+  assert.equal(c.method, 'apiUnresolveImpediment');
+  assert.deepEqual(c.args, [ROW, RESOLVED_ROW]);
+  c.handlers.success(impResponse([ROW], [], []));
+  assert.ok(h.textTreeOf('table-view').indexOf('途中で止まった操作') === -1, '欄が残っている');
+});
+
+test('重複した未解決の行は押せず、注意書きが付く', () => {
+  const dup = Object.assign({}, ROW, { duplicate: 'true' });
+  const h = reloaded(impResponse([dup]));
+  assert.throws(() => h.clickImpRow('IMP-002'), /0 件/);
+  assert.ok(h.textTreeOf('table-view').indexOf('（ID が重複しています。CSV を直してください）') !== -1);
+});
+
+test('完了の再送が失敗したら、サーバの文言をそのまま全体メッセージに出す', () => {
+  const h = stickyShown();
+  h.click('toast-undo');
+  latest(h).handlers.success(Object.assign(impResponse([ROW3], [RESOLVED_ROW]),
+    { ok: false, reason: 'conflict', message: 'この障害物は既に解決済みです。最新の内容に更新しました。' }));
+  assert.equal(h.textOf('message'), 'この障害物は既に解決済みです。最新の内容に更新しました。');
+});
+
+test('要約に「途中で止まった操作: N件」が出る', () => {
+  const h = reloaded();
+  assert.ok(h.textTreeOf('summary').indexOf('途中で止まった操作: 1件') !== -1, h.textTreeOf('summary'));
 });
