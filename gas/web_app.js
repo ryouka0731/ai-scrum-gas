@@ -166,11 +166,7 @@ function apiGetView(name) {
     if (key === 'impediment') {
       const open = readCsvRowsBestEffort_(IMPEDIMENT_CSV_NAME);
       const done = readCsvRowsBestEffort_(IMPEDIMENT_RESOLVED_CSV_NAME);
-      return {
-        ok: true, name: key,
-        view: buildImpedimentView(open, done),
-        summary: summarizeImpediment(open, done),
-      };
+      return Object.assign({ ok: true, name: key }, impedimentPayload_(open, done));
     }
     return { ok: false, name: key, message: '不明なビューです: ' + key };
   } catch (e) {
@@ -381,5 +377,154 @@ function apiRestorePbi(row) {
       return { ok: false, reason: r.reason, message: message };
     }
     return { ok: true, rows: r.rows };
+  });
+}
+
+/** 今日の日付（YYYY-MM-DD）。報告日・解決日に使う。 */
+function todayText_() {
+  return nowText_().slice(0, 10);
+}
+
+/** 障害物の応答の共通部分。パネルのスプリント欄の選択肢も載せる（盤面と同じ作り）。 */
+function impedimentPayload_(openRows, resolvedRows) {
+  return {
+    view: buildImpedimentView(openRows, resolvedRows),
+    summary: summarizeImpediment(openRows, resolvedRows),
+    sprintChoices: sprintChoices(readCsvRowsBestEffort_(VELOCITY_CSV_NAME), openRows.concat(resolvedRows)),
+  };
+}
+
+function readImpedimentRows_(name) {
+  const text = readTextFile_(getScrumFolder_(), name);
+  if (text === null) {
+    throw new Error('scrum/' + name + ' が見つかりません。配布が済んでいるか確認してください。');
+  }
+  // 未知の列を持つ CSV へ書き戻すと列が消えるため、書く前に必ず検査する。
+  assertHeaderMatches(text, IMPEDIMENT_FIELDS);
+  return csvToObjects(text);
+}
+
+/**
+ * 障害物の書き込みの共通手順。withBacklogWrite_ と同じく、ロックを取ってから2ファイルを
+ * 読み直す。mutate(open, resolved) は { ok:true, open, resolved, extra? } を返す。
+ * open / resolved は書くべき新しい配列か null（書かない）。
+ *
+ * Drive に複数ファイルのトランザクションは無い。書く順は呼び出し側が first で決める
+ * （'resolved' か 'open'）。「足す側 → 消す側」にしておけば、途中で止まっても行は失われず、
+ * 同じ ID が両方に残るだけになる（画面は解決済を正として出し、もう一度押せば揃う）。
+ */
+function withImpedimentWrite_(first, mutate) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return { ok: false, reason: 'busy', message: '他の更新が実行中です。少し待って再試行してください。' };
+  }
+  let open = null;
+  let resolved = null;
+  try {
+    open = readImpedimentRows_(IMPEDIMENT_CSV_NAME);
+    resolved = readImpedimentRows_(IMPEDIMENT_RESOLVED_CSV_NAME);
+    const result = mutate(open, resolved);
+    if (!result.ok) {
+      return Object.assign({ ok: false, reason: result.reason, message: result.message }, impedimentPayload_(open, resolved));
+    }
+    const writes = [
+      { name: IMPEDIMENT_CSV_NAME, key: 'open', rows: result.open },
+      { name: IMPEDIMENT_RESOLVED_CSV_NAME, key: 'resolved', rows: result.resolved },
+    ].filter(function (w) { return w.rows; });
+    writes.sort(function (a, b) { return (a.key === first ? 0 : 1) - (b.key === first ? 0 : 1); });
+    for (let i = 0; i < writes.length; i++) {
+      try {
+        writeScrumFile_(writes[i].name, toCsv(writes[i].rows, IMPEDIMENT_FIELDS));
+      } catch (e) {
+        if (i === 0) throw e;
+        // 1つ目は書けている。画面には書けた側を反映して返す。
+        if (writes[0].key === 'open') open = writes[0].rows; else resolved = writes[0].rows;
+        return Object.assign({
+          ok: false, reason: 'partial',
+          message: '途中で止まりました。もう一度押すと完了します。（' + e.message + '）',
+        }, impedimentPayload_(open, resolved));
+      }
+    }
+    if (result.open) open = result.open;
+    if (result.resolved) resolved = result.resolved;
+    return Object.assign({ ok: true }, impedimentPayload_(open, resolved), result.extra || {});
+  } catch (e) {
+    const out = { ok: false, reason: 'error', message: e.message };
+    if (open && resolved) Object.assign(out, impedimentPayload_(open, resolved));
+    return out;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 障害物の競合・不在の定型文。 */
+function impedimentMessage_(reason, retryHint) {
+  if (reason === 'conflict') return '他の変更が先に入っています。最新の内容に更新しました。' + (retryHint || '');
+  if (reason === 'not_found') return 'この障害物が見つかりません。最新の内容に更新しました。';
+  return '入力が不正です。';
+}
+
+/** 編集を許した項目だけを取り出す。 */
+function pickImpedimentFields_(fields) {
+  const src = fields || {};
+  const out = {};
+  IMPEDIMENT_EDITABLE_FIELDS.forEach(function (f) {
+    if (Object.prototype.hasOwnProperty.call(src, f)) out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]);
+  });
+  return out;
+}
+
+/** 障害物を作る。ID・報告日・status はサーバが決める。 */
+function apiCreateImpediment(fields) {
+  return withImpedimentWrite_('open', function (open, resolved) {
+    const picked = pickImpedimentFields_(fields);
+    const v = validateImpedimentFields(picked);
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+    const id = nextImpedimentId(open.concat(resolved));
+    const r = appendImpediment(open, id, picked, todayText_());
+    if (!r.ok) return { ok: false, reason: r.reason, message: 'ID が重複しました。もう一度お試しください。' };
+    return { ok: true, open: r.rows, resolved: null, extra: { id: id } };
+  });
+}
+
+/** 未解決の障害物を書き換える。expected は画面が描いた時点の行（全列）。 */
+function apiUpdateImpediment(id, fields, expected) {
+  return withImpedimentWrite_('open', function (open) {
+    const picked = pickImpedimentFields_(fields);
+    const v = validateImpedimentFields(picked);
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+    const r = updateImpediment(open, id, picked, expected);
+    if (!r.ok) return { ok: false, reason: r.reason, message: impedimentMessage_(r.reason, '内容を確認し、もう一度保存すると上書きします。') };
+    return { ok: true, open: r.rows, resolved: null };
+  });
+}
+
+/** 解決する。解決済へ足してから、未解決から消す。 */
+function apiResolveImpediment(id, resolution, expected) {
+  return withImpedimentWrite_('resolved', function (open, resolved) {
+    const v = validateResolution(resolution);
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+    const r = planResolve(open, resolved, id, String(resolution), expected, todayText_());
+    if (!r.ok) {
+      const message = (r.reason === 'conflict' && !open.some(function (x) { return String(x.id || '').trim() === String(id || '').trim(); }))
+        ? 'この障害物は既に解決済みです。最新の内容に更新しました。'
+        : impedimentMessage_(r.reason, '内容を確認し、もう一度押すと解決します。');
+      return { ok: false, reason: r.reason, message: message };
+    }
+    return { ok: true, open: r.open, resolved: r.resolved, extra: { moved: r.moved, resolvedRow: r.resolvedRow } };
+  });
+}
+
+/** 解決を取り消す。未解決へ戻してから、解決済から消す。通知の「取り消す」から呼ばれる。 */
+function apiUnresolveImpediment(moved, resolvedRow) {
+  return withImpedimentWrite_('open', function (open, resolved) {
+    const r = planUnresolve(open, resolved, moved, resolvedRow);
+    if (!r.ok) {
+      const message = r.reason === 'invalid' ? '取り消す内容が不正です。'
+        : r.reason === 'conflict' ? '解決したあとに他の変更が入っています。取り消しはしません。'
+        : impedimentMessage_(r.reason);
+      return { ok: false, reason: r.reason, message: message };
+    }
+    return { ok: true, open: r.open, resolved: r.resolved };
   });
 }

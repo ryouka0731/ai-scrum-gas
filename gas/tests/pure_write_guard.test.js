@@ -63,3 +63,9 @@ test('toString をオーバーライドしたプレーンオブジェクトを�
 test('WRITABLE_FILES は凍結されており push できない', () => {
   assert.throws(function () { WRITABLE_FILES.push('velocity.csv'); });
 });
+
+test('障害物の2ファイルにも書ける', () => {
+  assert.doesNotThrow(() => assertWritableFileName('impediment_log.csv'));
+  assert.doesNotThrow(() => assertWritableFileName('impediment_log_resolved.csv'));
+  assert.throws(() => assertWritableFileName('velocity.csv'));
+});

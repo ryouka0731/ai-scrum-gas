@@ -71,7 +71,13 @@ function createTestContext(files, opts) {
       getBlob: function () {
         return { getDataAsString: function () { return files[name]; } };
       },
-      setContent: function (content) { files[name] = content; },
+      // opts.failWriteFile: その名前の setContent だけ例外にする（2ファイル目の書き込み失敗を再現する）。
+      setContent: function (content) {
+        if (opts.failWriteFile && name === opts.failWriteFile) {
+          throw new Error('setContent はテストで意図的に失敗させています: ' + name);
+        }
+        files[name] = content;
+      },
     };
   }
   const scrumFolder = {
@@ -547,4 +553,119 @@ test('apiGetView(roadmap) は実在スプリントがあれば理由を載せな
   const res = ctx.apiGetView('roadmap');
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.view.notice, undefined);
+});
+
+const IMP_HEADER = 'id,title,description,reported_by,reported_at,status,resolved_at,resolution,sprint\n';
+const IMP_TEMPLATE = 'IMP-001,（障害物タイトル）,（詳細説明）,（報告者）,YYYY-MM-DD,Open,,（解決策）,sprint001\n';
+function impFiles(openBody, resolvedBody) {
+  return {
+    'product_backlog.csv': headerOnlyCsv(),
+    'velocity.csv': 'sprint,planned_points,completed_points,carried_over_points,sprint_start,sprint_end,notes\n' +
+      'sprint001,10,8,2,2026-09-01,2026-09-14,\n',
+    'impediment_log.csv': IMP_HEADER + IMP_TEMPLATE + (openBody || ''),
+    'impediment_log_resolved.csv': IMP_HEADER + IMP_TEMPLATE + (resolvedBody || ''),
+  };
+}
+const IMP2 = 'IMP-002,止まっている,,マヤ,2026-10-01,Open,,,sprint001\n';
+const IMP2_ROW = { id: 'IMP-002', title: '止まっている', description: '', reported_by: 'マヤ',
+  reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: 'sprint001' };
+const plain = (v) => JSON.parse(JSON.stringify(v));   // vm の別レルム配列を deepEqual できる形へ
+
+test('apiGetView(impediment) はスプリントの選択肢を載せる', () => {
+  const { ctx } = createTestContext(impFiles(IMP2));
+  const res = ctx.apiGetView('impediment');
+  assert.equal(res.ok, true);
+  assert.ok(plain(res.sprintChoices).some((c) => c.value === 'sprint001'));
+});
+
+test('作成: 雛形の次の IMP-002 を採番し、今日の日付と Open で未解決へ追記する', () => {
+  const { ctx, files } = createTestContext(impFiles());
+  const res = ctx.apiCreateImpediment({ title: '回線が遅い', reported_by: 'マヤ', sprint: 'sprint001', status: 'Resolved' });
+  assert.equal(res.ok, true, res.message);
+  assert.equal(res.id, 'IMP-002');
+  const line = files['impediment_log.csv'].trim().split('\n').pop();
+  assert.match(line, /^IMP-002,回線が遅い,,マヤ,\d{4}-\d{2}-\d{2},Open,,,sprint001$/);
+  assert.deepEqual(plain(res.view.open).map((r) => r.id), ['IMP-002']);
+  assert.equal(files['impediment_log_resolved.csv'], IMP_HEADER + IMP_TEMPLATE, '解決済を書いた');
+});
+
+test('作成: 解決済にある最大 ID も数える', () => {
+  const { ctx } = createTestContext(impFiles('', 'IMP-005,済,,マヤ,2026-09-01,Resolved,2026-09-02,直した,\n'));
+  assert.equal(ctx.apiCreateImpediment({ title: 'A', reported_by: 'B' }).id, 'IMP-006');
+});
+
+test('作成: 検証に落ちたら書かない', () => {
+  const { ctx, files } = createTestContext(impFiles());
+  const before = files['impediment_log.csv'];
+  const res = ctx.apiCreateImpediment({ title: '', reported_by: '' });
+  assert.equal(res.reason, 'invalid');
+  assert.equal(files['impediment_log.csv'], before);
+});
+
+test('ヘッダーが違う CSV には書かない', () => {
+  const f = impFiles();
+  f['impediment_log_resolved.csv'] = 'id,title\n';
+  const { ctx, files } = createTestContext(f);
+  const before = files['impediment_log.csv'];
+  const res = ctx.apiCreateImpediment({ title: 'A', reported_by: 'B' });
+  assert.equal(res.ok, false);
+  assert.equal(files['impediment_log.csv'], before);
+});
+
+test('編集: 見た行と同じなら書き、違えば conflict で書かない', () => {
+  const { ctx, files } = createTestContext(impFiles(IMP2));
+  const ok = ctx.apiUpdateImpediment('IMP-002', { title: '新しい題', description: 'd', reported_by: 'マヤ', sprint: '' }, IMP2_ROW);
+  assert.equal(ok.ok, true, ok.message);
+  assert.ok(files['impediment_log.csv'].indexOf('IMP-002,新しい題,d,マヤ,2026-10-01,Open,,,') !== -1);
+  const before = files['impediment_log.csv'];
+  const ng = ctx.apiUpdateImpediment('IMP-002', { title: 'X', reported_by: 'マヤ' }, IMP2_ROW);
+  assert.equal(ng.reason, 'conflict');
+  assert.equal(files['impediment_log.csv'], before);
+  assert.ok(ng.view, '競合でも最新のビューを返す');
+});
+
+test('解決: 解決済へ足してから未解決から消す。取り消しで元に戻る', () => {
+  const { ctx, files } = createTestContext(impFiles(IMP2));
+  const res = ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(res.ok, true, res.message);
+  assert.equal(files['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE);
+  assert.match(files['impediment_log_resolved.csv'], /IMP-002,止まっている,,マヤ,2026-10-01,Resolved,\d{4}-\d{2}-\d{2},再起動した,sprint001/);
+  assert.deepEqual(plain(res.moved), IMP2_ROW);
+
+  const back = ctx.apiUnresolveImpediment(plain(res.moved), plain(res.resolvedRow));
+  assert.equal(back.ok, true, back.message);
+  assert.equal(files['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE + IMP2);
+  assert.equal(files['impediment_log_resolved.csv'], IMP_HEADER + IMP_TEMPLATE);
+});
+
+test('解決: 2つ目（未解決から消す）で失敗すると partial。もう一度押すと完了する', () => {
+  const f = impFiles(IMP2);
+  const first = createTestContext(f, { failWriteFile: 'impediment_log.csv' });
+  const res = first.ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(res.reason, 'partial');
+  assert.ok(res.message.indexOf('もう一度') !== -1);
+  assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '未解決に残っている前提');
+  assert.ok(f['impediment_log_resolved.csv'].indexOf('IMP-002') !== -1, '解決済に足された前提');
+  assert.deepEqual(plain(res.view.open).map((r) => r.id), [], '両方にある間は未解決に出さない');
+
+  const retry = createTestContext(f).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(retry.ok, true, retry.message);
+  assert.equal(f['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE);
+  assert.equal(f['impediment_log_resolved.csv'].split('IMP-002').length - 1, 1, '解決済に二重に足した');
+});
+
+test('解決: 1つ目（解決済へ足す）で失敗すれば error で、どちらも変わらない', () => {
+  const f = impFiles(IMP2);
+  const before = Object.assign({}, f);
+  const res = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv' }).ctx
+    .apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(res.reason, 'error');
+  assert.equal(f['impediment_log.csv'], before['impediment_log.csv']);
+  assert.equal(f['impediment_log_resolved.csv'], before['impediment_log_resolved.csv']);
+});
+
+test('解決: 解決策が空なら invalid で書かない', () => {
+  const { ctx, files } = createTestContext(impFiles(IMP2));
+  assert.equal(ctx.apiResolveImpediment('IMP-002', '  ', IMP2_ROW).reason, 'invalid');
+  assert.ok(files['impediment_log.csv'].indexOf('IMP-002') !== -1);
 });
