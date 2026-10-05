@@ -224,7 +224,7 @@ const VOID_TAGS = { input: true, img: true, br: true, hr: true, meta: true, link
  * 追跡する。id が無い要素をスタックから丸ごと飛ばしていた頃は、
  * `<div hidden><span><button id="x">` のような構造で `#x` の祖先探索が
  * `<div hidden>` を素通りしていた（今の kanban.html では hidden が付くのは
- * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field` だけなので実害は無いが、id を持たない
+ * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field`/`#panel-comments`/`#imp-panel-comments` だけなので実害は無いが、id を持たない
  * 祖先に hidden が増えた瞬間にシムだけが実ブラウザとずれる）。
  * 親子は parentNode だけで結び、children には積まない — 積むと `clearHost()` の
  * innerHTML = '' が静的な子まで消してしまう。
@@ -463,6 +463,19 @@ function createHarness(initialColumns) {
     emit(zones[0], 'dragover', { preventDefault: noop }, '列 ' + toStatus);
     emit(zones[0], 'drop', { preventDefault: noop }, '列 ' + toStatus);
     emit(card, 'dragend', {}, 'カード ' + id);
+  };
+  // コメント節の中の、ul.comment-list の li（data-id を持つもの）。
+  const commentItems = function (host) {
+    const lists = collect(host, function (e) { return e.tagName === 'ul' && e.classList.contains('comment-list'); });
+    if (lists.length > 1) throw new Error('コメントの一覧が ' + lists.length + ' 件あります');
+    if (lists.length === 0) return [];
+    return lists[0].children.filter(function (li) { return li.tagName === 'li' && li.dataset.id; });
+  };
+  // コメント節の中の、その class を持つ要素をちょうど1つ返す。
+  const commentPart = function (host, cls, hostId) {
+    const hit = collect(host, function (e) { return e.classList.contains(cls); });
+    if (hit.length !== 1) throw new Error(hostId + ' の .' + cls + ' が ' + hit.length + ' 件見つかりました');
+    return hit[0];
   };
   const rawClickAdd = function (status, emit) {
     const cols = byId.board.children.filter(function (c) { return c.dataset.status === status; });
@@ -797,6 +810,80 @@ function createHarness(initialColumns) {
         e.children.forEach(walk);
       })(el(hostId));
       return texts.join(' ');
+    },
+
+    /**
+     * コメント節（#panel-comments / #imp-panel-comments）の一覧を DOM から読む。
+     * 書いた人は .comment-author、本文は .comment-body、削除できるかは button.comment-delete の有無。
+     */
+    commentsIn: function (hostId) {
+      return commentItems(el(hostId)).map(function (li) {
+        const author = collect(li, function (e) { return e.classList.contains('comment-author'); })[0];
+        const body = collect(li, function (e) { return e.classList.contains('comment-body'); })[0];
+        return {
+          id: li.dataset.id,
+          author: author ? author.textContent : null,
+          body: body ? body.textContent : null,
+          canDelete: collect(li, function (e) { return e.classList.contains('comment-delete'); }).length > 0
+        };
+      });
+    },
+
+    /** 入力欄に文字を入れ、input を起こす（隠れていれば例外）。 */
+    setCommentInput: function (hostId, text) {
+      const input = commentPart(el(hostId), 'comment-input', hostId);
+      // 値を入れる前に見えているかを確かめる（隠れた欄に値だけ入る経路を作らない）。
+      if (isHidden(input)) throw new Error(hostId + ' の入力欄は隠れているため、実ブラウザでは操作できません');
+      input.value = text;
+      fireVisible(input, 'input', {}, hostId + ' の入力欄');
+    },
+
+    /** 「コメントする」を押す。disabled なら実ブラウザ同様に何も起きない。 */
+    clickCommentSend: function (hostId) {
+      const btn = commentPart(el(hostId), 'comment-send', hostId);
+      if (btn.disabled) return;
+      fireVisible(btn, 'click', {}, hostId + ' の「コメントする」');
+    },
+
+    /** そのコメントの「削除」を押す。削除が出ていなければ例外。 */
+    clickCommentDelete: function (hostId, id) {
+      const hit = commentItems(el(hostId)).filter(function (li) { return li.dataset.id === id; });
+      if (hit.length !== 1) throw new Error('コメント ' + id + ' が ' + hit.length + ' 件見つかりました');
+      const btns = collect(hit[0], function (e) { return e.classList.contains('comment-delete'); });
+      if (btns.length !== 1) throw new Error('コメント ' + id + ' の削除ボタンが ' + btns.length + ' 件見つかりました');
+      if (btns[0].disabled) return;
+      fireVisible(btns[0], 'click', {}, 'コメント ' + id + ' の削除');
+    },
+
+    /** 入力欄・送信ボタン・節のメッセージの状態を読む。 */
+    commentFormOf: function (hostId) {
+      const host = el(hostId);
+      const input = commentPart(host, 'comment-input', hostId);
+      const send = commentPart(host, 'comment-send', hostId);
+      const msg = commentPart(host, 'comment-message', hostId);
+      return {
+        inputValue: input.value, inputDisabled: !!input.disabled, sendDisabled: !!send.disabled,
+        message: msg.textContent, messageClass: msg.className
+      };
+    },
+
+    /** 本文（.comment-body）の中に作られた要素の数。textContent で入れていれば 0。 */
+    commentBodyTagsIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.classList.contains('comment-body'); })
+        .reduce(function (n, b) { return n + collect(b, function () { return true; }).length; }, 0);
+    },
+
+    /** カードの件数（span.comment-count）の文字。無ければ null。 */
+    cardCommentCountOf: function (id) {
+      const hit = collect(cardElement(id), function (e) { return e.classList.contains('comment-count'); });
+      if (hit.length > 1) throw new Error('カード ' + id + ' の件数が ' + hit.length + ' 件あります');
+      return hit.length ? hit[0].textContent : null;
+    },
+
+    /** hostId の下の件数（span.comment-count）の文字を DOM 順に返す。 */
+    commentCountsIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.classList.contains('comment-count'); })
+        .map(function (e) { return e.textContent; });
     }
   };
 }
