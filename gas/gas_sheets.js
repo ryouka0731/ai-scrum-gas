@@ -44,7 +44,8 @@ function writeGrid_(ss, sheetName, grid) {
 
   const width = grid.reduce(function (max, r) { return Math.max(max, r.length); }, 0);
   if (width < 1) return sheet;
-  const normalized = grid.map(function (r) {
+  // 全シートの書き込みがここを通る。数式になりうる値は文字列として書く（escapeSheetGrid）。
+  const normalized = escapeSheetGrid(grid).map(function (r) {
     const copy = r.slice();
     while (copy.length < width) copy.push('');
     return copy;
