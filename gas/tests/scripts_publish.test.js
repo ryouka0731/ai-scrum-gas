@@ -180,3 +180,29 @@ test('Web アプリが書き戻すファイルが配布先に空（0 バイト�
     dest.cleanup();
   }
 });
+
+test('Web アプリが書き戻すファイルの配布先がリンク（壊れたリンクも）なら、リンク先を読み書きせずに残す', () => {
+  const src = makeTmpDir();
+  const dest = makeTmpDir();
+  const outside = makeTmpDir();
+  try {
+    const srcRoot = path.join(src.dir, 'scrum');
+    const destRoot = path.join(dest.dir, 'scrum');
+    fs.mkdirSync(srcRoot, { recursive: true });
+    fs.mkdirSync(destRoot, { recursive: true });
+    LIVE_FILES.forEach(function (n) { fs.writeFileSync(path.join(srcRoot, n), '雛形\n', 'utf8'); });
+    // 空のファイルへのリンク（従来は空として雛形をリンク先へ書き込んでいた）と、壊れたリンク。
+    const victim = path.join(outside.dir, 'victim.csv');
+    fs.writeFileSync(victim, '', 'utf8');
+    fs.symlinkSync(victim, path.join(destRoot, 'comments.csv'));
+    fs.symlinkSync(path.join(outside.dir, 'missing.csv'), path.join(destRoot, 'product_backlog.csv'));
+    copyRecursive(srcRoot, destRoot, 'scrum');
+    assert.equal(fs.readFileSync(victim, 'utf8'), '', 'リンク先（配布フォルダの外）に書き込んだ');
+    assert.equal(fs.existsSync(path.join(outside.dir, 'missing.csv')), false, '壊れたリンクを通して外にファイルを作った');
+    assert.equal(fs.lstatSync(path.join(destRoot, 'comments.csv')).isSymbolicLink(), true);
+  } finally {
+    src.cleanup();
+    dest.cleanup();
+    outside.cleanup();
+  }
+});
