@@ -1221,14 +1221,19 @@ var UNDO_SECONDS = 10;
 // 全体メッセージで知らせる。
 var activeToastText = null;
 
-/** 取り消せる通知を出す。時間が過ぎたら消える。 */
-function showUndoToast(text, onUndo) {
+/**
+ * 取り消せる通知を出す。時間が過ぎたら消える。
+ * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）。
+ */
+function showUndoToast(text, onUndo, actionLabel) {
   if (toastTimer && activeToastText) {
     setMessage(activeToastText + '（もう取り消せません）', 'info');
   }
   var el = document.getElementById('toast');
   document.getElementById('toast-text').textContent = text;
   var btn = document.getElementById('toast-undo');
+  btn.innerHTML = '';
+  fillButton(btn, 'undo', actionLabel || '取り消す');
   btn.onclick = function () { hideToast(); onUndo(); };
   el.hidden = false;
   activeToastText = text;
@@ -1351,6 +1356,7 @@ var impPanelState = { id: null, expected: null, resolving: false };
 var impPanelSeq = 0;
 var impSprintChoices = [];   // 障害物の応答が運ぶ選択肢（PBI パネルの sprintChoices とは別）
 var impWriteIssued = 0;      // 障害物の書き込みを発行した通し番号（古い応答で表を戻さないため）
+var lastAppliedImp = 0;      // 表に反映した応答のうち、最も新しい書き込みの通し番号
 var IMP_FORM_FIELD_IDS = ['i-title', 'i-description', 'i-reported-by', 'i-sprint', 'i-resolution'];
 
 function findImpRow(id) {
@@ -1456,8 +1462,10 @@ function readImpForm() {
 function applyImpResponse(res, issued) {
   if (res.sprintChoices) impSprintChoices = res.sprintChoices;
   if (!res.view) return;
-  // 後から発行した書き込みがあるなら、この応答は古い。表と要約を戻さない。
-  if (issued !== impWriteIssued) return;
+  // 後から発行した書き込みの応答を既に反映しているなら、この応答は古い。表と要約を戻さない。
+  // （後の書き込みがビュー無しで返った場合は、この応答が最新の手がかりなので反映する）
+  if (issued <= lastAppliedImp) return;
+  lastAppliedImp = issued;
   impView = res.view;
   if (activeView === 'impediment') {
     renderTable(res.view);
@@ -1465,8 +1473,11 @@ function applyImpResponse(res, issued) {
   }
 }
 
-/** 書き込みを送る。after(res) は成功時にパネルが同じものなら呼ばれる。 */
-function sendImpWrite(method, args, label, after) {
+/**
+ * 書き込みを送る。after(res, mine) は成功時に呼ばれる（mine はパネルが今も同じものか）。
+ * onPartial(res, mine) を渡すと、途中で止まった応答（partial）をそちらで扱う。
+ */
+function sendImpWrite(method, args, label, after, onPartial) {
   var seq = impPanelSeq;
   var issued = ++impWriteIssued;
   setImpPanelBusy(true);
@@ -1477,6 +1488,7 @@ function sendImpWrite(method, args, label, after) {
       if (res.ok) writeSeq++;
       applyImpResponse(res, issued);
       if (res.ok) { after(res, mine); return; }
+      if (res.reason === 'partial' && onPartial) { onPartial(res, mine); return; }
       // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
       if (mine && impPanelState.id) {
         var latest = findImpRow(impPanelState.id);   // 古い応答なら表は戻していないので、最新のまま
@@ -1525,10 +1537,49 @@ function resolveImp() {
   var expected = impPanelState.expected;
   sendImpWrite('apiResolveImpediment', [id, resolution, expected], '解決', function (res, mine) {
     if (mine) closeImpPanel();
+    showResolveOutcome(id, resolution, expected, res);
+  }, function (res, mine) {
+    // 解決済に足した行が正になり、未解決には出なくなる。パネルを開いたままにしない。
+    if (mine) closeImpPanel();
+    showResolveOutcome(id, resolution, expected, res);
+  });
+}
+
+/**
+ * 解決の応答（成功・途中で停止）を通知に出す。パネルが閉じていても使えるよう、
+ * 送り直しに要る値（id / 解決策 / 見た行）は引数で受け取る。
+ */
+function showResolveOutcome(id, resolution, expected, res) {
+  if (res.ok) {
     // 通知の題は送った側の行から取る（編集欄の値ではない）。
     var title = (res.moved && res.moved.title) || (expected && expected.title) || '';
     showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); });
-  });
+    return;
+  }
+  setMessage(res.message, 'error');
+  showUndoToast(id + ' の解決が途中で止まりました。',
+    function () { retryResolveImp(id, resolution, expected); }, '完了する');
+}
+
+/** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
+function retryResolveImp(id, resolution, expected) {
+  var issued = ++impWriteIssued;
+  setMessage(id + ' の解決を完了しています…', 'info');
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (res.ok) writeSeq++;
+      applyImpResponse(res, issued);
+      if (res.ok || res.reason === 'partial') {
+        if (res.ok) setMessage(id + ' を解決しました。', 'info');
+        showResolveOutcome(id, resolution, expected, res);
+        return;
+      }
+      setMessage(res.message, 'error');
+    })
+    .withFailureHandler(function (err) {
+      setMessage('解決に失敗しました: ' + err.message, 'error');
+    })
+    .apiResolveImpediment(id, resolution, expected);
 }
 
 function unresolveImp(moved, resolvedRow) {
@@ -1540,6 +1591,11 @@ function unresolveImp(moved, resolvedRow) {
       if (res.ok) writeSeq++;
       applyImpResponse(res, issued);
       setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
+      if (res.reason === 'partial') {
+        // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
+        showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
+          function () { unresolveImp(moved, resolvedRow); }, '完了する');
+      }
     })
     .withFailureHandler(function (err) {
       setMessage('取り消せませんでした: ' + err.message, 'error');

@@ -203,3 +203,80 @@ test('障害物の応答は PBI パネルのスプリント選択肢を書き換
   h.openCard('PBI-001');
   assert.deepEqual(h.optionsOf('f-sprint').map((o) => o.value), ['', 'sprint001']);
 });
+
+const RESOLVED_ROW = Object.assign({}, ROW, { status: 'Resolved', resolution: '再起動した' });
+const partial = (open, resolved, message) => Object.assign(impResponse(open, resolved || []),
+  { ok: false, reason: 'partial', message: message || '途中で止まりました。通知の「完了する」を押すと完了します。（x）' });
+
+/** パネルから解決を送り、応答待ちの呼び出しを返す。 */
+function sendResolve(h) {
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', '再起動した');
+  h.click('imp-panel-resolve');
+  return latest(h);
+}
+
+test('取り消しが途中で止まったら、「完了する」の通知を出し、押すと同じ引数で取り消しを送り直す', () => {
+  const h = onImpediment();
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  h.click('toast-undo');
+  const undo = latest(h);
+  assert.equal(undo.method, 'apiUnresolveImpediment');
+  undo.handlers.success(partial([ROW], [RESOLVED_ROW]));
+  assert.equal(h.hiddenOf('toast'), false, '押せる通知が無い');
+  assert.ok(h.textOf('toast-text').indexOf('IMP-002 の取り消しが途中で止まりました。') !== -1, h.textOf('toast-text'));
+  assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') !== -1, h.textTreeOf('toast-undo'));
+  h.click('toast-undo');
+  const retry = latest(h);
+  assert.notEqual(retry, undo);
+  assert.equal(retry.method, 'apiUnresolveImpediment');
+  assert.deepEqual(retry.args, [ROW, RESOLVED_ROW]);
+});
+
+test('解決が途中で止まったら、パネルを閉じても「完了する」の通知から同じ引数で解決を送り直せる', () => {
+  const h = onImpediment();
+  const sent = sendResolve(h);
+  h.pressKey('Escape');   // 応答の前にパネルを閉じる（もう同じパネルではない）
+  sent.handlers.success(partial([], [RESOLVED_ROW]));
+  assert.equal(h.hiddenOf('toast'), false, '押せる通知が無い');
+  assert.ok(h.textOf('toast-text').indexOf('IMP-002 の解決が途中で止まりました。') !== -1, h.textOf('toast-text'));
+  assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') !== -1);
+  h.click('toast-undo');
+  const retry = latest(h);
+  assert.notEqual(retry, sent);
+  assert.equal(retry.method, 'apiResolveImpediment');
+  assert.deepEqual(retry.args, ['IMP-002', '再起動した', ROW]);
+});
+
+test('解決が途中で止まったとき、まだ同じパネルなら閉じて「完了する」の通知を出す', () => {
+  const h = onImpediment();
+  sendResolve(h).handlers.success(partial([], [RESOLVED_ROW]));
+  assert.equal(h.hiddenOf('imp-panel'), true, '未解決に出ない行のパネルが開いたまま');
+  assert.equal(h.hiddenOf('toast'), false);
+  h.click('toast-undo');
+  assert.equal(latest(h).method, 'apiResolveImpediment');
+  assert.deepEqual(latest(h).args, ['IMP-002', '再起動した', ROW]);
+});
+
+test('通常の通知のボタンは「取り消す」のまま', () => {
+  const h = onImpediment();
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  assert.ok(h.textTreeOf('toast-undo').indexOf('取り消す') !== -1);
+  assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') === -1);
+});
+
+test('新しい書き込みがビュー無しで先に返り、古い成功が後から届いたら、表は古い成功の内容にする', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-save');
+  const first = latest(h);
+  h.pressKey('Escape');
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-save');
+  const second = latest(h);
+  assert.notEqual(first, second);
+  second.handlers.success({ ok: false, reason: 'busy', message: '他の更新が実行中です。' });
+  first.handlers.success(impResponse([Object.assign({}, ROW, { title: '保存できた題' })]));
+  assert.equal(h.tableRowsOf('table-view')[0][1].text, '保存できた題');
+});
