@@ -411,7 +411,7 @@ function readImpedimentRows_(name) {
  *
  * Drive に複数ファイルのトランザクションは無い。書く順は呼び出し側が first で決める
  * （'resolved' か 'open'）。「足す側 → 消す側」にしておけば、途中で止まっても行は失われず、
- * 同じ ID が両方に残るだけになる（画面は解決済を正として出し、もう一度押せば揃う）。
+ * 同じ ID が両方に残るだけになる（画面は解決済を正として出し、通知の「完了する」で揃う）。
  */
 function withImpedimentWrite_(first, mutate) {
   const lock = LockService.getScriptLock();
@@ -441,7 +441,7 @@ function withImpedimentWrite_(first, mutate) {
         if (writes[0].key === 'open') open = writes[0].rows; else resolved = writes[0].rows;
         return Object.assign({
           ok: false, reason: 'partial',
-          message: '途中で止まりました。もう一度押すと完了します。（' + e.message + '）',
+          message: '途中で止まりました。通知の「完了する」を押すと完了します。（' + e.message + '）',
         }, impedimentPayload_(open, resolved));
       }
     }

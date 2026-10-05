@@ -638,12 +638,12 @@ test('解決: 解決済へ足してから未解決から消す。取り消しで
   assert.equal(files['impediment_log_resolved.csv'], IMP_HEADER + IMP_TEMPLATE);
 });
 
-test('解決: 2つ目（未解決から消す）で失敗すると partial。もう一度押すと完了する', () => {
+test('解決: 2つ目（未解決から消す）で失敗すると partial。「完了する」で送り直すと完了する', () => {
   const f = impFiles(IMP2);
   const first = createTestContext(f, { failWriteFile: 'impediment_log.csv' });
   const res = first.ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
   assert.equal(res.reason, 'partial');
-  assert.ok(res.message.indexOf('もう一度') !== -1);
+  assert.ok(res.message.indexOf('「完了する」') !== -1, res.message);
   assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '未解決に残っている前提');
   assert.ok(f['impediment_log_resolved.csv'].indexOf('IMP-002') !== -1, '解決済に足された前提');
   assert.deepEqual(plain(res.view.open).map((r) => r.id), [], '両方にある間は未解決に出さない');
@@ -652,6 +652,26 @@ test('解決: 2つ目（未解決から消す）で失敗すると partial。も
   assert.equal(retry.ok, true, retry.message);
   assert.equal(f['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE);
   assert.equal(f['impediment_log_resolved.csv'].split('IMP-002').length - 1, 1, '解決済に二重に足した');
+});
+
+test('取り消し: 2つ目（解決済から消す）で失敗すると partial。「完了する」で送り直すと完了する', () => {
+  const f = impFiles(IMP2);
+  const done = createTestContext(f).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(done.ok, true, done.message);
+  const moved = plain(done.moved);
+  const resolvedRow = plain(done.resolvedRow);
+
+  const res = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv' }).ctx
+    .apiUnresolveImpediment(moved, resolvedRow);
+  assert.equal(res.reason, 'partial');
+  assert.ok(res.message.indexOf('「完了する」') !== -1, res.message);
+  assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '未解決に戻した前提');
+  assert.ok(f['impediment_log_resolved.csv'].indexOf('IMP-002') !== -1, '解決済に残っている前提');
+
+  const retry = createTestContext(f).ctx.apiUnresolveImpediment(moved, resolvedRow);
+  assert.equal(retry.ok, true, retry.message);
+  assert.equal(f['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE + IMP2, '未解決に二重に足した');
+  assert.equal(f['impediment_log_resolved.csv'], IMP_HEADER + IMP_TEMPLATE);
 });
 
 test('解決: 1つ目（解決済へ足す）で失敗すれば error で、どちらも変わらない', () => {
