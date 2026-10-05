@@ -645,6 +645,59 @@
     },
 
     /**
+     * コメントの多い PBI のパネルを開き、(a) 保存へ届く (b) 長い URL が節からはみ出さない
+     * (c) ページが横に伸びない、を測る。測ったら Escape で閉じる。
+     *
+     * 「届く」は scrollIntoView 後の矩形で見る。901px 以上は .side-panel が内側でスクロールし、
+     * 900px 以下はページがスクロールする（どちらも scrollIntoView が面倒を見る）。
+     */
+    commentPanel: async function (pbiId) {
+      var card = document.querySelector('#board .card[data-id="' + pbiId + '"]');
+      if (!card) throw new Error('コメントを持つカード ' + pbiId + ' が盤面にありません');
+      card.click();
+      await frame();
+      var panel = document.getElementById('panel');
+      if (panel.hidden) throw new Error('パネルが開きませんでした');
+      var host = document.getElementById('panel-comments');
+      var save = document.getElementById('panel-save');
+      save.scrollIntoView({ block: 'nearest' });
+      await frame();
+      var sr = save.getBoundingClientRect();
+      var pr = panel.getBoundingClientRect();
+      var hr = host.getBoundingClientRect();
+      var bodies = list('.comment-body', panel).map(function (b) {
+        var r = b.getBoundingClientRect();
+        return { scrollWidth: b.scrollWidth, clientWidth: b.clientWidth,
+          right: r.right, hostRight: hr.right, hasUrl: b.textContent.indexOf('https://') !== -1 };
+      });
+      var cs = getComputedStyle(panel);
+      var out = {
+        count: bodies.length,
+        urlBodies: bodies.filter(function (b) { return b.hasUrl; }).length,
+        // 本文がはみ出している件（scrollWidth が枠より広い、または右端が節を越える）。
+        overflowing: bodies.filter(function (b) {
+          return b.scrollWidth > b.clientWidth || b.right > b.hostRight + 0.5;
+        }).length,
+        save: { top: sr.top, bottom: sr.bottom, left: sr.left, right: sr.right },
+        viewport: { w: root.clientWidth, h: root.clientHeight },
+        panelBox: { top: pr.top, bottom: pr.bottom },
+        saveInViewport: sr.top >= -0.5 && sr.bottom <= root.clientHeight + 0.5
+          && sr.left >= -0.5 && sr.right <= root.clientWidth + 0.5,
+        saveInPanel: sr.top >= pr.top - 0.5 && sr.bottom <= pr.bottom + 0.5,
+        panelScrollHeight: panel.scrollHeight,
+        panelClientHeight: panel.clientHeight,
+        panelOverflowY: cs.overflowY,
+        docScrollWidth: root.scrollWidth,
+        docClientWidth: root.clientWidth,
+      };
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await frame();
+      window.scrollTo(0, 0);
+      if (!panel.hidden) throw new Error('Escape でパネルが閉じませんでした');
+      return out;
+    },
+
+    /**
      * 障害物パネル（#imp-panel）の実測幅。.side-panel の規則が効いているかを見る。
      * 障害物タブへ切り替え、未解決の最初の行を押して開き、測ったら Escape で閉じる。
      * 画面の状態を変えるので、他の測定が済んだあとに呼ぶこと。

@@ -27,6 +27,11 @@ git を操作すると、コミット中に書き換わる `.git` 配下を Driv
    （メンバーが `scrum/` に作った `sprintXXX/` などの成果物）は消えない。配布記録として
    `scrum/.published.json` を書き、内容はダッシュボードの「配布日時」に表示される
 
+   ただし Web アプリが書き戻す4つ（`scrum/product_backlog.csv`・`scrum/impediment_log.csv`・
+   `scrum/impediment_log_resolved.csv`・`scrum/comments.csv`）は、配布先に既にあれば上書きしない
+   （画面での編集やコメントを消さないため。残したものは1行ずつ表示される）。
+   リポジトリ側でこれらの雛形を変えたときは、Drive 上のファイルへ手で反映する
+
 4. スプレッドシート・Apps Script プロジェクト・Web アプリを作る
 
    ```bash
@@ -88,7 +93,8 @@ git を操作すると、コミット中に書き換わる `.git` 配下を Driv
 
 ### `.claude` や `scrum` を更新したとき
 
-再配布しないとメンバーの手元には届かない。
+再配布しないとメンバーの手元には届かない。Web アプリが書き戻す4つの CSV は、配布先に既にあれば
+上書きされない（前述の手順3を参照）。
 
 ```bash
 node scripts/publish.js "<共有フォルダのパス>"
@@ -113,7 +119,11 @@ node scripts/publish.js "<共有フォルダのパス>"
 `gas/pure_write_guard.js` の許可リスト（`WRITABLE_FILES`）に無いファイル名は
 `writeScrumFile_()`（`gas/gas_drive_write.js`）が例外を投げて拒否する。現在許可しているのは
 `scrum/product_backlog.csv`・`scrum/impediment_log.csv`・
-`scrum/impediment_log_resolved.csv` の3つだけである。
+`scrum/impediment_log_resolved.csv`・`scrum/comments.csv` の4つだけである。
+
+既存の Drive の共有フォルダは、`node scripts/publish.js "<共有フォルダのパス>"` で一度配布し直すまで
+`scrum/comments.csv` が無く、コメントを追加すると「scrum/comments.csv が見つかりません。配布し直してください」と出る
+（他の機能は動く）。
 
 **既に運用中のテナントをこのバージョンへ更新する場合、スコープが増えるため、
 メンバーは次に Web アプリを開いたときに再度承認画面を求められる。** 事前に
@@ -167,7 +177,7 @@ Web アプリで操作できるのは PBI（やること）と障害物。スプ
 - 「今すぐ同期」と自動同期、および Web アプリでの書き戻しは、**実行した人の Google Drive 全体への
   読み書き権限**（`oauthScopes` の `drive`）を求める。初回実行時に承認ダイアログが出る。
   フォルダ ID 指定で読むには `drive.file` では足りないため、スコープを絞ることはできない。
-  ただしコード側で書き込み先を上記3ファイルのみに限定している
+  ただしコード側で書き込み先を上記4ファイルのみに限定している
   （詳しくは前述の「Drive への書き込み権限が変わったこと」を参照）
 - Web アプリのカンバンは PC・スマホ・タブレットのいずれからも操作できる。ただし
   ドラッグ&ドロップによる状態変更はスマホ・タブレットでは使えないため、その場合は

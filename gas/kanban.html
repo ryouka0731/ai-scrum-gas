@@ -146,9 +146,47 @@
   .panel-foot .spacer { flex: 1; }
   #panel-message, #imp-panel-message { font-size: 12px; min-height: 18px; white-space: pre-line; }
   #panel-message.error, #imp-panel-message.error { color: var(--danger); }
+  /* コメントが多いとパネルが縦に伸び、保存・解決のボタンが画面の下へ押し出される。
+     パネルの中でスクロールさせ、ページの上端から見て画面に収める。引く 280px は
+     #main より上の帯の実測（盤面で 251px。901 / 1024 / 1440px 幅、高さ 800 / 900 で同じ。
+     障害物はビューの切替が無いので 200px）に body の下の余白 24px を足して丸めたもの。
+     帯が低い障害物のタブでも同じ値を使う（少し短くなるだけで、はみ出しはしない）。
+     低い画面（高さ 520px 未満）で潰れきらないよう、下限を 240px にする。 */
+  .side-panel { max-height: max(240px, calc(100vh - 280px)); overflow-y: auto; }
+  /* 高さが詰まったとき、欄が縮んで潰れないようにする（縮むのではなくスクロールさせる）。 */
+  .side-panel > * { flex-shrink: 0; }
   @media (max-width: 900px) {
-    .side-panel { flex: 1 1 auto; width: 100%; }
+    /* 狭い画面ではパネルが盤面の下に全幅で積まれ、ページそのものがスクロールする。
+       パネルの中にスクロールを作ると二重になり、指で操作しにくいので外す。 */
+    .side-panel { flex: 1 1 auto; width: 100%; max-height: none; overflow-y: visible; }
   }
+
+  /* コメントの節。パネルの最下部（.panel-foot の後ろ）に置く。 */
+  .comments { display: flex; flex-direction: column; gap: var(--sp-2);
+    border-top: 1px solid var(--line); padding-top: var(--sp-3); }
+  .comments h3 { font-size: 13px; margin: 0; }
+  .comment-list-box { display: contents; }   /* 一覧だけを作り直すための入れ物。並びは .comments の gap に任せる */
+  .comment-list { list-style: none; margin: 0; padding: 0; }
+  .comment-list li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
+  .comment-list li:last-child { border-bottom: none; }
+  .comment-meta { display: flex; align-items: center; gap: var(--sp-2); font-size: 12px; color: var(--ink-2); }
+  .comment-meta .spacer { flex: 1; }
+  /* 当たり判定は 24×24 以上（WCAG 2.5.8。.help > button と同じ基準）。 */
+  .comment-meta button { font-size: 12px; padding: var(--sp-1) var(--sp-2); min-height: 24px; }
+  .comment-body { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .comment-empty { font-size: 12px; color: var(--ink-3); }
+  .comment-input {
+    font: inherit; line-height: 1.7; color: var(--ink); background: var(--card-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: var(--sp-2) var(--sp-3);
+    min-height: 64px; resize: vertical; width: 100%;
+  }
+  .comment-input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  .comment-actions { display: flex; align-items: center; gap: var(--sp-3); }
+  .comment-message { font-size: 12px; white-space: pre-line; }
+  .comment-message.error { color: var(--danger); }
+  /* カードと障害物の表の件数 */
+  .comment-count { font-size: 11px; color: var(--ink-2); }
+  td .comment-count { margin-left: var(--sp-2); white-space: nowrap; }
 
   #toast {
     /* 中央寄せに transform を使わない。position: fixed の子孫にとって transform は
@@ -343,6 +381,8 @@
       <span class="spacer"></span>
       <button id="panel-delete" class="danger" type="button"></button>
     </div>
+    <!-- 中身は renderComments() が作る。新規作成中（ID がまだ無い）は hidden のまま。 -->
+    <div id="panel-comments" class="comments" hidden></div>
   </aside>
   <aside id="imp-panel" class="side-panel" hidden aria-label="障害物の詳細">
     <div class="panel-head">
@@ -378,6 +418,7 @@
       <span class="spacer"></span>
       <button id="imp-panel-resolve" type="button"></button>
     </div>
+    <div id="imp-panel-comments" class="comments" hidden></div>
   </aside>
 </div>
 <div id="toast" hidden role="status">
@@ -773,8 +814,14 @@ function renderCard(card) {
   prioText.textContent = card.priority || '未設定';
   prio.appendChild(prioText);
   appendHelp(prio, card.priority);   // 優先度の補足（未設定なら何も出ない）
+  // コメントの件数は ID の手前に置く。右寄せの起点（margin-left: auto）は並びの先頭が持つ。
+  var commentCount = makeCommentCount(card.id);
+  if (commentCount) {
+    commentCount.style.marginLeft = 'auto';
+    prio.appendChild(commentCount);
+  }
   var idText = document.createElement('span');
-  idText.style.marginLeft = 'auto';
+  if (!commentCount) idText.style.marginLeft = 'auto';
   idText.textContent = card.id;
   prio.appendChild(idText);
   el.appendChild(prio);
@@ -1111,6 +1158,7 @@ function openPanel(id, presetStatus) {
   setPanelBusy(false);
   document.getElementById('panel').hidden = false;
   render(board);   // 選択中のカードに印を付ける
+  renderComments('panel-comments', id, true);   // 新規作成（id が null）なら節は隠れる
   document.getElementById('f-title').focus();
 }
 
@@ -1388,6 +1436,17 @@ var impPanelSeq = 0;
 var impSprintChoices = [];   // 障害物の応答が運ぶ選択肢（PBI パネルの sprintChoices とは別）
 var impWriteIssued = 0;      // 障害物の書き込みを発行した通し番号（古い応答で表を戻さないため）
 var lastAppliedImp = 0;      // 表に反映した応答のうち、最も新しい書き込みの通し番号
+var impPending = {};         // 送信中の障害物の書き込みの発行番号 → true（応答・失敗のどちらでも外す）
+
+/**
+ * 読み込み（loadView）が「ここまでの書き込みは反映済み」とみなしてよい発行番号。
+ * 送信中の書き込みがあれば、その最小の番号の手前まで。読み込みを出した時点で送信中だった
+ * 書き込みは、読み込みの写しより後に処理されたかもしれないので、その応答を捨てさせない。
+ */
+function seqFloor(pending, issuedNow) {
+  var keys = Object.keys(pending).map(Number);
+  return keys.length ? Math.min.apply(null, keys) - 1 : issuedNow;
+}
 var IMP_FORM_FIELD_IDS = ['i-title', 'i-description', 'i-reported-by', 'i-sprint', 'i-resolution'];
 
 function findImpRow(id) {
@@ -1471,6 +1530,7 @@ function openImpPanel(id) {
   setImpPanelMessage('', 'info');
   setImpPanelBusy(false);
   document.getElementById('imp-panel').hidden = false;
+  renderComments('imp-panel-comments', id, true);   // 新規作成（id が null）なら節は隠れる
   document.getElementById('i-title').focus();
 }
 
@@ -1493,7 +1553,7 @@ function readImpForm() {
  * 障害物の書き込みの応答を受ける共通部分。表と要約は、今も障害物のビューを見ているときだけ
  * 描き直す（応答待ちの間に別タブへ移っていれば、そのタブの表と要約を上書きしない）。
  */
-function applyImpResponse(res, issued) {
+function applyImpResponse(res, issued, commentSeen) {
   if (res.sprintChoices) impSprintChoices = res.sprintChoices;
   if (!res.view) return;
   // 後から発行した書き込みの応答を既に反映しているなら、この応答は古い。表と要約を戻さない。
@@ -1501,10 +1561,25 @@ function applyImpResponse(res, issued) {
   if (issued <= lastAppliedImp) return;
   lastAppliedImp = issued;
   impView = res.view;
+  // 応答が運ぶコメントは、読み込み（loadView）と同じ「全体の写し」として扱う。ただし
+  // コメントの書き込みと競りうるときは使わない: 障害物の書き込みを出した時点で送信中の
+  // コメントがあった、または出してから新たにコメントを書いた（commentSeen が今の
+  // commentWriteIssued と違う）なら、この写しはそれを含まないかもしれない。
+  var takeComments = !!res.comments && commentSeen === commentWriteIssued;
+  if (takeComments) {
+    commentsByTarget = res.comments;
+    lastAppliedComment = commentWriteIssued;
+  }
   if (activeView === 'impediment') {
     renderTable(res.view);
     renderSummary(res.summary);
   }
+  if (takeComments) refreshOpenComments();
+}
+
+/** 障害物の書き込みを出す時点で控える値。送信中のコメントがあれば -1（応答のコメントを使わない）。 */
+function commentSeenNow() {
+  return Object.keys(commentPending).length === 0 ? commentWriteIssued : -1;
 }
 
 /**
@@ -1514,13 +1589,16 @@ function applyImpResponse(res, issued) {
 function sendImpWrite(method, args, label, after, onPartial) {
   var seq = impPanelSeq;
   var issued = ++impWriteIssued;
+  impPending[issued] = true;
+  var commentSeen = commentSeenNow();
   setImpPanelBusy(true);
   var runner = google.script.run
     .withSuccessHandler(function (res) {
+      delete impPending[issued];
       var mine = (seq === impPanelSeq);
       if (mine) setImpPanelBusy(false);
       if (res.ok) writeSeq++;
-      applyImpResponse(res, issued);
+      applyImpResponse(res, issued, commentSeen);
       if (res.ok) { after(res, mine); return; }
       if (res.reason === 'partial' && onPartial) { onPartial(res, mine); return; }
       // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
@@ -1532,6 +1610,7 @@ function sendImpWrite(method, args, label, after, onPartial) {
       else setMessage(res.message, 'error');
     })
     .withFailureHandler(function (err) {
+      delete impPending[issued];
       if (seq === impPanelSeq) {
         setImpPanelBusy(false);
         setImpPanelMessage(label + 'に失敗しました: ' + err.message, 'error');
@@ -1598,11 +1677,14 @@ function showResolveOutcome(id, resolution, expected, res) {
 /** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
 function retryResolveImp(id, resolution, expected) {
   var issued = ++impWriteIssued;
+  impPending[issued] = true;
+  var commentSeen = commentSeenNow();
   setMessage(id + ' の解決を完了しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
+      delete impPending[issued];
       if (res.ok) writeSeq++;
-      applyImpResponse(res, issued);
+      applyImpResponse(res, issued, commentSeen);
       if (res.ok || res.reason === 'partial') {
         if (res.ok) setMessage(id + ' を解決しました。', 'info');
         showResolveOutcome(id, resolution, expected, res);
@@ -1612,6 +1694,7 @@ function retryResolveImp(id, resolution, expected) {
       setMessage(res.message, 'error');
     })
     .withFailureHandler(function (err) {
+      delete impPending[issued];
       setMessage('解決に失敗しました: ' + err.message, 'error');
     })
     .apiResolveImpediment(id, resolution, expected);
@@ -1620,11 +1703,14 @@ function retryResolveImp(id, resolution, expected) {
 function unresolveImp(moved, resolvedRow) {
   if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   var issued = ++impWriteIssued;
+  impPending[issued] = true;
+  var commentSeen = commentSeenNow();
   setMessage(moved.id + ' を戻しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
+      delete impPending[issued];
       if (res.ok) writeSeq++;
-      applyImpResponse(res, issued);
+      applyImpResponse(res, issued, commentSeen);
       setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
       if (res.reason === 'partial') {
         // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
@@ -1633,9 +1719,351 @@ function unresolveImp(moved, resolvedRow) {
       }
     })
     .withFailureHandler(function (err) {
+      delete impPending[issued];
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
     .apiUnresolveImpediment(moved, resolvedRow);
+}
+
+// --- コメント ---------------------------------------------------------------
+// 全対象のコメント { <target_id>: [comment（古い順）] }。読み込み（board / list / impediment）と
+// コメント・障害物の書き込みの応答が運ぶ全体の写しで差し替える。運ばない応答では触らない。
+var commentsByTarget = {};
+var commentWriteIssued = 0;   // コメントの書き込みを発行した通し番号（古い応答で一覧を戻さないため）
+var lastAppliedComment = 0;   // 反映した応答のうち、最も新しい書き込みの通し番号
+var commentPending = {};      // 送信中のコメントの書き込みの発行番号 → true（応答・失敗のどちらでも外す）
+// 成功したコメントの書き込みの数。loadView() はこれが変わっていたら応答の comments だけを使わない
+// （コメントは盤面・表の中身を変えないので、writeSeq は進めず読み込みそのものは捨てさせない）。
+var commentWritesDone = 0;
+var commentSending = {};      // target_id → 送信中の本文（送信中は入力を塞ぎ、その本文を出し続ける）
+var commentDeleting = {};     // コメントの id → true（削除の送信中は削除ボタンを塞ぐ）
+var commentUi = {};           // 節の id → { targetId, input, send, message }（最後に描いたもの）
+
+function commentsOf(targetId) {
+  var list = targetId && commentsByTarget ? commentsByTarget[targetId] : null;
+  return Array.isArray(list) ? list : [];
+}
+
+/** カード・表に添える件数。コメントが無ければ null。 */
+function makeCommentCount(targetId) {
+  var n = commentsOf(targetId).length;
+  if (n === 0) return null;
+  var span = document.createElement('span');
+  span.className = 'comment-count';
+  span.textContent = 'コメント ' + n;
+  return span;
+}
+
+/** 書いた人の表示。メールの @ より前。空なら「不明」。 */
+function commentAuthorLabel(author) {
+  var name = String(author === null || author === undefined ? '' : author).split('@')[0].trim();
+  return name || '不明';
+}
+
+function setCommentMessage(ui, text, kind) {
+  ui.message.textContent = text || '';
+  ui.message.className = 'comment-message ' + (kind || 'info');
+}
+
+/** 今開いているパネルのコメント節 { hostId, targetId }。新規作成中・閉じていれば null。 */
+function openCommentHost() {
+  if (!document.getElementById('panel').hidden && panelState.id) {
+    return { hostId: 'panel-comments', targetId: panelState.id };
+  }
+  if (!document.getElementById('imp-panel').hidden && impPanelState.id) {
+    return { hostId: 'imp-panel-comments', targetId: impPanelState.id };
+  }
+  return null;
+}
+
+/** その節がその対象を今も開いているときだけ、描いた部品を返す。 */
+function commentUiFor(hostId, targetId) {
+  var open = openCommentHost();
+  if (!open || open.hostId !== hostId || open.targetId !== targetId) return null;
+  var ui = commentUi[hostId];
+  return (ui && ui.targetId === targetId) ? ui : null;
+}
+
+/**
+ * コメント節を描く。targetId が空（新規作成中）なら節ごと隠す。
+ * fresh が偽で同じ対象を描き直すときは、一覧だけを作り直し、入力欄・送信ボタン・節のメッセージは
+ * 同じ要素のまま残す（応答で一覧が差し替わるたびに、書きかけ・フォーカス・選択・変換中の文字が
+ * 失われないように）。
+ */
+function renderComments(hostId, targetId, fresh) {
+  var host = document.getElementById(hostId);
+  var prev = commentUi[hostId];
+  if (!fresh && targetId && prev && prev.targetId === targetId) {
+    fillCommentList(prev.list, hostId, targetId);
+    syncCommentForm(prev);
+    return;
+  }
+  host.innerHTML = '';
+  commentUi[hostId] = null;
+  host.hidden = !targetId;
+  if (!targetId) return;
+
+  var h = document.createElement('h3');
+  h.textContent = 'コメント';
+  host.appendChild(h);
+
+  var listBox = document.createElement('div');
+  listBox.className = 'comment-list-box';
+  host.appendChild(listBox);
+  fillCommentList(listBox, hostId, targetId);
+
+  var input = document.createElement('textarea');
+  input.className = 'comment-input';
+  input.setAttribute('aria-label', 'コメントを書く');
+  host.appendChild(input);
+
+  var actions = document.createElement('div');
+  actions.className = 'comment-actions';
+  var send = document.createElement('button');
+  send.type = 'button';
+  send.className = 'comment-send primary';
+  fillButton(send, 'plus', 'コメントする');
+  actions.appendChild(send);
+  host.appendChild(actions);
+
+  var message = document.createElement('div');
+  host.appendChild(message);
+
+  var ui = { targetId: targetId, list: listBox, input: input, send: send, message: message };
+  setCommentMessage(ui, '', 'info');
+  syncCommentForm(ui);
+  input.addEventListener('input', function () { syncCommentForm(ui); });
+  send.addEventListener('click', function () { sendComment(hostId, targetId); });
+  commentUi[hostId] = ui;
+}
+
+/** 送信中かどうかに合わせて、入力欄と送信ボタンを塞ぐ・開ける。送信中は送った本文を出し続ける。 */
+function syncCommentForm(ui) {
+  var sending = Object.prototype.hasOwnProperty.call(commentSending, ui.targetId);
+  // 同じ値を入れ直すとカーソル位置が動くブラウザがあるため、違うときだけ入れる。
+  if (sending && ui.input.value !== commentSending[ui.targetId]) ui.input.value = commentSending[ui.targetId];
+  ui.input.disabled = sending;
+  ui.send.disabled = sending || ui.input.value.trim() === '';
+}
+
+/** 一覧（box の中身）を、今の commentsByTarget から作り直す。 */
+function fillCommentList(box, hostId, targetId) {
+  box.innerHTML = '';
+  var list = commentsOf(targetId);
+  var ul = document.createElement('ul');
+  ul.className = 'comment-list';
+  list.forEach(function (c) {
+    var li = document.createElement('li');
+    li.dataset.id = c.id;
+    var meta = document.createElement('div');
+    meta.className = 'comment-meta';
+    var who = document.createElement('span');
+    who.className = 'comment-author';
+    who.textContent = commentAuthorLabel(c.author);
+    meta.appendChild(who);
+    var when = document.createElement('span');
+    when.className = 'comment-date';
+    when.textContent = c.created_at || '';
+    meta.appendChild(when);
+    if (c.mine) {
+      var spacer = document.createElement('span');
+      spacer.className = 'spacer';
+      meta.appendChild(spacer);
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'comment-delete danger';
+      fillButton(del, 'trash', '削除');
+      del.disabled = !!commentDeleting[c.id];
+      del.addEventListener('click', function () { deleteComment(hostId, targetId, c.id); });
+      meta.appendChild(del);
+    }
+    li.appendChild(meta);
+    var body = document.createElement('div');
+    body.className = 'comment-body';
+    body.textContent = c.body || '';   // 改行は .comment-body の white-space: pre-wrap で保つ
+    li.appendChild(body);
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+  if (list.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'comment-empty';
+    empty.textContent = 'まだコメントはありません。';
+    box.appendChild(empty);
+  }
+}
+
+/** 開いているパネルのコメント節を、今の commentsByTarget から描き直す。 */
+function refreshOpenComments() {
+  var open = openCommentHost();
+  if (open) renderComments(open.hostId, open.targetId, false);
+}
+
+/**
+ * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
+ * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
+ */
+function applyComments(comments, issued) {
+  if (!comments || issued <= lastAppliedComment) return false;
+  lastAppliedComment = issued;
+  commentsByTarget = comments;
+  redrawComments();
+  return true;
+}
+
+/** 件数（盤面・障害物の表）と開いている節を、今の commentsByTarget から描き直す。 */
+function redrawComments() {
+  if (activeView === 'board') render(board);
+  else if (activeView === 'impediment' && impView && !tableLoading) renderTable(impView);
+  refreshOpenComments();
+}
+
+/**
+ * 写しとしては古い（後から発行した書き込みの応答を既に反映した）成功の応答でも、その書き込み
+ * 自身の操作だけは一覧へ入れる。サーバは同時に出した書き込みを発行順に処理するとは限らず、
+ * 先に反映した写しがこの書き込みを含まないことがあるため。何度当てても同じ結果になるようにする。
+ * add: comment を足す（同じ id が無ければ。作成日時の古い順、同じ日時なら既存の後ろ）。
+ * remove: id の行を外す（あれば）。
+ */
+function applyOwnComment(add, removeId) {
+  var next = {};
+  Object.keys(commentsByTarget || {}).forEach(function (k) { next[k] = commentsByTarget[k]; });
+  var changed = false;
+  if (removeId) {
+    Object.keys(next).forEach(function (k) {
+      var list = Array.isArray(next[k]) ? next[k] : [];
+      var kept = list.filter(function (c) { return c.id !== removeId; });
+      if (kept.length !== list.length) { next[k] = kept; changed = true; }
+    });
+  }
+  if (add && add.id && add.target_id) {
+    var cur = Array.isArray(next[add.target_id]) ? next[add.target_id] : [];
+    var exists = cur.some(function (c) { return c.id === add.id; });
+    if (!exists) {
+      var row = Object.assign({}, add, { mine: true });   // 自分の追加・取り消しだけがここへ来る
+      var at = cur.length;
+      for (var i = 0; i < cur.length; i++) {
+        if (String(cur[i].created_at || '') > String(row.created_at || '')) { at = i; break; }
+      }
+      next[add.target_id] = cur.slice(0, at).concat([row], cur.slice(at));
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  commentsByTarget = next;
+  redrawComments();
+}
+
+function sendComment(hostId, targetId) {
+  var ui = commentUiFor(hostId, targetId);
+  if (!ui) return;
+  var body = ui.input.value;
+  if (body.trim() === '' || Object.prototype.hasOwnProperty.call(commentSending, targetId)) return;
+  commentSending[targetId] = body;
+  var issued = ++commentWriteIssued;
+  commentPending[issued] = true;
+  setCommentMessage(ui, 'コメントを送っています…', 'info');
+  renderComments(hostId, targetId, false);   // 入力と送信ボタンを塞ぐ
+
+  var settle = function () {
+    delete commentSending[targetId];
+    delete commentPending[issued];
+  };
+  google.script.run
+    .withSuccessHandler(function (res) {
+      settle();
+      if (res.ok) {
+        commentWritesDone++;   // loadView() が発行後のコメントの書き込みを見分けるための会計
+        var cur = commentUiFor(hostId, targetId);
+        if (cur) cur.input.value = '';   // 描き直しで引き継がれないよう、先に空にする
+      }
+      if (!applyComments(res.comments, issued)) {
+        if (res.ok) applyOwnComment(res.comment, null);
+        refreshOpenComments();
+      }
+      var now = commentUiFor(hostId, targetId);
+      if (res.ok) {
+        if (now) setCommentMessage(now, '', 'info');
+        else setMessage(targetId + ' にコメントしました。', 'info');
+      } else if (now) {
+        setCommentMessage(now, res.message, 'error');
+      } else {
+        setMessage(targetId + ': ' + res.message, 'error');
+      }
+    })
+    .withFailureHandler(function (err) {
+      settle();
+      refreshOpenComments();
+      var now = commentUiFor(hostId, targetId);
+      var text = 'コメントを送れませんでした: ' + err.message;
+      if (now) setCommentMessage(now, text, 'error');
+      else setMessage(targetId + ': ' + text, 'error');
+    })
+    .apiAddComment(targetId, body);
+}
+
+/** 自分のコメントを消す。確認は挟まず、取り消せる通知を出す。 */
+function deleteComment(hostId, targetId, commentId) {
+  if (commentDeleting[commentId]) return;
+  commentDeleting[commentId] = true;
+  var issued = ++commentWriteIssued;
+  commentPending[issued] = true;
+  refreshOpenComments();   // 削除ボタンを塞ぐ
+  var settle = function () {
+    delete commentDeleting[commentId];
+    delete commentPending[issued];
+  };
+  var fail = function (text) {
+    var now = commentUiFor(hostId, targetId);
+    if (now) setCommentMessage(now, text, 'error');
+    else setMessage(targetId + ': ' + text, 'error');
+  };
+  google.script.run
+    .withSuccessHandler(function (res) {
+      settle();
+      if (res.ok) commentWritesDone++;
+      if (!applyComments(res.comments, issued)) {
+        if (res.ok) applyOwnComment(null, res.removed && res.removed.id);
+        refreshOpenComments();
+      }
+      if (res.ok) showUndoToast('コメントを削除しました。', function () { restoreComment(res.removed); });
+      else fail(res.message);
+    })
+    .withFailureHandler(function (err) {
+      settle();
+      refreshOpenComments();
+      fail('コメントを削除できませんでした: ' + err.message);
+    })
+    .apiDeleteComment(commentId);
+}
+
+/** 削除を取り消す。消した行をそのまま戻す（id・作成日時を保つ）。 */
+function restoreComment(row) {
+  if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  var issued = ++commentWriteIssued;
+  commentPending[issued] = true;
+  setMessage('コメントを戻しています…', 'info');
+  // 失敗は、その対象のコメント節が開いていればそこへ、開いていなければ全体のメッセージへ出す。
+  var failRestore = function (text) {
+    var host = openCommentHost();
+    var ui = host && host.targetId === row.target_id ? commentUiFor(host.hostId, host.targetId) : null;
+    if (ui) setCommentMessage(ui, text, 'error');
+    else setMessage(text, 'error');
+  };
+  google.script.run
+    .withSuccessHandler(function (res) {
+      delete commentPending[issued];
+      if (res.ok) commentWritesDone++;
+      // 戻す応答は戻した行を運ばない。送った行（row）を使う。
+      if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
+      if (res.ok) setMessage('コメントを戻しました。', 'info');
+      else failRestore(res.message);
+    })
+    .withFailureHandler(function (err) {
+      delete commentPending[issued];
+      failRestore('取り消せませんでした: ' + err.message);
+    })
+    .apiRestoreComment(row);
 }
 
 function renderTabs() {
@@ -1794,7 +2222,13 @@ function loadView() {
   // inflight（応答時点で送信中の要求が無いか）だけでは、発行後に確定して既に終わった
   // 書き込みを見分けられない。盤面だけでなく表のビューでも同じ扱いにする。
   var seenSeq = writeSeq;
+  var seenCommentWrites = commentWritesDone;
   var requestedView = activeView;
+  // 応答で「ここまでは反映済み」とみなす発行番号は、読み込みを出した時点で控える。
+  // 出した時点で送信中だった書き込みと、出したあとの書き込みの応答は、引き続き使えるようにする
+  // （応答時の発行番号まで進めると、送信中に書いたコメントが応答ごと捨てられて消える）。
+  var commentFloor = seqFloor(commentPending, commentWriteIssued);
+  var impFloor = seqFloor(impPending, impWriteIssued);
   viewSeq++;
   var seq = viewSeq;   // この読み込みが今も最新かを応答時に見分ける通し番号（panelSeq と同型）
   setMessage('読み込んでいます…', 'info');
@@ -1824,10 +2258,20 @@ function loadView() {
         // hidden の切替と要約のクリアは showView() が発行前（クリック時点）に済ませている。
         // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
         // 操作可能な盤面や表が残ってしまう）。
+        // コメントは board / list / impediment の応答だけが運ぶ。件数を描く前に差し替える。
+        // 読み込みは、出した時点で確定していたコメントの書き込みより新しい状態。
+        // 応答までにコメントの書き込みが確定していたら、この写しはそれを含まないかもしれない。
+        // ビューは描くが、コメントは今の一覧（書き込みの応答で入れたもの）を使い続ける。
+        var takeComments = !!res.comments && commentWritesDone === seenCommentWrites;
+        if (takeComments) {
+          commentsByTarget = res.comments;
+          lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
+        }
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
         renderSummary(res.summary);
-        // 障害物の読み直しは、発行済みの書き込みより新しい状態。遅れて届く古い書き込みの応答で表を戻さない。
-        if (requestedView === 'impediment') lastAppliedImp = impWriteIssued;
+        if (takeComments) refreshOpenComments();
+        // 障害物の読み直しは、出した時点で確定していた書き込みより新しい状態。それより古い応答で表を戻さない。
+        if (requestedView === 'impediment') lastAppliedImp = Math.max(lastAppliedImp, impFloor);
         setMessage('', 'info');
       } else {
         // 失敗が確定した（＝捨てるべき応答ではない）。placeholder が出ていれば畳む。
@@ -1893,8 +2337,11 @@ function gridTable(headers, rows, marks) {
   return table;
 }
 
-/** columns と rows から表を作る。onRow があれば各行を押せる行にする（障害物の未解決）。 */
-function objectTable(columns, rows, onRow) {
+/**
+ * columns と rows から表を作る。onRow があれば各行を押せる行にする（障害物の未解決）。
+ * withCommentCount が真なら、タイトルのセルの末尾にコメントの件数を添える（障害物の表）。
+ */
+function objectTable(columns, rows, onRow, withCommentCount) {
   if (!rows || rows.length === 0) return emptyTableRow('ありません。');
   var table = document.createElement('table');
   table.appendChild(tableHead(columns.map(function (c) { return c.label; })));
@@ -1907,6 +2354,10 @@ function objectTable(columns, rows, onRow) {
       td.textContent = (v === null || v === undefined) ? '' : String(v);
       // ID が重なっている行は、どの行を指すか決められないので押せない行として出す。
       if (row.duplicate === 'true' && c.field === 'title') td.textContent += '（ID が重複しています。CSV を直してください）';
+      if (withCommentCount && c.field === 'title') {
+        var count = makeCommentCount(row.id);
+        if (count) td.appendChild(count);
+      }
       tr.appendChild(td);
     });
     if (onRow && row.duplicate !== 'true') {
@@ -1925,12 +2376,12 @@ function objectTable(columns, rows, onRow) {
 }
 
 /** 見出し付きの表。障害物の未解決/解決済のように、同じ列定義の表を複数並べるときに使う。 */
-function tableSection(title, columns, rows, onRow) {
+function tableSection(title, columns, rows, onRow, withCommentCount) {
   var section = document.createElement('div');
   var h = document.createElement('h3');
   h.textContent = title;
   section.appendChild(h);
-  section.appendChild(objectTable(columns, rows, onRow));
+  section.appendChild(objectTable(columns, rows, onRow, withCommentCount));
   return section;
 }
 
@@ -2013,8 +2464,8 @@ function renderTable(view) {
     actions.appendChild(add);
     host.appendChild(actions);
     if (view.pending && view.pending.length > 0) host.appendChild(pendingSection(view.pending));
-    host.appendChild(tableSection('未解決', view.columns, view.open, function (row) { openImpPanel(row.id); }));
-    host.appendChild(tableSection('解決済', view.columns, view.resolved));
+    host.appendChild(tableSection('未解決', view.columns, view.open, function (row) { openImpPanel(row.id); }, true));
+    host.appendChild(tableSection('解決済', view.columns, view.resolved, null, true));
     return;
   }
   if (view.table) {

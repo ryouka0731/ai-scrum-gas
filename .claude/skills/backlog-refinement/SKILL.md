@@ -20,6 +20,7 @@ description: バックログリファインメントを実施する。PBIの詳�
 
 ## 事前確認
 1. `scrum/product_backlog.csv` を読み、現在のプロダクトバックログを確認する
+   - `scrum/comments.csv` から該当 PBI（`target_id`）のコメントを読む
 2. `scrum/product_goal.md` を読み、プロダクトゴールを確認する
 3. `scrum/definition_of_done.md` を読み、完成の定義を確認する
 

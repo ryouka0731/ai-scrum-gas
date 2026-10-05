@@ -116,8 +116,15 @@ function createTestContext(files, opts) {
         };
       },
     },
-    Session: { getScriptTimeZone: function () { return 'UTC'; } },
+    // opts.user: getActiveUser().getEmail() が返す値（既定 'me@example.com'）。
+    Session: {
+      getScriptTimeZone: function () { return 'UTC'; },
+      getActiveUser: function () { return { getEmail: function () { return opts.user === undefined ? 'me@example.com' : opts.user; } }; },
+    },
     Utilities: {
+      // 呼ぶたびに決まった並びの UUID を返す。
+      // opts.uuids: 指定すると順に返し、尽きたら最後の値を返し続ける（ID 衝突の再現用）。
+      getUuid: (function () { let n = 0; return function () { if (opts.uuids) return opts.uuids[Math.min(n++, opts.uuids.length - 1)]; n++; return ('0000000' + n.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; }; })(),
       // テスト用の簡易実装。yyyy-MM-dd HH:mm:ss を返せれば十分。
       formatDate: function (date) {
         function pad(n) { return n < 10 ? '0' + n : String(n); }
@@ -765,4 +772,109 @@ test('途中で止まった解決: 「未解決に戻す」で未解決だけに
   assert.equal(f['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE + IMP2);
   assert.equal(f['impediment_log_resolved.csv'], IMP_HEADER + IMP_TEMPLATE);
   assert.deepEqual(plain(res.view.pending), []);
+});
+
+const CMT_HEADER = 'id,target_id,author,created_at,body\n';
+function cmtFiles(body) {
+  return { 'product_backlog.csv': headerOnlyCsv(), 'comments.csv': CMT_HEADER + (body || '') };
+}
+
+test('apiGetView(board) は comments を載せ、mine を付ける', () => {
+  const { ctx } = createTestContext(cmtFiles(
+    'CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\nCMT-0000000b,PBI-001,you@example.com,2026-10-06 11:00:00,つぎ\n'));
+  const res = ctx.apiGetView('board');
+  assert.equal(res.ok, true);
+  assert.deepEqual(plain(res.comments)['PBI-001'].map((c) => [c.id, c.mine]), [['CMT-0000000a', true], ['CMT-0000000b', false]]);
+});
+
+test('comments.csv が無くても盤面は読め、comments は空', () => {
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const res = ctx.apiGetView('board');
+  assert.equal(res.ok, true);
+  assert.deepEqual(plain(res.comments), {});
+});
+
+test('追加: UUID から ID を作り、ログイン中のメールと時刻で末尾に足す', () => {
+  const { ctx, files } = createTestContext(cmtFiles());
+  const res = ctx.apiAddComment('PBI-001', '一行目\n二行目');
+  assert.equal(res.ok, true, res.message);
+  assert.equal(res.comment.id, 'CMT-00000001');
+  assert.equal(res.comment.author, 'me@example.com');
+  assert.match(files['comments.csv'], /^id,target_id,author,created_at,body\nCMT-00000001,PBI-001,me@example\.com,\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},"一行目\n二行目"\n$/);
+  assert.equal(plain(res.comments)['PBI-001'][0].mine, true);
+});
+
+test('追加: comments.csv が無ければ案内付きで失敗し、何も作らない', () => {
+  const { ctx, files } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const res = ctx.apiAddComment('PBI-001', 'x');
+  assert.equal(res.ok, false);
+  assert.ok(res.message.indexOf('配布し直してください') !== -1, res.message);
+  assert.equal(Object.prototype.hasOwnProperty.call(files, 'comments.csv'), false);
+});
+
+test('追加: 検証に落ちたら書かない。ヘッダーが違えば書かない', () => {
+  const f = cmtFiles();
+  const { ctx, files } = createTestContext(f);
+  assert.equal(ctx.apiAddComment('PBI-001', ' ').reason, 'invalid');
+  assert.equal(files['comments.csv'], CMT_HEADER);
+  f['comments.csv'] = 'id,body\n';
+  assert.equal(createTestContext(f).ctx.apiAddComment('PBI-001', 'x').ok, false);
+  assert.equal(f['comments.csv'], 'id,body\n');
+});
+
+test('削除: 自分のものだけ消せる。他人のものは forbidden でファイルを変えない', () => {
+  const f = cmtFiles('CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\nCMT-0000000b,PBI-001,you@example.com,2026-10-06 11:00:00,つぎ\n');
+  const { ctx, files } = createTestContext(f);
+  const ng = ctx.apiDeleteComment('CMT-0000000b');
+  assert.equal(ng.reason, 'forbidden');
+  assert.ok(files['comments.csv'].indexOf('CMT-0000000b') !== -1);
+  const ok = ctx.apiDeleteComment('CMT-0000000a');
+  assert.equal(ok.ok, true, ok.message);
+  assert.equal(files['comments.csv'].indexOf('CMT-0000000a'), -1);
+  const back = ctx.apiRestoreComment(plain(ok.removed));
+  assert.equal(back.ok, true, back.message);
+  assert.ok(files['comments.csv'].indexOf('CMT-0000000a') !== -1);
+});
+
+test('ログインが取れないと、誰のコメントも消せない', () => {
+  const { ctx } = createTestContext(cmtFiles('CMT-0000000a,PBI-001,,2026-10-06 10:00:00,はじめ\n'), { user: '' });
+  assert.equal(ctx.apiDeleteComment('CMT-0000000a').reason, 'forbidden');
+});
+
+test('戻す: 他人の author の行は forbidden で書かない', () => {
+  const { ctx, files } = createTestContext(cmtFiles());
+  const res = ctx.apiRestoreComment({ id: 'CMT-0000000a', target_id: 'PBI-001', author: 'you@example.com', created_at: '2026-10-06 10:00:00', body: 'x' });
+  assert.equal(res.reason, 'forbidden');
+  assert.equal(files['comments.csv'], CMT_HEADER);
+});
+
+test('障害物の応答にも comments が載る', () => {
+  const { ctx } = createTestContext(Object.assign(cmtFiles('CMT-0000000a,IMP-002,me@example.com,2026-10-06 10:00:00,はじめ\n'),
+    { 'impediment_log.csv': IMP_HEADER + IMP2, 'impediment_log_resolved.csv': IMP_HEADER }));
+  const res = ctx.apiGetView('impediment');
+  assert.equal(plain(res.comments)['IMP-002'][0].mine, true);
+});
+
+test('追加: ログインが取れないと forbidden で何も書かない', () => {
+  const { ctx, files } = createTestContext(cmtFiles(), { user: '' });
+  const res = ctx.apiAddComment('PBI-001', 'x');
+  assert.equal(res.reason, 'forbidden');
+  assert.equal(files['comments.csv'], CMT_HEADER);
+});
+
+test('追加: ID が衝突し続けたら error で書かず、1回だけなら引き直す', () => {
+  const row = 'CMT-00000001,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\n';
+  const same = '00000001-0000-4000-8000-000000000000';
+  const a = createTestContext(cmtFiles(row), { uuids: [same] });
+  const ng = a.ctx.apiAddComment('PBI-001', 'x');
+  assert.equal(ng.reason, 'error');
+  assert.ok(ng.message.indexOf('ID が重複しました') !== -1);
+  assert.equal(a.files['comments.csv'], CMT_HEADER + row);
+  const b = createTestContext(cmtFiles(row), { uuids: [same, '00000002-0000-4000-8000-000000000000'] });
+  assert.equal(b.ctx.apiAddComment('PBI-001', 'x').comment.id, 'CMT-00000002');
+});
+
+test('apiGetView(list) も comments を載せる', () => {
+  const { ctx } = createTestContext(cmtFiles('CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\n'));
+  assert.equal(plain(ctx.apiGetView('list').comments)['PBI-001'].length, 1);
 });
