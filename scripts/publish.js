@@ -78,6 +78,14 @@ function copyRecursive(src, dest, relPath) {
     return { copiedCount: 0, skippedLinkCount: 1 };
   }
   if (stat.isDirectory()) {
+    // 配布先のフォルダ自体がリンクだと、その下のファイル単位の検査（lstat は最終要素しか見ない）を
+    // すり抜けて、リンク先（配布フォルダの外）に書き込んでしまう。フォルダごと触らない。
+    let destDirStat = null;
+    try { destDirStat = fs.lstatSync(dest); } catch (e) { destDirStat = null; }
+    if (destDirStat && !destDirStat.isDirectory()) {
+      console.warn('配布先が通常のフォルダではないため、触らずに残しました: ' + dest);
+      return { copiedCount: 0, skippedLinkCount: 1 };
+    }
     fs.mkdirSync(dest, { recursive: true });
     let copiedCount = 0;
     let skippedLinkCount = 0;
@@ -159,7 +167,7 @@ function main(destArg) {
   fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n', 'utf8');
 
   console.log('==> 完了しました（' + copiedCount + ' ファイルをコピー'
-    + (skippedLinkCount > 0 ? '、' + skippedLinkCount + ' 件のシンボリックリンクをスキップ' : '') + '）');
+    + (skippedLinkCount > 0 ? '、' + skippedLinkCount + ' 件のリンク・通常でないファイルをスキップ' : '') + '）');
   console.log('配布記録: ' + recordPath + '（' + record.publishedAt + ' / ' + record.commit + ' / ' + record.branch + '）');
 }
 

@@ -200,6 +200,25 @@ test('Web アプリが書き戻すファイルの配布先がリンク（壊れ�
     assert.equal(fs.readFileSync(victim, 'utf8'), '', 'リンク先（配布フォルダの外）に書き込んだ');
     assert.equal(fs.existsSync(path.join(outside.dir, 'missing.csv')), false, '壊れたリンクを通して外にファイルを作った');
     assert.equal(fs.lstatSync(path.join(destRoot, 'comments.csv')).isSymbolicLink(), true);
+    assert.equal(fs.lstatSync(path.join(destRoot, 'product_backlog.csv')).isSymbolicLink(), true, '壊れたリンクを消した・置き換えた');
+  } finally {
+    src.cleanup();
+    dest.cleanup();
+    outside.cleanup();
+  }
+});
+
+test('配布先のフォルダ自体がリンクなら、その下に書き込まない', () => {
+  const src = makeTmpDir();
+  const dest = makeTmpDir();
+  const outside = makeTmpDir();
+  try {
+    const srcRoot = path.join(src.dir, 'scrum');
+    fs.mkdirSync(srcRoot, { recursive: true });
+    fs.writeFileSync(path.join(srcRoot, 'velocity.csv'), '雛形\n', 'utf8');
+    fs.symlinkSync(outside.dir, path.join(dest.dir, 'scrum'));
+    copyRecursive(srcRoot, path.join(dest.dir, 'scrum'), 'scrum');
+    assert.equal(fs.existsSync(path.join(outside.dir, 'velocity.csv')), false, 'リンク先（配布フォルダの外）に書き込んだ');
   } finally {
     src.cleanup();
     dest.cleanup();
