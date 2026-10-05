@@ -1731,6 +1731,9 @@ var commentsByTarget = {};
 var commentWriteIssued = 0;   // コメントの書き込みを発行した通し番号（古い応答で一覧を戻さないため）
 var lastAppliedComment = 0;   // 反映した応答のうち、最も新しい書き込みの通し番号
 var commentPending = {};      // 送信中のコメントの書き込みの発行番号 → true（応答・失敗のどちらでも外す）
+// 成功したコメントの書き込みの数。loadView() はこれが変わっていたら応答の comments だけを使わない
+// （コメントは盤面・表の中身を変えないので、writeSeq は進めず読み込みそのものは捨てさせない）。
+var commentWritesDone = 0;
 var commentSending = {};      // target_id → 送信中の本文（送信中は入力を塞ぎ、その本文を出し続ける）
 var commentDeleting = {};     // コメントの id → true（削除の送信中は削除ボタンを塞ぐ）
 var commentUi = {};           // 節の id → { targetId, input, send, message }（最後に描いたもの）
@@ -1951,7 +1954,7 @@ function sendComment(hostId, targetId) {
     .withSuccessHandler(function (res) {
       settle();
       if (res.ok) {
-        writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
+        commentWritesDone++;   // loadView() が発行後のコメントの書き込みを見分けるための会計
         var cur = commentUiFor(hostId, targetId);
         if (cur) cur.input.value = '';   // 描き直しで引き継がれないよう、先に空にする
       }
@@ -1999,7 +2002,7 @@ function deleteComment(hostId, targetId, commentId) {
   google.script.run
     .withSuccessHandler(function (res) {
       settle();
-      if (res.ok) writeSeq++;
+      if (res.ok) commentWritesDone++;
       if (!applyComments(res.comments, issued)) {
         if (res.ok) applyOwnComment(null, res.removed && res.removed.id);
         refreshOpenComments();
@@ -2024,7 +2027,7 @@ function restoreComment(row) {
   google.script.run
     .withSuccessHandler(function (res) {
       delete commentPending[issued];
-      if (res.ok) writeSeq++;
+      if (res.ok) commentWritesDone++;
       // 戻す応答は戻した行を運ばない。送った行（row）を使う。
       if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
       setMessage(res.ok ? 'コメントを戻しました。' : res.message, res.ok ? 'info' : 'error');
@@ -2192,6 +2195,7 @@ function loadView() {
   // inflight（応答時点で送信中の要求が無いか）だけでは、発行後に確定して既に終わった
   // 書き込みを見分けられない。盤面だけでなく表のビューでも同じ扱いにする。
   var seenSeq = writeSeq;
+  var seenCommentWrites = commentWritesDone;
   var requestedView = activeView;
   // 応答で「ここまでは反映済み」とみなす発行番号は、読み込みを出した時点で控える。
   // 出した時点で送信中だった書き込みと、出したあとの書き込みの応答は、引き続き使えるようにする
@@ -2229,13 +2233,16 @@ function loadView() {
         // 操作可能な盤面や表が残ってしまう）。
         // コメントは board / list / impediment の応答だけが運ぶ。件数を描く前に差し替える。
         // 読み込みは、出した時点で確定していたコメントの書き込みより新しい状態。
-        if (res.comments) {
+        // 応答までにコメントの書き込みが確定していたら、この写しはそれを含まないかもしれない。
+        // ビューは描くが、コメントは今の一覧（書き込みの応答で入れたもの）を使い続ける。
+        var takeComments = !!res.comments && commentWritesDone === seenCommentWrites;
+        if (takeComments) {
           commentsByTarget = res.comments;
           lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
         }
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
         renderSummary(res.summary);
-        if (res.comments) refreshOpenComments();
+        if (takeComments) refreshOpenComments();
         // 障害物の読み直しは、出した時点で確定していた書き込みより新しい状態。それより古い応答で表を戻さない。
         if (requestedView === 'impediment') lastAppliedImp = Math.max(lastAppliedImp, impFloor);
         setMessage('', 'info');

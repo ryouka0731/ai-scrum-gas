@@ -372,3 +372,27 @@ test('取り消し（戻す）の応答が古くても、戻したコメント�
   ]);
 });
 
+// ---------------------------------------------------------------------------
+// 最終レビュー I3: コメントの書き込みは、読み込み中の表を「他の変更が入った」で捨てさせない
+// ---------------------------------------------------------------------------
+
+test('表の読み込み中にコメントの追加が成功しても、表は描かれ、一覧は追加の内容のまま', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.setCommentInput('imp-panel-comments', '読み込み中');
+  h.clickCommentSend('imp-panel-comments');
+  h.click('reload');
+  const load = callOf(h, 'apiGetView');
+  const added = cmt('CMT-0000000e', 'IMP-002', 'me@example.com', '2026-10-06 11:00:00', '読み込み中', true);
+  callOf(h, 'apiAddComment').handlers.success({ ok: true, comment: added,
+    comments: Object.assign({}, IMP_COMMENTS, { 'IMP-002': IMP_COMMENTS['IMP-002'].concat([added]) }) });
+  // 読み込みの写しは追加より前に読まれた。
+  load.handlers.success({ ok: true, name: 'impediment',
+    view: { columns: IMP_VIEW_COLUMNS, open: [IMP], resolved: [IMP_DONE], pending: [] },
+    summary: { open: 1, resolved: 1, pending: 0 }, sprintChoices: [], comments: IMP_COMMENTS });
+  assert.notEqual(h.textOf('message'), '読み込み中に他の変更が入りました。もう一度お試しください。');
+  assert.equal(h.hiddenOf('table-view'), false);
+  assert.deepEqual(h.commentCountsIn('table-view'), ['コメント 2', 'コメント 2'], '表が描かれていない、または古い件数');
+  assert.deepEqual(ids(h, 'imp-panel-comments'), ['CMT-0000000a', 'CMT-0000000e'], '追加が読み込みの写しで消えた');
+});
+
