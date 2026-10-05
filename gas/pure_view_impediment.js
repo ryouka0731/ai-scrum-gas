@@ -49,13 +49,24 @@ function impedimentRows_(rows) {
  */
 function openImpedimentsShown(openRows, resolvedRows) {
   const done = (resolvedRows || []).filter(function (r) { return !isImpedimentPlaceholder(r); });
+  const count = impOpenIdCount_(openRows);
   return (openRows || []).filter(function (r) {
     if (isImpedimentPlaceholder(r)) return false;
+    // 同じ ID が未解決に複数あれば、どれが対か決められない。隠さず、重複として全部出す。
+    if (count[impIdKey_(r)] > 1) return true;
     // 同じ ID でも中身が違えば別の行。隠すと画面から触れなくなるため未解決に出す。
     return !done.some(function (d) {
       return String(d.id || '').trim() === String(r.id || '').trim() && impedimentSameIdentity(d, r);
     });
   });
+}
+
+function impOpenIdCount_(openRows) {
+  const count = Object.create(null);
+  (openRows || []).forEach(function (r) {
+    if (!isImpedimentPlaceholder(r)) count[impIdKey_(r)] = (count[impIdKey_(r)] || 0) + 1;
+  });
+  return count;
 }
 
 function impedimentPendingEntries(openRows, resolvedRows) { return impPendingList_(openRows, resolvedRows); }
@@ -68,12 +79,13 @@ function impIdKey_(r) { return String((r || {}).id || '').trim(); }
  */
 function impPendingList_(openRows, resolvedRows) {
   const resolved = (resolvedRows || []).filter(function (r) { return !isImpedimentPlaceholder(r); });
+  const count = impOpenIdCount_(openRows);
   const seen = Object.create(null);
   const out = [];
   (openRows || []).forEach(function (o) {
     if (isImpedimentPlaceholder(o)) return;
     const key = impIdKey_(o);
-    if (seen[key]) return;
+    if (seen[key] || count[key] > 1) return;   // 未解決に複数ある ID は重複として扱い、pending にしない
     for (let i = 0; i < resolved.length; i++) {
       if (impIdKey_(resolved[i]) === key && impedimentSameIdentity(resolved[i], o)) {
         seen[key] = true;

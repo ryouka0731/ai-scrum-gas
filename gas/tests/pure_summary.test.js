@@ -165,3 +165,8 @@ test('障害物の要約: 途中で止まった操作（同じ ID・同じ中身
   assert.equal(s.open, 1);
   assert.equal(s.resolved, 2);
 });
+
+test('障害物の要約: 未解決に同じ ID が複数あれば、隠さず未解決に数え、pending にしない', () => {
+  const row = { id: 'IMP-002', title: 'T', reported_at: '2026-10-01' };
+  assert.deepEqual(summarizeImpediment([row, row], [row]), { open: 2, resolved: 1, pending: 0 });
+});
