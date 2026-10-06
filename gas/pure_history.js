@@ -14,18 +14,39 @@ const LINE_DIFF_MAX = 500;
 // 履歴の before / after に持つ値1つの上限（文字数）。PBI の説明・受入基準には長さの上限が無く、
 // 編集のたびに前後の全文を残すと change_log.csv と履歴の応答が際限なく大きくなる。
 const HISTORY_VALUE_MAX = 4000;
-const HISTORY_CAPPED_RE = /…（以下省略・全 \d+ 字）$/;
+const HISTORY_CAPPED_RE = /…（以下省略・全 (\d+) 字）$/;
 
 function histText_(v) { return v === undefined || v === null ? '' : String(v); }
 
+/** 文字（コードポイント）の数。サロゲートペアは1字。 */
+function histCodePoints_(t) {
+  let n = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < t.length) {
+      const d = t.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+    }
+    n++;
+  }
+  return n;
+}
+
+/** capHistoryValue が作った形（先頭がちょうど上限の字数＋上限より多い全体の字数の接尾辞）か。 */
+function histAlreadyCapped_(t) {
+  const m = HISTORY_CAPPED_RE.exec(t);
+  if (!m || m.index > HISTORY_VALUE_MAX * 2 || Number(m[1]) <= HISTORY_VALUE_MAX) return false;
+  return histCodePoints_(t.slice(0, m.index)) === HISTORY_VALUE_MAX;
+}
+
 /**
  * 履歴に持つ値を HISTORY_VALUE_MAX 字（コードポイント）までに切り詰め、「…（以下省略・全 N 字）」を付ける。
- * 上限以下はそのまま。切り詰め済みの値（読み出しで再び通したとき）は変えない。サロゲートペアは割らない。
+ * 上限以下はそのまま。切り詰め済みの値（先頭がちょうど上限の字数＋接尾辞。読み出しで再び通したとき）は変えない。サロゲートペアは割らない。
  */
 function capHistoryValue(v) {
   const t = histText_(v);
   if (t.length <= HISTORY_VALUE_MAX) return t;
-  if (HISTORY_CAPPED_RE.test(t) && t.length <= HISTORY_VALUE_MAX * 2 + 40) return t;
+  if (histAlreadyCapped_(t)) return t;
   let count = 0;
   let cut = -1;
   for (let i = 0; i < t.length; i++) {

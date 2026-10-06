@@ -608,6 +608,20 @@ test('BUG-P3. 切り詰め（pure）: 4000 字ちょうどはそのまま。サ�
   assert.equal(rows[0].after, 'z');
 });
 
+test('BUG-P3b. 切り詰め済みとみなすのは「先頭がちょうど 4000 字＋接尾辞」だけ。接尾辞を付けた長い値は切り詰める（PR #11 cubic）', () => {
+  const cps = (t) => Array.from(t).length;
+  const forged = 'a'.repeat(8000) + capSuffix(9999);
+  const r = HIST.capHistoryValue(forged);
+  assert.equal(r, 'a'.repeat(4000) + capSuffix(cps(forged)), '接尾辞を付けた 8000 字が素通りした');
+  const off = 'a'.repeat(4001) + capSuffix(5000);
+  assert.equal(HIST.capHistoryValue(off), 'a'.repeat(4000) + capSuffix(cps(off)));
+  const emojiCapped = HIST.capHistoryValue('😀'.repeat(4500));
+  assert.equal(emojiCapped, '😀'.repeat(4000) + capSuffix(4500));
+  assert.equal(HIST.capHistoryValue(emojiCapped), emojiCapped, 'サロゲートペアの切り詰め済みも変えない');
+  const small = 'a'.repeat(4000) + capSuffix(3000);   // 全体の字数が先頭より少ない（作られた値）
+  assert.equal(HIST.capHistoryValue(small), 'a'.repeat(4000) + capSuffix(cps(small)));
+});
+
 // --- P5: 見出しの検査は先頭の1行（レコード）だけを解釈する。1回の呼び出しで本体を全文解釈するのは1回だけ ----------
 
 test('BUG-P5a. 盤面の読み取りも書き込みも、本体を全文解釈するのは1回だけ（1.1 倍以内）', () => {
