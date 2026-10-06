@@ -463,8 +463,14 @@ test('nextPbiId: 乱択した ID 群で、結果は常に全 ID より大きく�
     const hw = r() < 0.5 ? '' : 'PBI-' + String(Math.floor(r() * 1000)).padStart(3, '0');
     const next = pbiId.nextPbiId(ids, hw);
     ids.concat(hw ? [hw] : []).forEach((x) => assert.equal(pbiId.comparePbiIds(next, x), 1, 'i=' + i + ' ' + next + ' vs ' + x));
-    const widest = Math.max.apply(null, ids.concat(hw ? [hw] : []).map((x) => x.length));
-    assert.ok(next.length >= Math.min(widest, 'PBI-'.length + 3) || next.length >= 7);
+    // 番号は最大値 + 1 ちょうどで、桁は最大値の ID の桁（同じ値が複数あれば短い方）より落ちない（PR #11 cubic）
+    const all = ids.concat(hw ? [hw] : []);
+    const nextDigits = next.slice('PBI-'.length);
+    if (all.length === 0) { assert.equal(next, 'PBI-001'); continue; }
+    const max = all.reduce((m, x) => (BigInt(x.slice(4)) > m ? BigInt(x.slice(4)) : m), -1n);
+    const maxWidth = Math.min.apply(null, all.filter((x) => BigInt(x.slice(4)) === max).map((x) => x.length - 4));
+    assert.equal(BigInt(nextDigits), max + 1n, 'i=' + i + ' ' + next);
+    assert.ok(nextDigits.length >= maxWidth, 'i=' + i + ' 桁が落ちた: ' + next + ' / ' + JSON.stringify(all));
   }
 });
 

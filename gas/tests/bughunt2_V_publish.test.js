@@ -90,17 +90,50 @@ test('再配布: Web アプリが書き戻すファイルは残し、空なら�
   } finally { t.cleanup(); }
 });
 
-test('未追跡のファイルは配らず、1件ずつ警告して件数を知らせる', () => {
+/**
+ * 作業ツリーに触れないよう、publish.js を一時の git リポジトリへ写して走らせる（PR #11 cubic）。
+ * 配布対象の4点は最小の中身で作ってコミットする。
+ */
+function isolatedRepo() {
   const t = tmp();
-  const stray = path.join(ROOT, 'scrum', 'zz_bughunt2_V_untracked.txt');
+  const git = (args) => {
+    const r = spawnSync('git', args, { cwd: t.dir, encoding: 'utf8' });
+    assert.equal(r.status, 0, 'git ' + args.join(' ') + ': ' + r.stderr);
+  };
+  fs.mkdirSync(path.join(t.dir, 'scripts'));
+  fs.copyFileSync(SCRIPT, path.join(t.dir, 'scripts', 'publish.js'));
+  fs.mkdirSync(path.join(t.dir, '.claude'));
+  fs.writeFileSync(path.join(t.dir, '.claude', 'a.md'), 'a');
+  fs.mkdirSync(path.join(t.dir, 'scrum'));
+  fs.writeFileSync(path.join(t.dir, 'scrum', 'velocity.csv'), 'sprint\n');
+  fs.writeFileSync(path.join(t.dir, 'CLAUDE.md'), 'c');
+  fs.writeFileSync(path.join(t.dir, 'README.md'), 'r');
+  git(['init', '-q']);
+  git(['add', '-A']);
+  git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init']);
+  return Object.assign(t, {
+    run: (dest) => {
+      const r = spawnSync(process.execPath, [path.join(t.dir, 'scripts', 'publish.js'), dest], { cwd: t.dir, encoding: 'utf8' });
+      return { code: r.status, out: String(r.stdout), err: String(r.stderr) };
+    },
+  });
+}
+
+test('未追跡のファイルは配らず、1件ずつ警告して件数を知らせる（一時のリポジトリで走らせる）', () => {
+  const repo = isolatedRepo();
+  const out = tmp();
   try {
-    fs.writeFileSync(stray, '未追跡');
-    const r = run(t.dir);
+    fs.writeFileSync(path.join(repo.dir, 'scrum', 'zz_untracked.txt'), '未追跡');
+    fs.writeFileSync(path.join(repo.dir, '.claude', 'zz_untracked2.txt'), '未追跡');
+    const r = repo.run(out.dir);
     assert.equal(r.code, 0, r.err);
-    assert.equal(fs.existsSync(path.join(t.dir, 'scrum', 'zz_bughunt2_V_untracked.txt')), false);
-    assert.match(r.err, /git で追跡されていないため配布しません.*zz_bughunt2_V_untracked\.txt/);
-    assert.match(r.out, /1 件の未追跡ファイルを配布せず/);
-  } finally { fs.rmSync(stray, { force: true }); t.cleanup(); }
+    assert.equal(fs.existsSync(path.join(out.dir, 'scrum', 'zz_untracked.txt')), false);
+    assert.equal(fs.existsSync(path.join(out.dir, '.claude', 'zz_untracked2.txt')), false);
+    assert.ok(fs.existsSync(path.join(out.dir, 'scrum', 'velocity.csv')), '追跡しているファイルは配る');
+    assert.match(r.err, /git で追跡されていないため配布しません.*zz_untracked\.txt/);
+    assert.match(r.err, /git で追跡されていないため配布しません.*zz_untracked2\.txt/);
+    assert.match(r.out, /2 件の未追跡ファイルを配布せず/);
+  } finally { repo.cleanup(); out.cleanup(); }
 });
 
 test('コピー中の失敗（配布先のファイルがフォルダ）は終了コード 1 で、配布記録は書かない', () => {
