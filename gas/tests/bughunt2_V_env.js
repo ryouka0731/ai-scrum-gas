@@ -151,7 +151,8 @@ function makeEnv(scrumSpec, opts) {
     console: { error(m) { ctx.__errors.push(String(m)); }, log() {} },
     __errors: [],
     SpreadsheetApp: { getActiveSpreadsheet: () => ssObj, getUi: () => { if (opts.uiThrows) throw new Error('auth'); return ui; } },
-    DriveApp: { getFolderById: (id) => { if (opts.badFolder) throw new Error('no access ' + id); return root; } },
+    // 設定したフォルダ ID 以外を引いたら失敗させる（フォルダの取り違えを見逃さない）
+    DriveApp: { getFolderById: (id) => { if (opts.badFolder || id !== props.SCRUM_FOLDER_ID) throw new Error('no access ' + id); return root; } },
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; } }) },
     LockService: { getScriptLock: () => ({ tryLock(ms) { lockState.tries++; lockState.waits.push(ms); return lockState.available; }, releaseLock() { lockState.releases++; } }) },
     Session: { getScriptTimeZone: () => 'UTC', getActiveUser: () => ({ getEmail: () => { if (opts.userThrows) throw new Error('no user'); return opts.user === undefined ? 'me@example.com' : opts.user; } }) },
@@ -161,7 +162,8 @@ function makeEnv(scrumSpec, opts) {
     ScriptApp: {
       getProjectTriggers: () => triggers,
       deleteTrigger: (t) => { const i = triggers.indexOf(t); if (i >= 0) triggers.splice(i, 1); t.deleted = true; },
-      newTrigger: (h) => ({ timeBased: () => ({ everyMinutes: (m) => ({ create: () => created.push([h, m]) }) }) }),
+      // 作ったトリガーは一覧にも入れる（消す側が本当に消したかを一覧で確かめられるように）
+      newTrigger: (h) => ({ timeBased: () => ({ everyMinutes: (m) => ({ create: () => { created.push([h, m]); triggers.push({ getHandlerFunction: () => h, minutes: m }); } }) }) }),
     },
   };
   vm.createContext(ctx);

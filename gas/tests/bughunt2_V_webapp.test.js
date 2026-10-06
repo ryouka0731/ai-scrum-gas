@@ -78,6 +78,19 @@ test('apiGetView: Drive の読み取りが例外でも velocity / impediment は
   assert.equal(r.summary, null);
 });
 
+test('apiGetView(impediment): 障害物の CSV の読み取りが例外でも、読めた側だけで成功する（PR #11 cubic）', () => {
+  const s1 = scrum(); s1.failRead = 'impediment_log.csv';
+  const r1 = makeEnv(s1).ctx.apiGetView('impediment');
+  assert.equal(r1.ok, true);
+  assert.deepEqual(J(r1.view.open), []);
+  assert.deepEqual(J(r1.view.resolved), []);
+  const s2 = scrum(); s2.failRead = 'impediment_log_resolved.csv';
+  const r2 = makeEnv(s2).ctx.apiGetView('impediment');
+  assert.equal(r2.ok, true);
+  assert.deepEqual(J(r2.view.open).map((r) => r.id), ['IMP-001'], '読めた未解決まで巻き添えで消えた');
+  assert.deepEqual(J(r2.view.resolved), []);
+});
+
 test('apiGetView(board): velocity.csv が壊れて読めなくても盤面は読める（sprintChoices は未割り当てのみ）', () => {
   const s = scrum(); s.failRead = 'velocity.csv';
   const e = makeEnv(s);

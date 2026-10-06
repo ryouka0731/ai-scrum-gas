@@ -340,11 +340,10 @@ test('menuInstallTrigger / menuRemoveTrigger: scheduledSync のトリガーだ�
   const triggers = [mk('scheduledSync'), mk('other'), mk('scheduledSync')];
   const e = makeEnv(baseScrum(), { triggers });
   e.ctx.menuInstallTrigger();
-  assert.equal(triggers.length, 1);
-  assert.equal(triggers[0].getHandlerFunction(), 'other');
+  assert.deepEqual(triggers.map((t) => t.getHandlerFunction()), ['other', 'scheduledSync']);
   assert.deepEqual(J(e.created), [['scheduledSync', 30]]);
   e.ctx.menuRemoveTrigger();
-  assert.equal(triggers.length, 1);
+  assert.deepEqual(triggers.map((t) => t.getHandlerFunction()), ['other'], '作った scheduledSync のトリガーが消えていない');
   assert.equal(e.alerts.length, 2);
 });
 
