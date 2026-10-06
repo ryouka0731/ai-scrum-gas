@@ -437,6 +437,7 @@
     <div class="panel-foot">
       <button id="imp-panel-save" class="primary" type="button"></button>
       <span class="spacer"></span>
+      <button id="imp-panel-cancel-resolve" type="button" hidden></button>
       <button id="imp-panel-resolve" type="button"></button>
     </div>
     <div id="imp-panel-history" class="history" hidden></div>
@@ -1133,23 +1134,30 @@ function changedFields(initial) {
  * 意味が違う。同じ文言に揃えるとこの違いが潰れる。
  */
 function fillSprintSelect(value) {
-  var el = document.getElementById('f-sprint');
-  el.innerHTML = '';
+  fillSprintOptions(document.getElementById('f-sprint'), sprintChoices, value);
+}
+
+/**
+ * select に選択肢を並べ、value を選ぶ。PBI パネル・障害物パネルの共通部分。
+ * choices はパネルごとの供給元のまま（PBI は sprintChoices、障害物は impSprintChoices）。
+ * 今の値が choices に無いときだけ「（選択肢に無い値）」付きで1つ足す（理由は fillSprintSelect の説明）。
+ * value は trim 済みで渡す（揃えるのは呼び出し側の1か所）。
+ */
+function fillSprintOptions(el, choices, value) {
+  clearHost(el);
   var add = function (v, label) {
     var opt = document.createElement('option');
     opt.value = v;
     opt.textContent = label;
     el.appendChild(opt);
   };
-
-  // value は trim 済みで渡ってくる（揃えるのは writeForm の1か所だけにする。
-  // ここでも trim すると、どちらが効いているのか分からない行が増える）。
   var listed = false;
-  sprintChoices.forEach(function (o) {
+  choices.forEach(function (o) {
     if (o.value === value) listed = true;
     add(o.value, o.label);
   });
   if (value && !listed) add(value, value + '（選択肢に無い値）');
+  el.value = value;
 }
 
 function writeForm(card, status) {
@@ -1503,6 +1511,7 @@ function applyImpLocks() {
   // 解決策の入力中は保存を押せない（保存して閉じると、打った解決策を黙って捨てるため）。
   document.getElementById('imp-panel-save').disabled = impPanelBusy || impPanelState.resolving;
   document.getElementById('imp-panel-resolve').disabled = impPanelBusy;
+  document.getElementById('imp-panel-cancel-resolve').disabled = impPanelBusy;
   IMP_FORM_FIELD_IDS.forEach(function (id) {
     document.getElementById(id).disabled = impPanelBusy || (impPanelState.resolving && id !== 'i-resolution');
   });
@@ -1514,29 +1523,14 @@ function setImpPanelBusy(busy) {
 }
 
 function fillImpSprintSelect(value) {
-  var el = document.getElementById('i-sprint');
-  clearHost(el);
-  var seen = false;
-  impSprintChoices.forEach(function (c) {
-    var o = document.createElement('option');
-    o.value = c.value;
-    o.textContent = c.label;
-    if (c.value === value) seen = true;
-    el.appendChild(o);
-  });
-  // 今の値が選択肢に無くても失わない（PBI の fillSprintSelect と同じ考え方）。
-  if (!seen && value) {
-    var extra = document.createElement('option');
-    extra.value = value;
-    extra.textContent = value;
-    el.appendChild(extra);
-  }
-  el.value = value;
+  fillSprintOptions(document.getElementById('i-sprint'), impSprintChoices, value);
 }
 
 function setImpResolving(on) {
   impPanelState.resolving = on;
   document.getElementById('i-resolution-field').hidden = !on;
+  // 打った解決策は消さない（やめても、次に「解決する」を押せば残っている）。
+  document.getElementById('imp-panel-cancel-resolve').hidden = !on;
   applyImpLocks();
   var btn = document.getElementById('imp-panel-resolve');
   btn.innerHTML = '';   // fillButton は追記するだけ。空にしないと文言が積み重なる
@@ -1604,7 +1598,7 @@ function applyImpResponse(res, issued, commentSeen) {
   // commentWriteIssued と違う）なら、この写しはそれを含まないかもしれない。
   var takeComments = !!res.comments && commentSeen === commentWriteIssued;
   if (takeComments) {
-    commentsByTarget = res.comments;
+    commentsByTarget = withoutDeletedComments(res.comments);
     lastAppliedComment = commentWriteIssued;
   }
   if (activeView === 'impediment') {
@@ -1780,6 +1774,7 @@ var commentPending = {};      // 送信中のコメントの書き込みの発�
 // （コメントは盤面・表の中身を変えないので、writeSeq は進めず読み込みそのものは捨てさせない）。
 var commentWritesDone = 0;
 var commentSending = {};      // target_id → 送信中の本文（送信中は入力を塞ぎ、その本文を出し続ける）
+var commentDeletedIds = {};   // この画面で削除に成功したコメントの id → true（遅れた追加の応答で戻さないため。戻す成功で外す）
 var commentDeleting = {};     // コメントの id → true（削除の送信中は削除ボタンを塞ぐ）
 var commentUi = {};           // 節の id → { targetId, input, send, message }（最後に描いたもの）
 
@@ -1943,6 +1938,17 @@ function refreshOpenComments() {
   if (open) renderComments(open.hostId, open.targetId, false);
 }
 
+/** 受け入れる写しから、この画面で削除に成功したコメントを外す。戻す成功で集合から外れる。 */
+function withoutDeletedComments(comments) {
+  if (!comments || Object.keys(commentDeletedIds).length === 0) return comments;
+  var out = {};
+  Object.keys(comments).forEach(function (k) {
+    var list = comments[k];
+    out[k] = Array.isArray(list) ? list.filter(function (c) { return !commentDeletedIds[c.id]; }) : list;
+  });
+  return out;
+}
+
 /**
  * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
  * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
@@ -1950,7 +1956,7 @@ function refreshOpenComments() {
 function applyComments(comments, issued) {
   if (!comments || issued <= lastAppliedComment) return false;
   lastAppliedComment = issued;
-  commentsByTarget = comments;
+  commentsByTarget = withoutDeletedComments(comments);
   redrawComments();
   return true;
 }
@@ -1980,7 +1986,7 @@ function applyOwnComment(add, removeId) {
       if (kept.length !== list.length) { next[k] = kept; changed = true; }
     });
   }
-  if (add && add.id && add.target_id) {
+  if (add && add.id && add.target_id && !commentDeletedIds[add.id]) {
     var cur = Array.isArray(next[add.target_id]) ? next[add.target_id] : [];
     var exists = cur.some(function (c) { return c.id === add.id; });
     if (!exists) {
@@ -2069,6 +2075,7 @@ function deleteComment(hostId, targetId, commentId) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       settle();
       if (res.ok) commentWritesDone++;
+      if (res.ok && res.removed && res.removed.id) commentDeletedIds[res.removed.id] = true;
       if (!applyComments(res.comments, issued)) {
         if (res.ok) applyOwnComment(null, res.removed && res.removed.id);
         refreshOpenComments();
@@ -2103,6 +2110,7 @@ function restoreComment(row) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete commentPending[issued];
       if (res.ok) commentWritesDone++;
+      if (res.ok && row.id) delete commentDeletedIds[row.id];
       // 戻す応答は戻した行を運ばない。送った行（row）を使う。
       if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
       if (res.ok) setMessage('コメントを戻しました。', 'info');
@@ -2619,7 +2627,7 @@ function loadView() {
         // ビューは描くが、コメントは今の一覧（書き込みの応答で入れたもの）を使い続ける。
         var takeComments = !!res.comments && commentWritesDone === seenCommentWrites;
         if (takeComments) {
-          commentsByTarget = res.comments;
+          commentsByTarget = withoutDeletedComments(res.comments);
           lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
         }
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
@@ -2719,6 +2727,8 @@ function objectTable(columns, rows, onRow, withCommentCount) {
       tr.className = 'clickable';
       tr.dataset.id = row.id;
       tr.setAttribute('tabindex', '0');
+      tr.setAttribute('role', 'button');
+      tr.setAttribute('aria-label', String(row.id) + ' ' + String(row.title || '') + ' を開く');
       tr.addEventListener('click', function () { onRow(row); });
       tr.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' || ev.key === ' ') { if (ev.preventDefault) ev.preventDefault(); onRow(row); }
@@ -2901,6 +2911,11 @@ document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
 fillButton(document.getElementById('imp-panel-save'), 'save', '保存');
+fillButton(document.getElementById('imp-panel-cancel-resolve'), 'close', 'やめる');
+document.getElementById('imp-panel-cancel-resolve').addEventListener('click', function () {
+  setImpResolving(false);
+  document.getElementById('imp-panel-resolve').focus();   // 押したボタンが隠れるので、フォーカスを残す
+});
 document.getElementById('imp-panel-close').appendChild(makeIcon('close'));
 document.getElementById('imp-panel-close').addEventListener('click', closeImpPanel);
 document.getElementById('imp-panel-save').addEventListener('click', saveImpPanel);
