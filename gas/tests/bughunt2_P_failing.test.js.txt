@@ -66,27 +66,6 @@ test('BUG-P4. 履歴 200 件 × 500 行の説明で、履歴パネルの DOM ノ
 });
 
 // ---------------------------------------------------------------------------
-// BUG-P5 (low): 本体の CSV を1回の呼び出しで3回（盤面は2回）全文解釈する
-// ---------------------------------------------------------------------------
-// assertHeaderMatches は見出し行だけが要るのに parseCsv(text) で全文を解釈し、さらに
-// findOverlongCsvRow（書き込み）と csvToObjects が同じ文字列をもう一度ずつ解釈する。
-// 履歴の追記は「見出し行だけを検査」と書いてあり同じ工夫が本体では抜けている。
-// 期待: 1回の呼び出しで各ファイルの解釈は 1.1 倍以内（見出しは先頭1行だけ解釈する）。
-test('BUG-P5a. 盤面の読み取りが本体を2回・書き込みが3回 全文解釈する', () => {
-  const files = S.standardFiles(2000, null);
-  const backlog = files['product_backlog.csv'].length;
-  const c = S.createCtx(files);
-  c.resetStats();
-  assert.equal(c.ctx.apiGetView('board').ok, true);
-  const view = c.stats.parsedChars;
-  c.resetStats();
-  assert.equal(c.ctx.apiUpdateStatus(S.pid(1), 'Done', S.T0).ok, true);
-  const write = c.stats.parsedChars;
-  assert.ok(view <= 1.1 * backlog && write <= 1.1 * backlog,
-    '本体 ' + backlog + ' 文字に対し、盤面で ' + view + '（' + (view / backlog).toFixed(1) + ' 倍）、書き込みで ' + write + '（' + (write / backlog).toFixed(1) + ' 倍）解釈した');
-});
-
-// ---------------------------------------------------------------------------
 // BUG-P6 (low, 作為的): diffRows が同じ ID の行の数 k に 2乗
 // ---------------------------------------------------------------------------
 // 同じ ID の行が k 本ある（ローカルで ID が重なった、雛形の複製など）と、1巡目・2巡目が id ごとの候補を毎回先頭から

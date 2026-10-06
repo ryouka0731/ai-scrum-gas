@@ -585,3 +585,54 @@ test('BUG-P3. 切り詰め（pure）: 4000 字ちょうどはそのまま。サ�
   assert.equal(rows[0].before, 'y'.repeat(4000) + capSuffix(5000));
   assert.equal(rows[0].after, 'z');
 });
+
+// --- P5: 見出しの検査は先頭の1行（レコード）だけを解釈する。1回の呼び出しで本体を全文解釈するのは1回だけ ----------
+
+test('BUG-P5a. 盤面の読み取りも書き込みも、本体を全文解釈するのは1回だけ（1.1 倍以内）', () => {
+  const files = P.standardFiles(2000, null);
+  const backlog = files['product_backlog.csv'].length;
+  const c = P.createCtx(files);
+  c.resetStats();
+  assert.equal(c.ctx.apiGetView('board').ok, true);
+  const view = c.stats.parsedChars;
+  c.resetStats();
+  assert.equal(c.ctx.apiUpdateStatus(P.pid(1), 'Done', P.T0).ok, true);
+  const write = c.stats.parsedChars;
+  assert.ok(view <= 1.1 * backlog && write <= 1.1 * backlog,
+    '本体 ' + backlog + ' 文字に対し、盤面で ' + view + '（' + (view / backlog).toFixed(1) + ' 倍）、書き込みで ' + write + '（' + (write / backlog).toFixed(1) + ' 倍）解釈した');
+});
+
+test('BUG-P5a. 障害物・コメントの書き込みも、各ファイルを全文解釈するのは1回だけ', () => {
+  const files = P.standardFiles(5, 3000);
+  const c = P.createCtx(files);
+  c.resetStats();
+  assert.equal(c.ctx.apiAddComment(P.pid(1), 'こんにちは').ok, true);
+  const comments = files['comments.csv'].length;
+  // 書き込みの応答の組み立て（全コメントの写し）は P2（H2）で変わるので、ここでは書き込み前の解釈だけを数える。
+  assert.ok(c.stats.parsedChars <= 1.1 * comments, 'コメント ' + comments + ' 文字に対し ' + c.stats.parsedChars);
+});
+
+test('BUG-P5. 見出しの取り出し（pure）は先頭のレコードだけを読む。引用・BOM・CRLF も本体の解釈と同じ', () => {
+  const C = require('../pure_csv.js');
+  const BH = require('../pure_backlog_header.js');
+  assert.deepEqual(C.csvHeaderRow('a,b,c\n1,2,3\n'), ['a', 'b', 'c']);
+  assert.deepEqual(C.csvHeaderRow('﻿a,b\r\n1,2'), ['a', 'b']);
+  assert.deepEqual(C.csvHeaderRow('"a,x","b\nc",d\n1'), ['a,x', 'b\nc', 'd']);
+  assert.deepEqual(C.csvHeaderRow('a"b,c\n'), ['a"b', 'c']);
+  assert.deepEqual(C.csvHeaderRow('a,b'), ['a', 'b']);
+  assert.deepEqual(C.csvHeaderRow(''), []);
+  assert.deepEqual(C.csvHeaderRow('\n\na,b'), [], '先頭が空行なら見出しは空（どの列構成とも一致しない）');
+  const seeds = ['x,y\n"1\n2",3', '"q""w",e\r\nz', 'only'];
+  seeds.forEach((t) => assert.deepEqual(C.csvHeaderRow(t), C.parseCsv(t)[0] || [], t));
+  assert.doesNotThrow(() => BH.assertHeaderMatches('a,b\n' + '"'.repeat(1), ['a', 'b']));
+  assert.throws(() => BH.assertHeaderMatches('a,c\n1,2', ['a', 'b']), /列構成が想定と異なります/);
+});
+
+test('BUG-P5. 書き込み前の解釈（pure）: 1回の解釈で行と、列が多すぎる行の両方を返す', () => {
+  const C = require('../pure_csv.js');
+  const t = 'id,b\nX,1\nY,2,3\n';
+  const r = C.csvToObjectsChecked(t);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.rows)), C.csvToObjects(t));
+  assert.deepEqual(r.overlong, C.findOverlongCsvRow(t));
+  assert.equal(C.csvToObjectsChecked('id,b\nX,1\n').overlong, null);
+});

@@ -219,14 +219,25 @@ function appendHistory_(eventsOrThunk) {
 }
 
 /**
- * 見出しより多いセルに中身のある行があれば例外にする（余りが空セルだけなら通す）。書き戻しの前に呼ぶ。
+ * 見出しより多いセルに中身のある行（findOverlongCsvRow / csvToObjectsChecked の overlong）があれば例外にする
+ * （余りが空セルだけなら通す）。書き戻しの前に呼ぶ。
  * そのまま書き戻すと、見出しに無いセル（引用されていないカンマの後ろ等）が黙って消える。
  */
-function assertNoOverlongRows_(text, name) {
-  const bad = findOverlongCsvRow(text);
+function throwIfOverlong_(bad, name) {
   if (!bad) return;
   const where = bad.id ? bad.id + ' の行（' + bad.line + '行目）' : bad.line + '行目';
   throw new Error('scrum/' + name + ' の ' + where + 'に列が多すぎます。CSV を直してから操作してください');
+}
+
+/**
+ * 書き戻しの前の読み取り。見出しを検査し（見出しの行だけを解釈）、本体は1回だけ解釈して、
+ * 列が多すぎる行があれば例外にする（throwIfOverlong_）。行（オブジェクト）を返す。
+ */
+function readRowsForWrite_(text, fields, name) {
+  assertHeaderMatches(text, fields);
+  const checked = csvToObjectsChecked(text);
+  throwIfOverlong_(checked.overlong, name);
+  return checked.rows;
 }
 
 /**
@@ -245,9 +256,7 @@ function withBacklogWrite_(mutate) {
     const text = readBacklogText_();
     // 未知の列を持つ CSV へ書き戻すと列が消えるため、読み直した直後・
     // 書き戻しより前に必ずヘッダーを検査する。
-    assertHeaderMatches(text, BACKLOG_FIELDS);
-    assertNoOverlongRows_(text, BACKLOG_CSV_NAME);
-    const rows = csvToObjects(text);
+    const rows = readRowsForWrite_(text, BACKLOG_FIELDS, BACKLOG_CSV_NAME);
     // mutate の前に必ず高水位を進める。今の pure 層（pure_merge.js）は rows を
     // 直接書き換えず新しい配列を返すので mutate の後でも安全なはずだが、
     // pure 層が将来 rows を破壊的に書き換えるようになっても取り逃さないよう、
@@ -551,9 +560,7 @@ function readImpedimentRows_(name) {
     throw new Error('scrum/' + name + ' が見つかりません。配布が済んでいるか確認してください。');
   }
   // 未知の列を持つ CSV へ書き戻すと列が消えるため、書く前に必ず検査する。
-  assertHeaderMatches(text, IMPEDIMENT_FIELDS);
-  assertNoOverlongRows_(text, name);
-  return csvToObjects(text);
+  return readRowsForWrite_(text, IMPEDIMENT_FIELDS, name);
 }
 
 /**
@@ -856,9 +863,7 @@ function withCommentWrite_(mutate) {
     if (text === null) {
       return { ok: false, reason: 'error', message: 'scrum/' + COMMENT_CSV_NAME + ' が見つかりません。配布し直してください。' };
     }
-    assertHeaderMatches(text, COMMENT_FIELDS);
-    assertNoOverlongRows_(text, COMMENT_CSV_NAME);
-    const rows = csvToObjects(text);
+    const rows = readRowsForWrite_(text, COMMENT_FIELDS, COMMENT_CSV_NAME);
     const me = currentUserEmail_();
     const result = mutate(rows, me);
     if (!result.ok) return { ok: false, reason: result.reason, message: result.message, comments: groupComments(rows, me) };

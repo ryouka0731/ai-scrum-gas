@@ -65,7 +65,10 @@ function parseCsvWithLines_(text) {
  * 余ったセルが空だけなら失うものは無いので見逃す（書き戻しで末尾の空セルが落ちるだけ）。
  */
 function findOverlongCsvRow(text) {
-  const parsed = parseCsvWithLines_(text);
+  return overlongInParsed_(parseCsvWithLines_(text));
+}
+
+function overlongInParsed_(parsed) {
   if (parsed.rows.length < 2) return null;
   const expected = parsed.rows[0].length;
   for (let i = 1; i < parsed.rows.length; i++) {
@@ -90,7 +93,10 @@ function isBlankCsvRow_(r) {
  * 1列だけの CSV では空の値と空行が区別できず、空の値の行は消える（既知の制約）。
  */
 function csvToObjects(text) {
-  const rows = parseCsv(text);
+  return objectsFromCsvRows_(parseCsv(text));
+}
+
+function objectsFromCsvRows_(rows) {
   if (rows.length < 2) return [];
   const header = rows[0];
   return rows.slice(1).filter(function (r) { return !isBlankCsvRow_(r); }).map(function (r) {
@@ -124,4 +130,42 @@ function csvEndsInsideQuotes(text) {
   return inQuotes;
 }
 
-if (typeof module !== 'undefined') { module.exports = { parseCsv, csvToObjects, csvEndsInsideQuotes, findOverlongCsvRow }; }
+/**
+ * 書き戻しの前の読み取り。1回の解釈で、csvToObjects の行と findOverlongCsvRow の結果（無ければ null）を返す。
+ * 別々に呼ぶとファイル全体を2回解釈する（書き込みはロックの中なので、その分だけ他の人を待たせる）。
+ */
+function csvToObjectsChecked(text) {
+  const parsed = parseCsvWithLines_(text);
+  return { rows: objectsFromCsvRows_(parsed.rows), overlong: overlongInParsed_(parsed) };
+}
+
+/**
+ * 先頭のレコード（見出し）だけを parseCsv と同じ読み方で返す。無ければ []。
+ * 見出しの検査のためにファイル全体を解釈しない（先頭の改行までを走査し、そこだけを解釈する）。
+ * 引用の中の改行は見出しの続きとして扱う。
+ */
+function csvHeaderRow(text) {
+  const src = String(text || '');
+  let inQuotes = false;
+  let atFieldStart = true;
+  let end = src.length;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') i++; else inQuotes = false;
+      }
+      continue;
+    }
+    if (ch === '"' && atFieldStart) { inQuotes = true; atFieldStart = false; continue; }
+    if (ch === '\n' || ch === '\r') { end = i; break; }
+    if (ch === ',') { atFieldStart = true; continue; }
+    if (ch === '\ufeff' && i === 0) continue;
+    atFieldStart = false;
+  }
+  return parseCsvWithLines_(src.slice(0, end)).rows[0] || [];
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = { parseCsv, csvToObjects, csvEndsInsideQuotes, findOverlongCsvRow, csvToObjectsChecked, csvHeaderRow };
+}
