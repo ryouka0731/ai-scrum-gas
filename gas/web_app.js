@@ -176,6 +176,8 @@ function apiGetView(name) {
 }
 
 const HISTORY_CSV_NAME = 'change_log.csv';
+/** これを超えたら、書けたうえで切り替え（docs/setup.md）を案内する。 */
+const HISTORY_SIZE_WARN_CHARS = 1000000;
 
 /** CHG- + UUID の先頭8桁。 */
 function newHistoryId_() {
@@ -193,9 +195,16 @@ function appendHistory_(eventsOrThunk) {
     if (!events || events.length === 0) return null;
     const text = readTextFile_(getScrumFolder_(), HISTORY_CSV_NAME);
     if (text === null) return '変更履歴を記録できませんでした（scrum/' + HISTORY_CSV_NAME + ' が見つかりません。配布し直してください）';
-    assertHeaderMatches(text, HISTORY_FIELDS);
-    const rows = csvToObjects(text).concat(historyRows(events, { at: nowText_(), actor: currentUserEmail_(), newId: newHistoryId_ }));
-    writeScrumFile_(HISTORY_CSV_NAME, toCsv(rows, HISTORY_FIELDS));
+    // 既存の行は解釈し直さない。ファイルが大きくなってもロック中の処理が増えないよう、
+    // 見出し行だけを検査し、新しい行を文字列のまま末尾へ足す。
+    assertHeaderMatches(text.split(/\r?\n/, 1)[0], HISTORY_FIELDS);
+    const added = toCsv(historyRows(events, { at: nowText_(), actor: currentUserEmail_(), newId: newHistoryId_ }), HISTORY_FIELDS);
+    const base = text === '' || /\n$/.test(text) ? text : text + '\n';
+    const next = base + added.slice(added.indexOf('\n') + 1);
+    writeScrumFile_(HISTORY_CSV_NAME, next);
+    if (next.length > HISTORY_SIZE_WARN_CHARS) {
+      return '変更履歴のファイルが大きくなっています（約 ' + Math.round(next.length / 1000) + ' KB）。docs/setup.md の手順で切り替えてください';
+    }
     return null;
   } catch (e) {
     return '変更履歴を記録できませんでした（' + e.message + '）';

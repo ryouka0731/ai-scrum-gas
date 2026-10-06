@@ -132,6 +132,17 @@ node scripts/publish.js "<共有フォルダのパス>"
 「今回から権限の確認画面がもう一度出る」と周知しておくとよい（[README.md](../README.md) にも
 案内を書いてある）。
 
+### 変更履歴のファイルを切り替える
+
+`scrum/change_log.csv` は書き込みのたびに読み書きする。100万文字（約 1MB）を超えると、
+書き込みのたびに「変更履歴のファイルが大きくなっています（約 N KB）。docs/setup.md の手順で切り替えてください」と出る。
+出たら、Drive 上で次の手順で切り替える。
+
+1. `scrum/change_log.csv` を `change_log_YYYYMM.csv`（例: `change_log_202610.csv`）に名前変更する
+2. 同じ場所に、見出し行だけの `change_log.csv` を置く（リポジトリの `scrum/change_log.csv` をコピーする）
+
+パネルの「履歴」に出るのは、今の `change_log.csv` の分だけである。切り替え前の履歴は、名前変更したファイルを直接開いて見る。
+
 ### 日本以外のテナントで使う場合
 
 `gas/appsscript.json` の `timeZone` を、そのテナントのタイムゾーンに変更してから push する。
