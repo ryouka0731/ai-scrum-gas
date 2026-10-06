@@ -81,18 +81,22 @@ const LAST_SCHEDULED_SYNC_KEY = 'LAST_SCHEDULED_SYNC_MS';
 /**
  * トリガーから呼ばれる。UI を触らないため toast も alert も使わない。
  *
- * google.script.run からも呼べるため、前回の成功から60秒以内なら何もしない（ロックも取らない）。
- * 30分毎のトリガーには影響しない。
+ * google.script.run からも呼べるため、前回の成功から60秒以内なら何もしない。
+ * 判定はロックの外で一度（ロックを取らずに済ませる）、ロックの中でもう一度行い、成功の記録もロックの中で書く。
+ * 並んだ呼び出しがそろって判定を通り、再構築を続けて走らせないため。30分毎のトリガーには影響しない。
  */
 function scheduledSync() {
   try {
     const props = PropertiesService.getScriptProperties();
-    if (isSyncTooSoon(props.getProperty(LAST_SCHEDULED_SYNC_KEY), Date.now())) {
+    const tooSoon = function () { return isSyncTooSoon(props.getProperty(LAST_SCHEDULED_SYNC_KEY), Date.now()); };
+    if (tooSoon()) {
       console.log('前回の自動同期から間もないため、今回は見送りました。');
       return;
     }
-    const result = syncAll_();
-    if (!result.skipped) props.setProperty(LAST_SCHEDULED_SYNC_KEY, String(Date.now()));
+    syncAll_({
+      shouldSync: function () { return !tooSoon(); },
+      onSynced: function () { props.setProperty(LAST_SCHEDULED_SYNC_KEY, String(Date.now())); },
+    });
   } catch (e) {
     // 例外をそのまま投げると30分毎に実行失敗メールが届く（フォルダ未設定なら鳴り止まない）。
     // 原因は Apps Script の実行ログに残す。

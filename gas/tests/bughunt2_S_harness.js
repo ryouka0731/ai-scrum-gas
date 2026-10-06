@@ -5,6 +5,7 @@
 // - 各 GAS サービスへのアクセスを記録する（副作用の検出）
 // - SpreadsheetApp / ScriptApp のフェイク（getUi は Web アプリ文脈と同じく例外）
 // - opts.failCacheRemove: CacheService.remove を失敗させる
+// - opts.onTryLock / opts.onRelease: ロックの取得直前・解放直後に1回だけ呼ぶ（別の実行が割り込む再現）
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -77,9 +78,15 @@ function createCtx(files, opts) {
         tryLock: () => {
           log.push('Lock.tryLock');
           if (opts.lockBusy) return false;
+          const hook = opts.onTryLock;
+          if (hook) { opts.onTryLock = null; hook(); }   // ロックを待つ間に別の実行が先に終わる
           lockState.acquired++; lockState.held++; return true;
         },
-        releaseLock: () => { lockState.released++; if (lockState.held > 0) lockState.held--; },
+        releaseLock: () => {
+          lockState.released++; if (lockState.held > 0) lockState.held--;
+          const hook = opts.onRelease;
+          if (hook) { opts.onRelease = null; hook(); }   // 解放した直後に別の実行が入る
+        },
       }),
     },
     PropertiesService: {

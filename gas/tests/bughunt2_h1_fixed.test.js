@@ -194,6 +194,28 @@ test('S-BUG-3: 頻度の判定（pure）', () => {
   [null, undefined, '', 'x', '12abc', 'NaN', 'Infinity'].forEach((v) => assert.equal(R.isSyncTooSoon(v, now), false, String(v)));
 });
 
+// 頻度の判定はロックの中で行い、成功の記録もロックを放す前に書く（PR #11 cubic）。
+// そうしないと、並んだ呼び出しがそろって判定を通り、全シートの再構築が続けて走る。
+const rebuilds = (h) => h.log.filter((x) => x === 'SpreadsheetApp.getActiveSpreadsheet').length;
+
+test('S-BUG-3c: ロックを待つ間に別の実行が同期を終えたら、ロックを取った後の判定で見送る', () => {
+  const opts = {};
+  const h = H.createCtx(H.baseFiles(), opts);
+  opts.onTryLock = () => h.ctx.scheduledSync();   // 先に判定を通った後、待つ間に別の実行が先に同期する
+  h.ctx.scheduledSync();
+  assert.equal(rebuilds(h), 1, '再構築が ' + rebuilds(h) + ' 回走った');
+  assert.equal(h.lockState.held, 0);
+});
+
+test('S-BUG-3c: ロックを放した直後に入った実行は、記録済みの成功を見て見送る', () => {
+  const opts = {};
+  const h = H.createCtx(H.baseFiles(), opts);
+  opts.onRelease = () => h.ctx.scheduledSync();
+  h.ctx.scheduledSync();
+  assert.equal(rebuilds(h), 1, '再構築が ' + rebuilds(h) + ' 回走った');
+  assert.equal(h.lockState.held, 0);
+});
+
 // --- S4: PBI の削除の取り消しは、鍵を捨ててから戻す（捨てられなければ戻さない） ------------------------------
 
 function sharedPbi002Files() {

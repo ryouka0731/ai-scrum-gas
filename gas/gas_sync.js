@@ -42,13 +42,17 @@ function readCsvRows_(folder, name, warnings) {
  * 30分トリガーと手動の「今すぐ同期」が重なると、メモの読み出しとシートのクリアが
  * 交差してメモを失う恐れがあるため、スクリプトロックで多重実行を防ぐ。
  */
-function syncAll_() {
+function syncAll_(guard) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(SYNC_LOCK_WAIT_MS)) {
     return { syncedAt: '', warnings: [], skipped: true };
   }
   try {
-    return rebuildAllSheets_();
+    // guard（任意）: ロックの中で同期してよいかを判定し、成功をロックを放す前に記録する（判定と記録を原子的にする）
+    if (guard && !guard.shouldSync()) return { syncedAt: '', warnings: [], skipped: true };
+    const result = rebuildAllSheets_();
+    if (guard) guard.onSynced();
+    return result;
   } finally {
     lock.releaseLock();
   }
