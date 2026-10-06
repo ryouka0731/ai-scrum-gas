@@ -221,3 +221,12 @@ test('C-5: 日時が正規形でない自分のコメントも、削除を取り
   assert.equal(plain(h.ctx.apiRestoreComment(d.removed)).ok, true);
   assert.ok(f['comments.csv'].indexOf('CMT-0000000b,PBI-002,me@example.com,2026-10-06,日付だけ') !== -1);
 });
+
+test('BUG C-4: 作成の書き込みが失敗しても高水位だけ進み、次の作成で ID が欠番になる', () => {
+  const f = baseFiles();
+  const h = createCtx(f, { setContentFailNames: ['product_backlog.csv'] });
+  assert.equal(plain(h.ctx.apiCreatePbi(full('A'))).reason, 'error');
+  h.fault.setContentFailNames = [];
+  const ok = plain(h.ctx.apiCreatePbi(full('B')));
+  assert.equal(ok.id, 'PBI-001', '失敗した作成が PBI-001 を消費した（高水位: ' + h.props.LAST_PBI_ID + '）');
+});

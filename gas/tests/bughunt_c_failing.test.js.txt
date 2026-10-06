@@ -219,15 +219,6 @@ test('BUG C-3b: 同じ ID の行が2つあると、削除の履歴が delete で
   assert.ok(hist.every((r) => r.action !== 'update'), '削除で update の履歴が出た: ' + JSON.stringify(hist));
 });
 
-test('BUG C-4: 作成の書き込みが失敗しても高水位だけ進み、次の作成で ID が欠番になる', () => {
-  const f = baseFiles();
-  const h = createCtx(f, { setContentFailNames: ['product_backlog.csv'] });
-  assert.equal(plain(h.ctx.apiCreatePbi(full('A'))).reason, 'error');
-  h.fault.setContentFailNames = [];
-  const ok = plain(h.ctx.apiCreatePbi(full('B')));
-  assert.equal(ok.id, 'PBI-001', '失敗した作成が PBI-001 を消費した（高水位: ' + h.props.LAST_PBI_ID + '）');
-});
-
 test('BUG C-6: 未解決に雛形 IMP-001 と本物の IMP-001 があると、本物の編集が履歴に残らず警告も出ない', () => {
   const f = baseFiles();
   f['impediment_log.csv'] += 'IMP-001,（障害物タイトル）,（詳細説明）,（報告者）,YYYY-MM-DD,Open,,（解決策）,sprint001\n' +

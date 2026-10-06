@@ -247,6 +247,13 @@ function withBacklogWrite_(mutate) {
       };
     }
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
+    // 採番した ID の高水位は、本体が書けてから進める。書く前に進めると、書き込みが
+    // 失敗したときに使われていない ID が消費され、次の作成で欠番になる。
+    // 記帳は best-effort（advanceLastPbiIdWatermark_ と同じ）。失敗しても新しい行は
+    // CSV に残るので、次の採番はそれを見て再利用しない。
+    if (result.highWaterId) {
+      try { setLastPbiId_(result.highWaterId); } catch (e) { /* best-effort */ }
+    }
     // 本体は書けた。履歴は後追いで、失敗しても本体を失敗にしない。
     const warning = appendHistory_(function () {
       return diffRows(rows, result.rows, BACKLOG_FIELDS, ['updated_at', 'created_at']).map(function (e) {
@@ -333,8 +340,8 @@ function apiCreatePbi(fields) {
     if (!r.ok) {
       return { ok: false, reason: r.reason, message: 'ID が重複しました。もう一度お試しください。' };
     }
-    setLastPbiId_(id);
-    return { ok: true, rows: r.rows, id: id };
+    // 高水位は withBacklogWrite_ が本体を書けたあとに進める（highWaterId）。
+    return { ok: true, rows: r.rows, id: id, highWaterId: id };
   });
 }
 
