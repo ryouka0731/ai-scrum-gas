@@ -31,11 +31,14 @@ function isPlaceholderRow(row) {
 function normalizeSprint(name) {
   const key = String(name || '').trim().toLowerCase().replace(/[\s_\-]+/g, '');
   if (!key) return '';
-  const m = key.match(/^(.*?)(\d+)$/);
-  if (!m) return key;
-  const num = String(parseInt(m[2], 10));
+  // 末尾の連番は後ろから数字を数えて切り出す（/^(.*?)(\d+)$/ は長い数字の並び＋末尾の
+  // 非数字で長さの2乗の時間がかかり、利用者が入れたスプリント値1つで盤面の読み込みが止まる）。
+  let start = key.length;
+  while (start > 0 && key.charCodeAt(start - 1) >= 48 && key.charCodeAt(start - 1) <= 57) start--;
+  if (start === key.length) return key;
+  const num = String(parseInt(key.slice(start), 10));
   const padded = num.length >= 3 ? num : ('00' + num).slice(-3);
-  return m[1] + padded;
+  return key.slice(0, start) + padded;
 }
 
 /**

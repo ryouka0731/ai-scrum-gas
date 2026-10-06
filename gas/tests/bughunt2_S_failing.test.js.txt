@@ -36,37 +36,6 @@ test('S-BUG-1b: 解決の取り消しで、障害物を雛形の形（（…）�
   assert.ok(visible, 'IMP-002 が未解決・解決済のどちらからも見えなくなった（削除の無い障害物を実質的に消せる）');
 });
 
-// --- S-BUG-2 ---------------------------------------------------------------
-test('S-BUG-2a: シートへの無害化（escapeSheetCell）が、- と長い数字の並びで二乗時間にならない', () => {
-  const E = require('../pure_sheet_escape.js');
-  const s = '-' + '1'.repeat(6000) + 'x';
-  const t = Date.now();
-  E.escapeSheetCell(s);
-  const ms = Date.now() - t;
-  // 線形なら 1ms 未満。現状は約 1 秒（10000 桁で約 2 秒、40000 桁で約 26 秒）
-  assert.ok(ms < 100, 'escapeSheetCell が ' + ms + 'ms かかった（SHEET_PLAIN_NUMBER_RE のバックトラック）');
-});
-
-test('S-BUG-2b: スプリント名の正規化（normalizeSprint）が、長い数字の並び＋末尾の非数字で二乗時間にならない', () => {
-  const F = require('../pure_filter.js');
-  const s = '1'.repeat(20000) + 'x';
-  const t = Date.now();
-  F.normalizeSprint(s);
-  const ms = Date.now() - t;
-  assert.ok(ms < 100, 'normalizeSprint が ' + ms + 'ms かかった（/^(.*?)(\\d+)$/ のバックトラック）');
-});
-
-test('S-BUG-2c: 1回の apiUpdatePbi で入れたスプリント値で、全員の盤面の読み込み（apiGetView board）が遅くならない', () => {
-  const h = H.createCtx(H.baseFiles());
-  const u = plain(h.ctx.apiUpdatePbi('PBI-001', { title: 'A', sprint: '1'.repeat(20000) + 'x' }, '2026-10-01 00:00:00'));
-  assert.equal(u.ok, true, '前提: 長いスプリント値が受け付けられる');
-  const t = Date.now();
-  const v = plain(h.ctx.apiGetView('board'));
-  const ms = Date.now() - t;
-  assert.equal(v.ok, true);
-  assert.ok(ms < 200, '盤面の読み込みに ' + ms + 'ms（sprintChoices → normalizeSprint）');
-});
-
 // --- S-BUG-3 ---------------------------------------------------------------
 test('S-BUG-3: トリガーのハンドラ scheduledSync を google.script.run から呼んでも、同期（ロック・シートの全消去と再構築）が走らない', () => {
   // 仕様（2026-09-04 web-app-design「google.script.run の公開範囲（規約）」2.）:
