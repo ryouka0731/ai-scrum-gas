@@ -99,8 +99,10 @@ function createTestContext(files, opts) {
   // 値は { value, expiresAt }。期限（expirationInSeconds、省略は GAS と同じ 600 秒）は clock.now（秒）で見る。
   // テストは返り値の clock.now を進めて期限切れを再現する。
   // opts.cache: 別のコンテキストと共有するキャッシュ（本物の CacheService はスクリプト全体で1つ）。
+  // opts.clock: 共有するキャッシュの期限を見る時計。キャッシュを共有するときは時計も共有する
+  // （コンテキストごとに 0 から始めると、期限切れの鍵を受け付けてしまう）。
   const cache = opts.cache || {};
-  const clock = { now: 0 };
+  const clock = opts.clock || { now: 0 };
   const context = {
     console: console,
     DriveApp: {
@@ -789,23 +791,38 @@ test('解決: 2つ目（未解決から消す）で失敗すると partial。「
 
 test('取り消し: 2つ目（解決済から消す）で失敗すると partial。「完了する」で送り直すと完了する', () => {
   const f = impFiles(IMP2);
-  // 2巡目 H1（S1）: 取り消しは鍵（undoToken）で送る。鍵の預け先（キャッシュ）は実行をまたいで共有する。
+  // 2巡目 H1（S1）: 取り消しは鍵（undoToken）で送る。鍵の預け先（キャッシュ）と時計は実行をまたいで共有する。
   const cache = {};
-  const done = createTestContext(f, { cache: cache }).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  const clock = { now: 0 };
+  const done = createTestContext(f, { cache: cache, clock: clock }).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
   assert.equal(done.ok, true, done.message);
   const arg = { undoToken: done.undoToken };
 
-  const res = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv', cache: cache }).ctx
+  const res = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv', cache: cache, clock: clock }).ctx
     .apiUnresolveImpediment(arg);
   assert.equal(res.reason, 'partial');
   assert.ok(res.message.indexOf('「完了する」') !== -1, res.message);
   assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '未解決に戻した前提');
   assert.ok(f['impediment_log_resolved.csv'].indexOf('IMP-002') !== -1, '解決済に残っている前提');
 
-  const retry = createTestContext(f, { cache: cache }).ctx.apiUnresolveImpediment(arg);
+  const retry = createTestContext(f, { cache: cache, clock: clock }).ctx.apiUnresolveImpediment(arg);
   assert.equal(retry.ok, true, retry.message);
   assert.equal(f['impediment_log.csv'], IMP_HEADER + IMP_TEMPLATE + IMP2, '未解決に二重に足した');
   assert.equal(f['impediment_log_resolved.csv'], IMP_HEADER + IMP_TEMPLATE);
+});
+
+test('取り消し: 実行をまたいでも、鍵の期限（共有の時計）を過ぎたら expired で断り、何も書かない（PR #11 cubic）', () => {
+  const f = impFiles(IMP2);
+  const cache = {};
+  const clock = { now: 0 };
+  const done = createTestContext(f, { cache: cache, clock: clock }).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(done.ok, true, done.message);
+  clock.now += 3600;
+  const before = JSON.stringify(f);
+  const late = createTestContext(f, { cache: cache, clock: clock }).ctx.apiUnresolveImpediment({ undoToken: done.undoToken });
+  assert.equal(late.ok, false);
+  assert.equal(late.reason, 'expired');
+  assert.equal(JSON.stringify(f), before);
 });
 
 test('解決: 1つ目（解決済へ足す）で失敗すれば error で、どちらも変わらない', () => {
@@ -1328,16 +1345,17 @@ test('取り消し: 2つ目（解決済から消す）で失敗しても unresol
   const f = histImpFiles(IMP2);
   // 2巡目 H1（S1）: 取り消しは鍵で送る。鍵の預け先（キャッシュ）は実行をまたいで共有する。
   const cache = {};
-  const done = createTestContext(f, { cache: cache }).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  const clock = { now: 0 };
+  const done = createTestContext(f, { cache: cache, clock: clock }).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
   assert.equal(done.ok, true, done.message);
   const arg = { undoToken: done.undoToken };
-  const first = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv', cache: cache });
+  const first = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv', cache: cache, clock: clock });
   const res = first.ctx.apiUnresolveImpediment(arg);
   assert.equal(res.reason, 'partial');
   assert.equal(res.historyWarning, undefined);
   assert.deepEqual(histRows(first.ctx, f).map((r) => [r.target_id, r.action]),
     [['IMP-002', 'resolve'], ['IMP-002', 'unresolve']]);
-  const retry = createTestContext(f, { cache: cache });
+  const retry = createTestContext(f, { cache: cache, clock: clock });
   assert.equal(retry.ctx.apiUnresolveImpediment(arg).ok, true);
   assert.equal(histRows(retry.ctx, f).length, 2, '完了の再送で増えた');
 });
