@@ -275,7 +275,8 @@ function runPbiSeed(seed, steps) {
   const h = createCtx(files, fault);
   const model = new Map();        // id -> row（全列、文字列）
   const deleted = [];             // 取り消し候補（removed）
-  let maxEverId = 0;              // これまでに見えた最大の番号（再利用の検査）
+  let maxEverId = 0;              // アプリがこれまでに見た最大の番号（再利用の検査）
+  const maxIdOf = (list) => list.reduce((m, x) => Math.max(m, Number((/^PBI-(\d+)$/.exec(x.id) || [])[1] || 0)), 0);
   const trace = [];
 
   const modelRows = () => Array.from(model.values());
@@ -318,10 +319,11 @@ function runPbiSeed(seed, steps) {
         files['product_backlog.csv'] = H.toCsvText(modelRows(), PBI_FIELDS);
         trace.push('ext:edit ' + row.id);
       } else if (kind === 2) {
-        const n = maxEverId + 1 + r.int(3);
+        // アプリがまだ見ていない ID は maxEverId に入れない（見る前に外で消されたら、アプリは知りようがなく
+        // 再利用しうる。web_app.js の advanceLastPbiIdWatermark_ の仕様）。見たかどうかは各操作の後で数える。
+        const n = Math.max(maxEverId, maxIdOf(rows)) + 1 + r.int(3);
         const id = 'PBI-' + String(n).padStart(3, '0');
         model.set(id, { id, title: '外で作った', description: '', acceptance_criteria: '', priority: 'Low', size: '', status: 'New', sprint: '', created_at: '2026-10-01', updated_at: '2026-10-01' });
-        maxEverId = Math.max(maxEverId, n);
         files['product_backlog.csv'] = H.toCsvText(modelRows(), PBI_FIELDS).replace(/\n$/, '');   // 末尾改行なし
         trace.push('ext:add ' + id);
       } else if (rows.length) {
@@ -445,6 +447,8 @@ function runPbiSeed(seed, steps) {
 
     trace.push(label + (fault.lockBusy ? ' [busy]' : '') + (mainFault ? ' [main-fail]' : '') + (histFault ? ' [hist-fail]' : ''));
     const ctxLabel = 'seed=' + seed + ' step=' + step + ' ' + label + '\n  trace: ' + trace.slice(-6).join('\n         ');
+    // ロックが取れた書き込みは、その時点のファイルを読んで高水位を進める（ここで外の ID を見たことになる）。
+    if (!fault.lockBusy) maxEverId = Math.max(maxEverId, maxIdOf(rows));
     res = plain(res);
     checkShape(res, ctxLabel);
     checkFilesParse(files, ctxLabel);
@@ -485,8 +489,12 @@ function runPbiSeed(seed, steps) {
   }
 }
 
+// 乱択の量。既定は npm test を速く保つ少なさにし、多く回すのは npm run test:stress（BUGHUNT_STRESS=1）だけ。
+const STRESS = process.env.BUGHUNT_STRESS === '1';
+const SEEDS = STRESS ? { pbi: 600, comment: 600, imp: 400 } : { pbi: 20, comment: 20, imp: 15 };
+
 test('C: PBI のランダム操作列（外部編集・障害注入あり）でモデル・ファイル・履歴が一致する', () => {
-  for (let seed = 1; seed <= 60; seed++) runPbiSeed(seed, 60);
+  for (let seed = 1; seed <= SEEDS.pbi; seed++) runPbiSeed(seed, 60);
 });
 
 // ---------------------------------------------------------------------------
@@ -625,7 +633,7 @@ function runCommentSeed(seed, steps) {
 }
 
 test('C: コメントのランダム操作列（3人・ログイン無し・障害注入）で権限・ファイル・履歴が一致する', () => {
-  for (let seed = 1; seed <= 60; seed++) runCommentSeed(seed, 50);
+  for (let seed = 1; seed <= SEEDS.comment; seed++) runCommentSeed(seed, 50);
 });
 
 // ---------------------------------------------------------------------------
@@ -658,6 +666,7 @@ function runImpedimentSeed(seed, steps) {
     const op = r.int(5);
     let res;
     let label;
+    let usedUndo = null;   // 未解決に戻すときに送った組（「完了する」は同じ組で送り直す）
     if (op === 0) {
       const f = { title: r.chance(0.9) ? '障害' + step : r.pick(['', '（括弧）']), description: randText(r), reported_by: r.chance(0.9) ? 'マヤ' : ' ', sprint: r.pick(['', 'sprint001']) };
       label = 'create ' + JSON.stringify(f).slice(0, 80);
@@ -678,6 +687,7 @@ function runImpedimentSeed(seed, steps) {
       if (res.ok || res.reason === 'partial') { if (res.moved) undo.push([res.moved, res.resolvedRow]); }
     } else if (op === 3 && undo.length) {
       const u = r.pick(undo);
+      usedUndo = u;
       label = 'unresolve ' + u[0].id;
       res = plain(h.ctx.apiUnresolveImpediment(u[0], u[1]));
     } else {
@@ -706,7 +716,7 @@ function runImpedimentSeed(seed, steps) {
       Object.keys(fault).forEach((k) => delete fault[k]);
       const again = label.indexOf('resolve ') === 0
         ? plain(h.ctx.apiResolveImpediment(label.slice(8), '直した,\n2行', rowsOf(files['impediment_log.csv'], IMP_FIELDS).find((x) => x.id === label.slice(8))))
-        : plain(h.ctx.apiUnresolveImpediment(undo.find((u) => u[0].id === label.slice(10))[0], undo.find((u) => u[0].id === label.slice(10))[1]));
+        : plain(h.ctx.apiUnresolveImpediment(usedUndo[0], usedUndo[1]));   // 同じ ID の古い組ではなく、送った組
       assert.equal(again.ok, true, ctxLabel + ': 「完了する」で揃わない ' + JSON.stringify(again).slice(0, 200));
       assert.deepEqual(plain(h.ctx.apiGetView('impediment')).view.pending, [], ctxLabel + ': pending が残った');
     }
@@ -730,7 +740,7 @@ function runImpedimentSeed(seed, steps) {
 }
 
 test('C: 障害物のランダム操作列（障害注入・部分書き込みの回復）で行が失われない', () => {
-  for (let seed = 1; seed <= 40; seed++) runImpedimentSeed(seed, 40);
+  for (let seed = 1; seed <= SEEDS.imp; seed++) runImpedimentSeed(seed, 40);
 });
 
 // ---------------------------------------------------------------------------

@@ -61,6 +61,7 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
 ## GAS 側の開発
 ```bash
 npm test                              # 純関数層のテスト
+npm run test:stress                   # 乱択のモデル試験を多くの種で回す（時間がかかる）
 cd gas && npx @google/clasp@3 push    # デプロイ（管理者のみ）
 ```
 
