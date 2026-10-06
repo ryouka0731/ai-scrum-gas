@@ -103,6 +103,7 @@ const H = (function () {
     };
     const root = { getFoldersByName: (n) => (n === 'scrum' ? it([scrum]) : it([])) };
     const props = { SCRUM_FOLDER_ID: 'fake' };
+    const cache = {};   // CacheService（取り消しの鍵の預け先）
     const ctx = {
       console,
       DriveApp: { getFolderById: () => root },
@@ -115,6 +116,11 @@ const H = (function () {
         getScriptTimeZone: () => 'UTC',
         getActiveUser: () => ({ getEmail: () => (fault.user === undefined ? 'me@example.com' : fault.user) }),
       },
+      CacheService: { getScriptCache: () => ({
+        get: (k) => (Object.prototype.hasOwnProperty.call(cache, k) ? cache[k] : null),
+        put: (k, v) => { cache[k] = String(v); },
+        remove: (k) => { delete cache[k]; },
+      }) },
       Utilities: {
         getUuid: () => { uuidN++; return ('0000000' + uuidN.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; },
         formatDate: (d) => {
@@ -133,7 +139,7 @@ const H = (function () {
     fs.readdirSync(GAS_DIR).filter((n) => n.slice(-3) === '.js').sort().forEach((n) => {
       vm.runInContext(fs.readFileSync(path.join(GAS_DIR, n), 'utf8'), ctx, { filename: n });
     });
-    return { ctx, files, props, fault, setCalls: () => setCalls };
+    return { ctx, files, props, cache, fault, setCalls: () => setCalls };
   }
 
   function baseFiles() {
@@ -292,7 +298,7 @@ test('C-2: 雛形と同じ ID の本物の PBI は、状態変更・編集・削
   assert.equal(del.ok, true);
   assert.equal(del.removed.title, '本物2');
   assert.ok(f['product_backlog.csv'].indexOf('（PBIタイトル）') !== -1, '雛形は消えない');
-  assert.equal(plain(h.ctx.apiRestorePbi(del.removed)).ok, true, '雛形があっても本物の行を戻せる');
+  assert.equal(plain(h.ctx.apiRestorePbi(del.undoToken)).ok, true, '雛形があっても本物の行を戻せる');
   assert.equal(card().title, '本物2');
   const hist = rowsOf(f['change_log.csv'], CHG_FIELDS).filter((r) => r.target_id === 'PBI-001');
   assert.deepEqual(hist.map((r) => r.action + ':' + r.field), ['update:status', 'update:title', 'delete:', 'restore:']);
@@ -308,18 +314,23 @@ test('C-3: 同じ ID の行が2つあると、最初の行を消して返し、�
   assert.equal(del.removed.title, 'first');
   assert.deepEqual(rowsOf(f['change_log.csv'], CHG_FIELDS).map((r) => r.action), ['delete']);
   // 取り消しで消した行（first）が戻る。二重に押しても増えない。
-  assert.equal(plain(h.ctx.apiRestorePbi(del.removed)).ok, true, '消した行を戻せない');
-  assert.equal(plain(h.ctx.apiRestorePbi(del.removed)).reason, 'duplicate_id');
+  assert.equal(plain(h.ctx.apiRestorePbi(del.undoToken)).ok, true, '消した行を戻せない');
+  assert.equal(plain(h.ctx.apiRestorePbi(del.undoToken)).reason, 'expired');
   assert.deepEqual(rowsOf(f['product_backlog.csv'], PBI_FIELDS).map((r) => r.title), ['second', 'first']);
   assert.deepEqual(rowsOf(f['change_log.csv'], CHG_FIELDS).map((r) => r.action), ['delete', 'restore']);
 });
 
-test('C-3: sharedId の無い取り消しは、同じ ID の別の行があれば従来どおり重複として拒む', () => {
+test('C-3: 削除の時点で同じ ID の行が無かった取り消しは、その後に同じ ID の行が現れていれば重複として拒む', () => {
   const f = baseFiles();
-  f['product_backlog.csv'] += 'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  f['product_backlog.csv'] += 'PBI-002,first,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
   const h = createCtx(f);
-  const row = { id: 'PBI-002', title: 'first', status: 'New', created_at: '2026-10-01 00:00:00', updated_at: 't' };
-  assert.equal(plain(h.ctx.apiRestorePbi(row)).reason, 'duplicate_id');
+  const del = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:00'));
+  assert.equal(del.ok, true);
+  // ローカルの Claude Code が同じ ID の行を書き足した。
+  f['product_backlog.csv'] += 'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  assert.equal(plain(h.ctx.apiRestorePbi(del.undoToken)).reason, 'duplicate_id');
+  // ブラウザから sharedId を付けた行を送っても通らない（行の中身は受け取らない）。
+  assert.equal(plain(h.ctx.apiRestorePbi(Object.assign({}, del.removed, { sharedId: true }))).reason, 'expired');
 });
 
 test('BUG C-7: change_log.csv の末尾が閉じていない引用符で終わると、以後の履歴が黙って既存セルに飲み込まれる', () => {

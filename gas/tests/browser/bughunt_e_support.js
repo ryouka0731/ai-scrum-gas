@@ -101,7 +101,7 @@ function stubScript(data) {
     + '    return { ok: true, removed: rem, comments: group() }; }); };\n'
     + '  r.apiDeletePbi = function (id) { window.__calls.push({ method: "apiDeletePbi", args: [id] }); reply(function () {\n'
     + '    var row = CFG.rows.filter(function (x) { return x.id === id; })[0] || null;\n'
-    + '    return { ok: true, board: CFG.afterDelete[id], id: null, removed: row }; }); };\n'
+    + '    return { ok: true, board: CFG.afterDelete[id], id: null, undoToken: "tok-del", removed: row }; }); };\n'
     + '  ["apiUpdateStatus", "apiCreatePbi", "apiUpdatePbi", "apiRestorePbi", "apiRestoreComment", "apiResolveImpediment", "apiUnresolveImpediment", "apiCreateImpediment", "apiUpdateImpediment"].forEach(function (m) {\n'
     + '    r[m] = function () { window.__calls.push({ method: m, args: Array.prototype.slice.call(arguments) });\n'
     + '      reply(function () { return { ok: false, message: "stub: " + m }; }); };\n'

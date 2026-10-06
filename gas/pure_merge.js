@@ -172,10 +172,10 @@ function deleteRow(rows, id, expectedUpdatedAt) {
  * 本物の行を戻すとき、同じ ID の雛形の行は重複とみなさない（雛形の陰にある本物の行を
  * 消したら戻せなくなるため）。
  *
- * opts.allowSameId が true のときは、同じ ID の別の行（中身が違う行）があっても戻す。
+ * opts.allowSameId が true のときは、同じ ID の行があっても戻す（中身が同じでも）。
  * もともと同じ ID の行が複数あり、その1つを消したときの取り消しに使う（削除前の状態に
- * 戻すだけ）。その場合も、戻す行と updated_at 以外が同じ行が既にあれば戻したものと
- * みなして拒む（取り消しの二重押しで行を増やさない）。
+ * 戻すだけ）。二重に戻さないことは呼び出し側が保証する（apiRestorePbi は一度しか使えない
+ * 鍵で預けた行を戻す）。
  */
 function restoreRow(rows, row, allFields, nowText, opts) {
   const list = rows || [];
@@ -186,15 +186,8 @@ function restoreRow(rows, row, allFields, nowText, opts) {
   // 返すと「この PBI は既に存在します」と出てしまい、実際の原因と食い違う。
   if (!key) return { ok: false, reason: 'invalid', current: null };
   const srcIsReal = !isPlaceholderRow(src);
-  const sameContent = function (r) {
-    return (allFields || []).every(function (f) {
-      if (f === 'id' || f === 'updated_at') return true;
-      return String(r[f] === undefined || r[f] === null ? '' : r[f]) === String(src[f] === undefined || src[f] === null ? '' : src[f]);
-    });
-  };
-  for (let i = 0; i < list.length; i++) {
+  for (let i = 0; i < list.length && !allowSameId; i++) {
     if (String(list[i].id || '').trim() !== key || (srcIsReal && isPlaceholderRow(list[i]))) continue;
-    if (allowSameId && !sameContent(list[i])) continue;
     return { ok: false, reason: 'duplicate_id', current: list[i] };
   }
   const back = {};

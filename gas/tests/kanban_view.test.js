@@ -608,7 +608,7 @@ test('書き込みが重なっても、読み込み中表示と表示先は食�
       ok: function (h) { return { ok: true, id: 'PBI-003', board: h.boardOf(INITIAL) }; } },
     { name: '削除', start: function (h) { h.openCard('PBI-001'); h.click('panel-delete'); },
       ok: function (h) { return { ok: true, id: null,
-        removed: { id: 'PBI-001', title: 'A', updated_at: 'T1' }, board: h.boardOf(INITIAL) }; } },
+        undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A', updated_at: 'T1' }, board: h.boardOf(INITIAL) }; } },
   ];
 
   writes.forEach(function (w) {
@@ -644,7 +644,7 @@ test('削除の取り消しが読み取りと重なっても、読み込み中�
   h.openCard('PBI-001');
   h.click('panel-delete');
   latest(h).handlers.success({ ok: true, id: null,
-    removed: { id: 'PBI-001', title: 'A', updated_at: 'T1' }, board: h.boardOf(INITIAL) });
+    undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A', updated_at: 'T1' }, board: h.boardOf(INITIAL) });
   assert.equal(h.hiddenOf('toast'), false, '取り消しの通知が出ていない');
 
   h.click('toast-undo');

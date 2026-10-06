@@ -231,7 +231,7 @@ function assertNoOverlongRows_(text, name) {
 /**
  * 書き戻しを伴う API の共通手順。
  *
- * mutate(rows) は { ok:true, rows, id?, removed? } か { ok:false, reason, message } を返すこと。
+ * mutate(rows) は { ok:true, rows, id?, removed?, afterWrite? } か { ok:false, reason, message } を返すこと。
  * ロックを取ってから読み直すのは、画面を描いた時点のデータを信じないため
  * （Drive 同期には数秒から数分のラグがある）。
  */
@@ -264,6 +264,9 @@ function withBacklogWrite_(mutate) {
       };
     }
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
+    // 本体が書けた直後（まだロックの中）に、操作ごとの後始末を行う（取り消しの鍵の預け入れ・破棄）。
+    // 返した項目は応答に足す。
+    const extra = typeof result.afterWrite === 'function' ? result.afterWrite() : null;
     // 採番した ID の高水位は、本体が書けてから進める。書く前に進めると、書き込みが
     // 失敗したときに使われていない ID が消費され、次の作成で欠番になる。
     // 記帳は best-effort（advanceLastPbiIdWatermark_ と同じ）。失敗しても新しい行は
@@ -284,6 +287,7 @@ function withBacklogWrite_(mutate) {
       removed: result.removed || null
     };
     if (warning) out.historyWarning = warning;
+    if (extra) Object.keys(extra).forEach(function (k) { out[k] = extra[k]; });
     return out;
   } catch (e) {
     return { ok: false, reason: 'error', message: e.message, board: null };
@@ -307,12 +311,18 @@ function conflictMessage_(reason, retryHint) {
   return 'この PBI が見つかりません。最新の内容に更新しました。';
 }
 
-/** 編集を許した項目だけを取り出す。それ以外は捨てる。 */
+/**
+ * 編集を許した項目だけを取り出す。それ以外は捨てる。
+ * 改行は LF に揃える（CSV の読み取り＝csvToObjects と同じ）。揃えないと、同じ文面の CRLF を
+ * 送っただけで「変わった」とみなされ、見た目の同じ変更が履歴に残る。
+ */
 function pickEditableFields_(fields) {
   const src = fields || {};
   const out = {};
   PBI_EDITABLE_FIELDS.forEach(function (f) {
-    if (Object.prototype.hasOwnProperty.call(src, f)) out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]);
+    if (Object.prototype.hasOwnProperty.call(src, f)) {
+      out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]).replace(/\r\n?/g, '\n');
+    }
   });
   return out;
 }
@@ -380,10 +390,19 @@ function apiUpdatePbi(id, fields, expectedUpdatedAt) {
   });
 }
 
+/** 取り消し用に消した行を預ける時間（秒）。通知が消えたあとも少しのあいだは戻せる。 */
+const PBI_UNDO_TTL_SECONDS = 600;
+const PBI_UNDO_KEY_PREFIX = 'undo:';
+
 /**
  * PBI を消す。確認ダイアログは置かず、実行後に取り消せる通知で受ける
  * （apiRestorePbi）。「完了」は Done 列への移動で表すので、これは
  * 「間違って作った」場合の操作である。
+ *
+ * 消した行はサーバ側（CacheService）に預け、その鍵（undoToken）だけを返す。
+ * 取り消しは鍵を受け取り、預かった行だけを戻す（ブラウザが送る行の中身は信じない）。
+ * removed は通知の表示に使うだけで、取り消しには使わない。
+ * 預けられなかったとき（キャッシュの失敗）は undoToken を null にする（削除そのものは成功）。
  */
 function apiDeletePbi(id, expectedUpdatedAt) {
   return withBacklogWrite_(function (rows) {
@@ -394,19 +413,49 @@ function apiDeletePbi(id, expectedUpdatedAt) {
         message: conflictMessage_(r.reason, '内容を確認し、もう一度削除すると更新後の内容ごと消します。')
       };
     }
-    // 取り消しに使うため、消した行そのものを返す（deleteRow が実際に消した行。
-    // 同じ ID の行が複数あっても、消した行と返す行が食い違わない）。
-    // 同じ ID の本物の行がまだ残るときは sharedId を付ける。取り消し（apiRestorePbi）は
-    // それを見て、残った行を重複とみなさずに戻す（削除前の状態に戻すだけ）。
+    // deleteRow が実際に消した行を預ける（同じ ID の行が複数あっても、消した行と預ける行が食い違わない）。
+    // 同じ ID の本物の行がまだ残るときは shared を記録する。取り消しはそれを見て、残った行を
+    // 重複とみなさずに戻す（削除前の状態に戻すだけ。鍵は一度しか使えないので二重には増えない）。
     const key = String(id || '').trim();
     const shared = r.rows.some(function (x) { return String(x.id || '').trim() === key && !isPlaceholderRow(x); });
-    return { ok: true, rows: r.rows, removed: shared ? Object.assign({}, r.removed, { sharedId: true }) : r.removed };
+    const held = JSON.stringify({ row: r.removed, shared: shared });
+    return {
+      ok: true, rows: r.rows, removed: r.removed,
+      // 本体を書けてから預ける（書けなかった削除の鍵を残さない）。ロックの中で呼ばれる。
+      afterWrite: function () {
+        try {
+          const token = String(Utilities.getUuid());
+          CacheService.getScriptCache().put(PBI_UNDO_KEY_PREFIX + token, held, PBI_UNDO_TTL_SECONDS);
+          return { undoToken: token };
+        } catch (e) {
+          return { undoToken: null };
+        }
+      }
+    };
   });
+}
+
+/** 預けた行を鍵で引く。無い・期限切れ・壊れているときは null。 */
+function takeHeldPbi_(token) {
+  if (typeof token !== 'string' || !token) return null;
+  try {
+    const text = CacheService.getScriptCache().get(PBI_UNDO_KEY_PREFIX + token);
+    if (!text) return null;
+    const held = JSON.parse(text);
+    return held && held.row ? held : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
  * 削除した PBI を戻す。通知の「取り消す」から呼ばれる。
  * apiCreatePbi ではなくこちらを使うのは、元の id と created_at を保つため。
+ *
+ * 引数は apiDeletePbi が返した undoToken だけ。戻すのはサーバが預かった行で、ブラウザが
+ * 送る中身は使わない（google.script.run はブラウザから任意の値で呼べるため、行を受け取ると
+ * 別の行を同じ ID で差し込める）。鍵は戻せたときに捨てる（一度しか使えない）。
+ * 鍵が無い・期限切れなら reason 'expired' で断る。
  *
  * 復元は「今そこに表示・編集・削除できていた行を、そのまま戻す」操作である。
  * status / priority / size が語彙外の行（ローカルの Claude Code が直接 CSV に
@@ -414,20 +463,23 @@ function apiDeletePbi(id, expectedUpdatedAt) {
  * 取り消し操作が名目だけになる（changedFields のコメントにある「常に検証する
  * と保存そのものが塞がれる」と同じ理由）。そのため語彙は検証しない。
  *
- * google.script.run はブラウザから任意の値で呼べるため、次の3点だけを検証する。
+ * 預かった行にも次の3点を検証する（預けた後に記帳や CSV が変わることがあるため）。
  * - title が空でないこと（空タイトルの行は isPlaceholderRow で盤面に出ないため、
  *   戻しても見えない）
  * - id が PBI-\d+ の形であること
  * - id の番号が「今までに採番された最大値」を超えていないこと
- *   （isPbiIdWithinHighWater。復元は既存の行を戻す操作であり、最大値を超える
- *   ことは原理的にありえない。超えていれば、でっち上げ ID や改ざんとみなし、
- *   以後の採番を汚染させない。ただし上限が一つも立たないとき＝記帳が
+ *   （isPbiIdWithinHighWater。ただし上限が一つも立たないとき＝記帳が
  *   best-effort ゆえ一度も成功していないときは、判定をあきらめて通す。
  *   詳しくは isPbiIdWithinHighWater のコメント参照）
  */
-function apiRestorePbi(row) {
+function apiRestorePbi(token) {
   return withBacklogWrite_(function (rows) {
-    const id = String((row || {}).id || '').trim();
+    const held = takeHeldPbi_(token);
+    if (!held) {
+      return { ok: false, reason: 'expired', message: '取り消しの期限が切れました。' };
+    }
+    const row = held.row;
+    const id = String(row.id || '').trim();
     if (!PBI_ID_RE.test(id)) {
       return { ok: false, reason: 'invalid', message: 'PBI ID の形式が不正です: ' + id };
     }
@@ -435,20 +487,27 @@ function apiRestorePbi(row) {
     if (!isPbiIdWithinHighWater(id, scanRows, getLastPbiId_())) {
       return { ok: false, reason: 'invalid', message: 'PBI ID が採番済みの範囲を超えています: ' + id };
     }
-    const title = String((row || {}).title || '').trim();
+    const title = String(row.title || '').trim();
     if (!title) {
       return { ok: false, reason: 'invalid', message: 'タイトルを入力してください。' };
     }
 
-    // sharedId は apiDeletePbi が「同じ ID の行が残った」ときに付ける印（その場合だけ同じ ID でも戻す）。
-    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_(), { allowSameId: (row || {}).sharedId === true });
+    // shared は削除の時点で同じ ID の行が残っていた印（その場合だけ同じ ID でも戻す）。
+    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_(), { allowSameId: held.shared === true });
     if (!r.ok) {
       const message = r.reason === 'invalid'
         ? 'PBI ID が指定されていません。'
         : 'この PBI は既に存在します。取り消しは要りません。';
       return { ok: false, reason: r.reason, message: message };
     }
-    return { ok: true, rows: r.rows, historyAction: 'restore' };
+    return {
+      ok: true, rows: r.rows, historyAction: 'restore',
+      // 書けてから鍵を捨てる。ロックの中なので、同じ鍵の2回目は必ずこの後に読み、expired になる。
+      afterWrite: function () {
+        try { CacheService.getScriptCache().remove(PBI_UNDO_KEY_PREFIX + token); } catch (e) { /* best-effort */ }
+        return null;
+      }
+    };
   });
 }
 

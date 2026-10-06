@@ -25,7 +25,7 @@ test('I1: 削除したカードが別の経路で戻り、読み込みで見え�
   const h = boot({ New: [A, B] });
   h.openCard('PBI-001');
   h.click('panel-delete');
-  last(h).handlers.success({ ok: true, removed: A, board: h.boardOf(cols({ New: [B] })) });
+  last(h).handlers.success({ ok: true, undoToken: 'tok-del', removed: A, board: h.boardOf(cols({ New: [B] })) });
   h.click('reload');
   last(h).handlers.success({ ok: true, view: h.boardOf(cols({ New: [A, B] })) });
   h.drag('PBI-001', 'Ready');
@@ -43,7 +43,7 @@ test('I1: 削除の確定時に送信中の書き込みが残っていても、�
   const mC = last(h);
   h.openCard('PBI-001');
   h.click('panel-delete');
-  last(h).handlers.success({ ok: true, removed: A, board: h.boardOf(cols({ New: [B], Ready: [C] })) });
+  last(h).handlers.success({ ok: true, undoToken: 'tok-del', removed: A, board: h.boardOf(cols({ New: [B], Ready: [C] })) });
   h.click('reload');
   last(h).handlers.success({ ok: true, view: h.boardOf(cols({ New: [A, B], Ready: [C] })) });
   assert.ok(has(h.screen(), 'PBI-001'));
@@ -60,7 +60,7 @@ test('I1: 削除の確定前に出した書き込みの古い写しでは戻さ�
   const mB = last(h);
   h.openCard('PBI-001');
   h.click('panel-delete');
-  last(h).handlers.success({ ok: true, removed: A, board: h.boardOf(cols({ Ready: [B] })) });
+  last(h).handlers.success({ ok: true, undoToken: 'tok-del', removed: A, board: h.boardOf(cols({ Ready: [B] })) });
   assert.deepEqual(Object.keys(h.sandbox.deletedPbiIds), ['PBI-001']);
   // 削除より先にサーバが処理した移動の応答（A がまだある古い写し）
   mB.handlers.success({ ok: true, board: h.boardOf(cols({ New: [A], Ready: [{ ...B, updated_at: 'T2' }] })) });
@@ -72,7 +72,7 @@ test('I1: 送信中の書き込みが無いときに確定した削除は、控�
   const h = boot({ New: [A, B] });
   h.openCard('PBI-001');
   h.click('panel-delete');
-  last(h).handlers.success({ ok: true, removed: A, board: h.boardOf(cols({ New: [B] })) });
+  last(h).handlers.success({ ok: true, undoToken: 'tok-del', removed: A, board: h.boardOf(cols({ New: [B] })) });
   assert.deepEqual(Object.keys(h.sandbox.deletedPbiIds), []);
 });
 

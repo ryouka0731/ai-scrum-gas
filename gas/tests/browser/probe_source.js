@@ -638,7 +638,8 @@
         deletedId: id,
         toastHidden: toast.hidden,
         method: call.method || null,
-        sentId: (call.args && call.args[0] && call.args[0].id) || null,
+        // 送るのは削除の応答が運んだ鍵だけ（見本の鍵は "tok-" + 消した ID）。
+        sentId: (call.args && typeof call.args[0] === 'string' && call.args[0].indexOf('tok-') === 0) ? call.args[0].slice(4) : null,
         message: txt(message),
         messageKind: message.className,
       };

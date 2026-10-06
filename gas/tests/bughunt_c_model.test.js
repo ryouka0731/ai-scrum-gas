@@ -55,6 +55,7 @@ const H = (function () {
     };
     const root = { getFoldersByName: (n) => (n === 'scrum' ? it([scrum]) : it([])) };
     const props = { SCRUM_FOLDER_ID: 'fake' };
+    const cache = {};   // CacheService（取り消しの鍵の預け先）
     const ctx = {
       console,
       DriveApp: { getFolderById: () => root },
@@ -67,6 +68,11 @@ const H = (function () {
         getScriptTimeZone: () => 'UTC',
         getActiveUser: () => ({ getEmail: () => (fault.user === undefined ? 'me@example.com' : fault.user) }),
       },
+      CacheService: { getScriptCache: () => ({
+        get: (k) => (Object.prototype.hasOwnProperty.call(cache, k) ? cache[k] : null),
+        put: (k, v) => { cache[k] = String(v); },
+        remove: (k) => { delete cache[k]; },
+      }) },
       Utilities: {
         getUuid: () => { uuidN++; return ('0000000' + uuidN.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; },
         formatDate: (d) => {
@@ -85,7 +91,7 @@ const H = (function () {
     fs.readdirSync(GAS_DIR).filter((n) => n.slice(-3) === '.js').sort().forEach((n) => {
       vm.runInContext(fs.readFileSync(path.join(GAS_DIR, n), 'utf8'), ctx, { filename: n });
     });
-    return { ctx, files, props, fault, setCalls: () => setCalls };
+    return { ctx, files, props, cache, fault, setCalls: () => setCalls };
   }
 
   function baseFiles() {
@@ -151,7 +157,7 @@ const H = (function () {
 const { createCtx, baseFiles, plain, rng, parse, rowsOf, PBI_FIELDS, IMP_FIELDS, CMT_FIELDS, CHG_FIELDS } = H;
 const STATUSES = ['New', 'Ready', 'In Progress', 'Review', 'Done'];
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low'];
-const REASONS = ['busy', 'invalid', 'forbidden', 'not_found', 'conflict', 'error', 'bad_status', 'duplicate_id', 'partial'];
+const REASONS = ['busy', 'invalid', 'forbidden', 'not_found', 'conflict', 'error', 'bad_status', 'duplicate_id', 'partial', 'expired'];
 
 // ---------------------------------------------------------------------------
 // 共通の検査
@@ -405,38 +411,35 @@ function runPbiSeed(seed, steps) {
       apply = () => {
         assert.deepEqual(plain(res.removed), target, label + ': removed が消した行と違う');
         model.delete(target.id);
-        deleted.push(plain(res.removed));
+        // 取り消しは鍵（undoToken）で行う。サーバが預かった行だけが戻る。
+        assert.equal(typeof res.undoToken, 'string', label + ': undoToken が無い');
+        deleted.push({ row: plain(res.removed), token: res.undoToken, used: false });
       };
       histAction = 'delete';
     } else if (op === 5 && deleted.length) {
-      const row = r.pick(deleted);
-      label = 'restore ' + row.id;
+      const held = r.pick(deleted);
+      const row = held.row;
+      label = 'restore ' + row.id + (held.used ? ' [used]' : '');
       const exists = model.has(row.id);
-      expect = exists ? { ok: false, reason: 'duplicate_id' } : { ok: true };
-      res = h.ctx.apiRestorePbi(row);
+      // 鍵は一度しか使えない。使った鍵は expired、まだなら同じ ID が今あれば重複。
+      expect = held.used ? { ok: false, reason: 'expired' } : exists ? { ok: false, reason: 'duplicate_id' } : { ok: true };
+      res = h.ctx.apiRestorePbi(held.token);
       apply = () => {
         const fileRow = pbiModelRows(files).find((x) => x.id === row.id);
         assert.ok(fileRow, label + ': 戻した行が無い');
         assert.equal(fileRow.created_at, row.created_at, label + ': created_at が保たれない');
         model.set(row.id, Object.assign({}, row, { updated_at: fileRow.updated_at }));
+        held.used = true;
       };
       histAction = 'restore';
     } else {
-      // 不正な引数での取り消し
+      // 不正な引数での取り消し（行の中身・知らない鍵・型の違う値）。どれも預かった行が無いので expired。
       const bad = r.pick([null, 'PBI-001', [], { id: 'PBI-99999', title: 'でっち上げ' }, { id: 'IMP-002', title: 'x' },
-        { id: 'PBI-000', title: 'x' }, { title: 'id なし' }, { id: 'PBI-001' }]);
+        { id: 'PBI-000', title: 'x' }, { title: 'id なし' }, { id: 'PBI-001' }, 'undo:x', 'ffffffff-0000-4000-8000-000000000000', 123]);
       label = 'restore-bad ' + JSON.stringify(bad);
-      // 上限（今の行の最大 ID と記録済みの高水位）が1つも立たないときだけ、でっち上げ ID も通る（仕様）。
-      const num = (t) => Number((/^PBI-(\d+)$/.exec(String(t || '').trim()) || [])[1] || 0);
-      const noLimit = Math.max.apply(null, rows.map((x) => num(x.id)).concat([num(h.props.LAST_PBI_ID)])) === 0;
-      const fabricated = !!bad && bad.id === 'PBI-99999';
-      expect = fabricated && noLimit ? { ok: true } : { ok: false };
+      expect = { ok: false, reason: 'expired' };
       res = h.ctx.apiRestorePbi(bad);
-      apply = () => {
-        const fileRow = pbiModelRows(files).find((x) => x.id === bad.id);
-        model.set(bad.id, Object.assign({ id: bad.id, title: '', description: '', acceptance_criteria: '', priority: '', size: '', status: '', sprint: '', created_at: '' }, bad, { updated_at: fileRow.updated_at }));
-        maxEverId = Math.max(maxEverId, 99999);
-      };
+      apply = () => { throw new Error(label + ': 預かっていない取り消しが通った'); };
       histAction = 'restore';
     }
 

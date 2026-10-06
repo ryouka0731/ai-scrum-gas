@@ -275,6 +275,13 @@ test('restoreRow は既に同じ id があれば拒否する', () => {
   assert.equal(r.reason, 'duplicate_id');
 });
 
+test('restoreRow は allowSameId なら、中身まで同じ行があっても戻す（二重押しの防止は呼び出し側の鍵）', () => {
+  const list = [{ id: 'PBI-007', title: 'ふたご', updated_at: 'T2' }];
+  const r = restoreRow(list, { id: 'PBI-007', title: 'ふたご', updated_at: 'T1' }, FIELDS, '2026-09-08 12:00:00', { allowSameId: true });
+  assert.equal(r.ok, true);
+  assert.equal(r.rows.length, 2);
+});
+
 test('restoreRow は元の配列を書き換えない', () => {
   const list = [{ id: 'PBI-001', updated_at: 'T1' }];
   restoreRow(list, { id: 'PBI-007', title: 'a' }, FIELDS, '2026-09-08 12:00:00');

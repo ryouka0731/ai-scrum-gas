@@ -53,6 +53,7 @@ const H = (function () {
     };
     const root = { getFoldersByName: (n) => (n === 'scrum' ? it([scrum]) : it([])) };
     const props = { SCRUM_FOLDER_ID: 'fake' };
+    const cache = {};   // CacheService（取り消しの鍵の預け先）
     const ctx = {
       console,
       DriveApp: { getFolderById: () => root },
@@ -65,6 +66,11 @@ const H = (function () {
         getScriptTimeZone: () => 'UTC',
         getActiveUser: () => ({ getEmail: () => (fault.user === undefined ? 'me@example.com' : fault.user) }),
       },
+      CacheService: { getScriptCache: () => ({
+        get: (k) => (Object.prototype.hasOwnProperty.call(cache, k) ? cache[k] : null),
+        put: (k, v) => { cache[k] = String(v); },
+        remove: (k) => { delete cache[k]; },
+      }) },
       Utilities: {
         getUuid: () => { uuidN++; return ('0000000' + uuidN.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; },
         formatDate: (d) => {
@@ -83,7 +89,7 @@ const H = (function () {
     fs.readdirSync(GAS_DIR).filter((n) => n.slice(-3) === '.js').sort().forEach((n) => {
       vm.runInContext(fs.readFileSync(path.join(GAS_DIR, n), 'utf8'), ctx, { filename: n });
     });
-    return { ctx, files, props, fault, setCalls: () => setCalls };
+    return { ctx, files, props, cache, fault, setCalls: () => setCalls };
   }
 
   function baseFiles() {

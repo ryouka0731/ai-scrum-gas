@@ -1567,7 +1567,12 @@ function deletePbi() {
         deletedPbiIds[id] = boardWriteIssued;
         render(applyServerBoard(res.board, id, trustWholeBoard));
         if (mine) closePanel(true);
-        showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
+        // 取り消しはサーバが預かった行を鍵（undoToken）で戻す。預けられなかったときは取り消しを出さない。
+        if (res.undoToken) {
+          showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed, res.undoToken); });
+        } else {
+          setMessage(id + '「' + title + '」を削除しました（取り消しはできません）。', 'info');
+        }
         afterHistoryWrite(res, id, msgMark);
       } else {
         if (res.board) render(applyServerBoard(res.board, id, trustWholeBoard));
@@ -1603,9 +1608,12 @@ function deletePbi() {
     .apiDeletePbi(id, expectedUpdatedAt);
 }
 
-/** 削除を取り消す。元の ID と作成日を保ったまま戻す（apiCreatePbi は使わない）。 */
-function restorePbi(row) {
-  if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+/**
+ * 削除を取り消す。元の ID と作成日を保ったまま戻す（apiCreatePbi は使わない）。
+ * 送るのは削除の応答が運んだ鍵だけ。戻す行はサーバが預かったもので、row は表示（id）にだけ使う。
+ */
+function restorePbi(row, token) {
+  if (!row || !token) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   setMessage(row.id + ' を戻しています…', 'info');
   // pendingIds は実在カードの表示・操作抑止にも使われる。素の id で載せると、
   // 送信中に loadView() で board へ戻ってきた同じ id のカードが送信中扱いになり、
@@ -1642,7 +1650,7 @@ function restorePbi(row) {
       setMessage('取り消せませんでした: ' + err.message, 'error');
       settleBoardWrite(bw);
     })
-    .apiRestorePbi(row);
+    .apiRestorePbi(token);
 }
 
 // --- 障害物パネル -----------------------------------------------------------

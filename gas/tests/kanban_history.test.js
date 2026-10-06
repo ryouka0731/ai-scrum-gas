@@ -181,7 +181,7 @@ test('8b. ドラッグ・削除・削除の取り消しの historyWarning も全
   h.openCard('PBI-001');
   h.click('panel-delete');
   const removed = { id: 'PBI-001', title: 'A' };
-  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), removed: removed,
+  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), undoToken: 'tok-del', removed: removed,
     historyWarning: WARN + '（削除）' });
   // 削除の成功は通知で伝える。前の操作の文言（ドラッグ）に足さない。
   assert.equal(h.textOf('message'), WARN + '（削除）');
@@ -198,7 +198,7 @@ test('8g. 成功の文言を出さない応答（削除は通知で伝える）�
   assert.equal(h.textOf('message'), 'PBI-002 を Ready に移しました。');
   h.openCard('PBI-001');
   h.click('panel-delete');
-  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), removed: { id: 'PBI-001', title: 'A' },
+  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A' },
     historyWarning: WARN });
   assert.equal(h.textOf('message'), WARN, '前の操作の文言に足した');
 });

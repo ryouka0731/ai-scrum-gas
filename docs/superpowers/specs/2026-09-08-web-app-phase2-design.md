@@ -101,8 +101,8 @@ UI の判断は、社内の登壇資料「SCM 店舗在庫管理領域 UI 改善
 |---|---|
 | `apiCreatePbi(fields)` | 新しい行を追加する。ID はサーバ側で採番する |
 | `apiUpdatePbi(id, fields, expectedUpdatedAt)` | 既存の行を書き換える |
-| `apiDeletePbi(id, expectedUpdatedAt)` | 行を削除する。取り消しに使う行の内容を返す |
-| `apiRestorePbi(row)` | 削除した行を元の id / created_at のまま戻す |
+| `apiDeletePbi(id, expectedUpdatedAt)` | 行を削除する。取り消しに使う行の内容を返す（2026-10-06 から鍵 `undoToken`。下の追記） |
+| `apiRestorePbi(row)` | 削除した行を元の id / created_at のまま戻す（2026-10-06 から引数は `undoToken`） |
 
 `google.script.run` から呼ばれるため、この3つは公開のままにする（`_` を付けない）。
 **新しく足す内部関数には `_` を付ける。** 付け忘れるとブラウザから直接呼べてしまい、
@@ -163,6 +163,12 @@ UI の判断は、社内の登壇資料「SCM 店舗在庫管理領域 UI 改善
 消えた PBI を `apiCreatePbi` で作り直すと ID が変わり、ローカルの Claude Code が
 残した参照が切れる。そこで `apiRestorePbi(row)` を足し、**元の id / created_at を保ったまま
 行を戻す**。`updated_at` は戻した時刻で更新する（戻したことも変更だから）。
+
+> **追記（2026-10-06）**: 取り消しはブラウザが送る行を受け取らない形に変えた。
+> `apiDeletePbi` は消した行をサーバ側（`CacheService`、10分）に預けて鍵 `undoToken` を返し、
+> `apiRestorePbi(undoToken)` は預かった行だけを戻す（鍵は一度だけ使える。無い・期限切れは
+> 「取り消しの期限が切れました。」）。`removed` は通知の表示用。行を受け取る形では、同じ ID で
+> 別の内容を差し込めたため。預けられなかったときは取り消しの通知を出さない。
 
 通知は一定時間で消える。消えたあとは取り消せない。時間内に押さなかった場合に備え、
 削除の対象は「間違って作った PBI」であることを画面の文言で伝える

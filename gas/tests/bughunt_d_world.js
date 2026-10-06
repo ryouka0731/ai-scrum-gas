@@ -73,6 +73,7 @@ function createServer(files) {
   const scrum = { getFilesByName: function (n) { return Object.prototype.hasOwnProperty.call(files, n) ? iter([file(n)]) : iter([]); } };
   const root = { getFoldersByName: function (n) { return n === 'scrum' ? iter([scrum]) : iter([]); } };
   const props = { SCRUM_FOLDER_ID: 'f' };
+  const cache = {};   // CacheService（取り消しの鍵の預け先）
   let uuid = 0x100;
   const ctx = {
     console: console,
@@ -83,6 +84,11 @@ function createServer(files) {
       setProperty: function (k, v) { props[k] = v; },
     }; } },
     Session: { getScriptTimeZone: function () { return 'UTC'; }, getActiveUser: function () { return { getEmail: function () { return ME; } }; } },
+    CacheService: { getScriptCache: function () { return {
+      get: function (k) { return Object.prototype.hasOwnProperty.call(cache, k) ? cache[k] : null; },
+      put: function (k, v) { cache[k] = String(v); },
+      remove: function (k) { delete cache[k]; },
+    }; } },
     Utilities: {
       getUuid: function () { uuid++; return ('0000000' + uuid.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; },
       // 時刻は呼ぶたびに1秒進める（決定的にする）。
