@@ -40,12 +40,23 @@ function ready() {
   return h;
 }
 
+/**
+ * カードを開き、パネルが取りに行くコメント（apiGetComments。2巡目 H2 の P2 から）に空で答える。
+ * このファイルは盤面の書き込みの会計を見るので、コメントの読み取りを未応答の呼び出しに残さない。
+ */
+function openCard(h, id) {
+  h.openCard(id);
+  h.calls.filter(function (c) { return c.method === 'apiGetComments'; }).forEach(function (c) {
+    c.handlers.success({ ok: true, comments: [] });
+  });
+}
+
 test('編集の応答が、送信中の別カードの移動を巻き戻さない', () => {
   // 応答の board は「サーバがその要求を処理した時点」のもので、後から確定した
   // ドラッグの移動を含まない。全体を信じると取り消したはずの移動が復活する。
   const h = ready();
   h.drag('PBI-001', 'Ready');          // 送信中のまま置く
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.setValue('f-title', 'B かいへん');
   h.click('panel-save');
 
@@ -86,7 +97,7 @@ test('作成の応答が、送信中の別カードの移動を巻き戻さな�
 test('削除の応答が、送信中の別カードの移動を巻き戻さない', () => {
   const h = ready();
   h.drag('PBI-001', 'Ready');
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
 
   const del = h.calls[h.calls.length - 1];
@@ -103,7 +114,7 @@ test('削除の応答が、送信中の別カードの移動を巻き戻さな�
 test('削除に確認ダイアログを挟まず、即座に送信する', () => {
   // モーダルは操作を制限し順序を固定するため置かない（フェイルセーフで受ける）。
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   const before = h.calls.length;
   h.click('panel-delete');
   assert.equal(h.calls.length, before + 1, '削除が送信されていない');
@@ -112,7 +123,7 @@ test('削除に確認ダイアログを挟まず、即座に送信する', () =>
 
 test('削除のあと通知から取り消せ、元の ID のまま戻る', () => {
   const h = ready();
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
   h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null, undoToken: 'tok-del', removed: removed,
@@ -133,7 +144,7 @@ test('削除のあと通知から取り消せ、元の ID のまま戻る', () =
 
 test('削除の応答に鍵（undoToken）が無ければ、押しても失敗する取り消しの通知は出さない', () => {
   const h = ready();
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null, undoToken: null,
     removed: { id: 'PBI-002', title: 'B' }, board: h.boardOf(cols({ New: [CARD_A] })) });
@@ -143,7 +154,7 @@ test('削除の応答に鍵（undoToken）が無ければ、押しても失敗�
 
 test('取り消しで戻したカードは、取り消しより前に出した書き込みの遅れた応答（そのカードの無い写し）で消えない', () => {
   const h = ready();
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.drag('PBI-002', 'Ready');                       // 移動 M（送信中のまま）
   const move = h.calls[h.calls.length - 1];
   assert.equal(move.method, 'apiUpdateStatus');
@@ -185,7 +196,7 @@ test('検証エラーではパネルが閉じず、入力が残る', () => {
 
 test('送信中は保存と削除が押せない', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   assert.equal(h.disabledOf('panel-save'), true, '二重送信できてしまう');
   assert.equal(h.disabledOf('panel-delete'), true);
@@ -195,7 +206,7 @@ test('送信中は入力欄も編集できない（成功で書きかけの追�
   // ボタンだけ塞いでも、送信中に利用者が入力欄を触り続けられ、成功応答で
   // closePanel() するとその追加編集が黙って消える。
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   ['f-title', 'f-description', 'f-acceptance', 'f-status', 'f-priority', 'f-size', 'f-sprint']
     .forEach(function (id) {
@@ -204,7 +215,7 @@ test('送信中は入力欄も編集できない（成功で書きかけの追�
 
   h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null, removed: null, board: h.boardOf(INITIAL) });
   // パネルは保存成功で閉じるが、次にパネルを開いたときのために解除も確かめる。
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   assert.equal(h.disabledOf('f-title'), false, '応答後も入力欄が塞がったままになっている');
 });
 
@@ -218,7 +229,7 @@ test('列の追加ボタンは、その列のステータスを初期値にす�
 test('パネルを開いてもドラッグできる（モードレス）', () => {
   // オーバーレイで盤面を覆わない。操作を制限しない。
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   const before = h.calls.length;
   h.drag('PBI-002', 'Done');
   assert.equal(h.calls.length, before + 1, 'パネルを開くとドラッグできなくなっている');
@@ -270,7 +281,7 @@ test('カードを開くと、その内容が入力欄に入る', () => {
   // スプリント欄はプルダウン。選択肢はサーバが完成させて盤面の応答で運ぶ。
   h.calls[0].handlers.success({ ok: true, view: h.boardOf(initial), sprintChoices: CHOICES });
 
-  h.openCard('PBI-009');
+  openCard(h, 'PBI-009');
   assert.equal(h.valueOf('f-title'), 'ぜんぶ');
   assert.equal(h.valueOf('f-description'), 'せつめい');
   assert.equal(h.valueOf('f-acceptance'), 'あ; い');
@@ -282,7 +293,7 @@ test('カードを開くと、その内容が入力欄に入る', () => {
 
 test('編集は入力欄の内容と updated_at をそのままサーバへ送る', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.setValue('f-title', 'A かいへん');
   h.setValue('f-description', 'せつめい');
   h.setValue('f-acceptance', 'あ; い');
@@ -315,7 +326,7 @@ test('編集は触っていない項目を送らない（優先度が語彙外�
   h.sandbox.load();
   h.calls[0].handlers.success({ ok: true, view: h.boardOf(initial) });
 
-  h.openCard('PBI-003');
+  openCard(h, 'PBI-003');
   // 前提: 語彙外の priority は select 上で選べず空欄になる（実ブラウザの select と同じ）。
   assert.equal(h.valueOf('f-priority'), '', '前提が崩れている（select が語彙外の値を表示できてしまう）');
   h.setValue('f-title', 'C かいへん');
@@ -365,7 +376,7 @@ test('ドラッグは移した先のステータスと updated_at をサーバ�
 
 test('削除は updated_at をサーバへ送る', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-delete');
   const call = h.calls[h.calls.length - 1];
   assert.equal(call.method, 'apiDeletePbi');
@@ -380,7 +391,7 @@ test('削除は updated_at をサーバへ送る', () => {
 test('編集の競合応答が、送信中の別カードの移動を巻き戻さない', () => {
   const h = ready();
   h.drag('PBI-001', 'Ready');          // 送信中のまま置く
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.setValue('f-title', 'B かいへん');
   h.click('panel-save');
 
@@ -414,7 +425,7 @@ test('作成の検証エラーが、送信中の別カードの移動を巻き�
 test('削除の競合応答が、送信中の別カードの移動を巻き戻さない', () => {
   const h = ready();
   h.drag('PBI-001', 'Ready');
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
 
   h.calls[h.calls.length - 1].handlers.success({
@@ -429,7 +440,7 @@ test('削除の競合応答が、送信中の別カードの移動を巻き戻�
 test('取り消しの応答が、送信中の別カードの移動を巻き戻さない', () => {
   const h = ready();
   h.drag('PBI-001', 'Ready');          // 送信中のまま置く
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
 
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
@@ -451,7 +462,7 @@ test('取り消しの応答が、送信中の別カードの移動を巻き戻�
 test('取り消しの失敗応答が、送信中の別カードの移動を巻き戻さない', () => {
   const h = ready();
   h.drag('PBI-001', 'Ready');
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
 
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
@@ -472,7 +483,7 @@ test('取り消し自身が重なりの起点になる（削除の応答で一�
   // 削除 → 応答（ここで重なりが解ける）→ ドラッグ → 取り消し、の順。
   // restorePbi が自分で重なりを記録しないと、この応答が board 全体を信じてしまう。
   const h = ready();
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
   h.calls[h.calls.length - 1].handlers.success({
@@ -517,7 +528,7 @@ const FLOWS = {
   },
   '編集': {
     method: 'apiUpdatePbi',
-    send: (h) => { h.openCard('PBI-001'); h.setValue('f-title', 'A かいへん'); h.click('panel-save'); },
+    send: (h) => { openCard(h, 'PBI-001'); h.setValue('f-title', 'A かいへん'); h.click('panel-save'); },
     outcomes: {
       '成功': (h) => ({ ok: true, id: null, removed: null,
         board: h.boardOf(cols({ New: [{ id: 'PBI-001', title: 'A かいへん', updated_at: 'T2' }, CARD_B] })) }),
@@ -543,7 +554,7 @@ const FLOWS = {
   },
   '削除': {
     method: 'apiDeletePbi',
-    send: (h) => { h.openCard('PBI-002'); h.click('panel-delete'); },
+    send: (h) => { openCard(h, 'PBI-002'); h.click('panel-delete'); },
     outcomes: {
       '成功': (h) => ({ ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) }),
       '競合': (h) => ({ ok: false, reason: 'conflict', message: CONFLICT_MSG, board: h.boardOf(INITIAL) }),
@@ -555,7 +566,7 @@ const FLOWS = {
   '取り消し': {
     method: 'apiRestorePbi',
     send: (h) => {
-      h.openCard('PBI-002');
+      openCard(h, 'PBI-002');
       h.click('panel-delete');
       h.calls[h.calls.length - 1].handlers.success(
         { ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
@@ -635,7 +646,7 @@ test('重なったドラッグの成功応答でも、そのカードの updated
     board: h.boardOf(cols({ Ready: [{ id: 'PBI-001', title: 'A', updated_at: 'T2' }], New: [CARD_B] })) });
   // PBI-002 はまだ送信中で重なりは解けていない。
 
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   const save = h.calls[h.calls.length - 1];
   assert.equal(save.method, 'apiUpdatePbi');
@@ -679,7 +690,7 @@ test('送信中のカードはパネルを開けない', () => {
   // 送信中の内容を編集させると、応答が返った時点でどちらが新しいか決められない。
   const h = ready();
   h.drag('PBI-001', 'Ready');
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   assert.equal(h.hiddenOf('panel'), true, '送信中のカードのパネルが開けてしまう');
 });
 
@@ -689,7 +700,7 @@ test('取り消しの送信中に最新にしても、戻ってきたカード�
   // 送信中扱いになり、開くこともドラッグもできなくなる。load() は inflight にも
   // pendingIds にも触らないため、他の経路では気づけない。
   const h = ready();
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success(
     { ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
@@ -704,7 +715,7 @@ test('取り消しの送信中に最新にしても、戻ってきたカード�
   // サーバでは取り消しが既に反映済みで、PBI-002 が戻って届く。
   reload.handlers.success({ ok: true, view: h.boardOf(INITIAL) });
 
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   assert.equal(h.hiddenOf('panel'), false, '戻ってきたカードが開けない（送信中扱いになっている）');
   const before = h.calls.length;
   h.drag('PBI-002', 'Ready');
@@ -717,7 +728,7 @@ test('取り消しの送信中に最新にしても、戻ってきたカード�
 
 test('保存が成功するとパネルが閉じる', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   h.calls[0].handlers.success({ ok: true, id: null, removed: null, board: h.boardOf(INITIAL) });
   assert.equal(h.hiddenOf('panel'), true, '保存後もパネルが開いたまま');
@@ -726,7 +737,7 @@ test('保存が成功するとパネルが閉じる', () => {
 
 test('削除が成功するとパネルが閉じる', () => {
   const h = ready();
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
   h.calls[0].handlers.success({ ok: true, id: null, undoToken: 'tok-del', removed: REMOVED,
     board: h.boardOf(cols({ New: [CARD_A] })) });
@@ -735,11 +746,11 @@ test('削除が成功するとパネルが閉じる', () => {
 
 test('送信中に別のカードを開いていると、前の応答でそのパネルが閉じない', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   const save = h.calls[h.calls.length - 1];
 
-  h.openCard('PBI-002');                 // 応答を待つ間に別のパネルへ切り替える
+  openCard(h, 'PBI-002');                 // 応答を待つ間に別のパネルへ切り替える
   h.setValue('f-title', '書きかけ');
   save.handlers.success({ ok: true, id: null, removed: null, board: h.boardOf(INITIAL) });
 
@@ -766,11 +777,11 @@ test('作成の送信中に別の列の追加を押すと、前の応答でそ�
 
 test('送信中に別のパネルを開いていると、編集の失敗がそのパネルに出ない', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   const save = h.calls[h.calls.length - 1];
 
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   save.handlers.failure({ message: '通信エラー' });
 
   assert.equal(h.textOf('panel-message'), '', '別のカードのパネルに前の失敗が出た');
@@ -779,11 +790,11 @@ test('送信中に別のパネルを開いていると、編集の失敗がそ�
 
 test('送信中に別のカードを開いていると、削除の応答でそのパネルが閉じない', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-delete');
   const del = h.calls[h.calls.length - 1];
 
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.setValue('f-title', '書きかけ');
   del.handlers.success({ ok: true, id: null,
     undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A', created_at: '2026-09-01', updated_at: 'T1' },
@@ -795,11 +806,11 @@ test('送信中に別のカードを開いていると、削除の応答でそ�
 
 test('送信中に別のパネルを開いていると、削除の失敗がそのパネルに出ない', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-delete');
   const del = h.calls[h.calls.length - 1];
 
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   del.handlers.failure({ message: '通信エラー' });
 
   assert.equal(h.textOf('panel-message'), '', '別のカードのパネルに前の失敗が出た');
@@ -809,7 +820,7 @@ test('送信中に別のパネルを開いていると、削除の失敗がそ�
 test('パネルを閉じたあとに届いた失敗は、全体メッセージで知らせる', () => {
   // 閉じたパネルに書いても本人には届かない。黙って消えるのが最悪。
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   const save = h.calls[h.calls.length - 1];
 
@@ -828,7 +839,7 @@ test('パネルを閉じたあとに届いた失敗は、全体メッセージ�
 /** PBI-002 を削除して取り消せる通知を出した状態にする。 */
 function deleted() {
   const h = ready();
-  h.openCard('PBI-002');
+  openCard(h, 'PBI-002');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success(
     { ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
@@ -858,7 +869,7 @@ test('続けて削除すると、前の取り消しがもう押せないこと�
   const h = deleted();
   const firstText = h.textOf('toast-text');
 
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null,
     undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A', created_at: '2026-09-01', updated_at: 'T1' },
@@ -872,7 +883,7 @@ test('続けて削除すると、前の取り消しがもう押せないこと�
 
 test('Escape は通知を先に閉じ、通知が無ければパネルを閉じる', () => {
   const h = deleted();                   // 削除でパネルは閉じ、通知が出ている
-  h.openCard('PBI-001');                 // 通知を出したままパネルを開く
+  openCard(h, 'PBI-001');                 // 通知を出したままパネルを開く
   assert.equal(h.hiddenOf('toast'), false);
   assert.equal(h.hiddenOf('panel'), false);
 
@@ -947,7 +958,7 @@ test('3操作を commit順6 × 到達順6 で回しても、画面がサーバ�
       // 3操作を重ねて送る（どれも応答待ちのまま置く）
       h.drag('PBI-001', 'Ready');
       h.drag('PBI-002', 'In Progress');
-      h.openCard('PBI-003');
+      openCard(h, 'PBI-003');
       h.setValue('f-title', 'C かいへん');
       h.setValue('f-description', 'せつめい');
       h.click('panel-save');
@@ -986,7 +997,7 @@ test('3操作を commit順6 × 到達順6 で回しても、画面がサーバ�
       assert.equal(h.sandbox.overlapped, false, label + ': overlapped が解除されていない');
 
       // 位置だけでなく、編集した内容が残っていることも確かめる。
-      h.openCard('PBI-003');
+      openCard(h, 'PBI-003');
       assert.equal(h.valueOf('f-title'), 'C かいへん', label + ': 編集の内容が消えた');
       assert.equal(h.valueOf('f-description'), 'せつめい', label + ': 編集の内容が消えた');
     });
@@ -1011,7 +1022,7 @@ test('編集が競合したあと、もう一度保存すると通る', () => {
   // panelState.expectedUpdatedAt は openPanel でしか更新されない。競合応答で
   // 描き直した board へ合わせないと、同じ古い値を送り続けて必ず conflict になる。
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.setValue('f-title', 'A かいへん');
   h.click('panel-save');
 
@@ -1037,7 +1048,7 @@ test('編集が競合したあと、もう一度保存すると通る', () => {
 
 test('削除が競合したあと、もう一度削除すると通る', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-delete');
 
   const first = h.calls[h.calls.length - 1];
@@ -1061,7 +1072,7 @@ test('検証エラーでは競合検出の基準を進めない', () => {
   // invalid でもサーバは「その時点の board」を返す。ここで基準を進めると、
   // 他の人の変更を一度も見せないまま次の保存が黙って上書きしてしまう。
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.setValue('f-title', '');
   h.click('panel-save');
 
@@ -1079,11 +1090,11 @@ test('別のパネルへ切り替えたあとの競合応答は、そのパネ�
   // panelSeq が進んでいれば panelState は別のカードのもの。触ると
   // 開いているパネルが、送っていないカードの updated_at を送るようになる。
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.click('panel-save');
   const save = h.calls[h.calls.length - 1];
 
-  h.openCard('PBI-002');                 // 応答を待つ間に別のパネルへ切り替える
+  openCard(h, 'PBI-002');                 // 応答を待つ間に別のパネルへ切り替える
   save.handlers.success({
     ok: false, reason: 'conflict', message: PANEL_SAVE_CONFLICT_MSG, board: h.boardOf(SERVER_AHEAD)
   });
@@ -1146,7 +1157,7 @@ test('送信中に何も確定していなければ、最新にした結果は�
 
 test('保存の送信中に最新にしても、確定していなければそのまま描く（drag 以外の書き込みでも同じ会計を使う）', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   h.setValue('f-title', 'A かいへん');
   h.click('panel-save');
   const saveCall = h.calls[h.calls.length - 1];

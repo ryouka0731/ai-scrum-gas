@@ -11,22 +11,60 @@ const HISTORY_ACTIONS = ['create', 'update', 'delete', 'restore', 'resolve', 'un
 const HISTORY_TARGET_RE = /^(PBI|IMP)-\d+$/;
 const HISTORY_LIMIT = 200;
 const LINE_DIFF_MAX = 500;
+// 履歴の before / after に持つ値1つの上限（文字数）。PBI の説明・受入基準には長さの上限が無く、
+// 編集のたびに前後の全文を残すと change_log.csv と履歴の応答が際限なく大きくなる。
+const HISTORY_VALUE_MAX = 4000;
+const HISTORY_CAPPED_RE = /…（以下省略・全 (\d+) 字）$/;
 
 function histText_(v) { return v === undefined || v === null ? '' : String(v); }
 
-/** 行配列を id（trim）ごとの行の並びにする。id が空の行は無視する。 */
-function histGroup_(rows) {
-  const map = Object.create(null);   // '__proto__' のような id でも壊れないように
-  (rows || []).forEach(function (row) {
-    const id = histText_((row || {}).id).trim();
-    if (!id) return;
-    (map[id] = map[id] || []).push({ row: row, used: false });
-  });
-  return map;
+/** 文字（コードポイント）の数。サロゲートペアは1字。 */
+function histCodePoints_(t) {
+  let n = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < t.length) {
+      const d = t.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+    }
+    n++;
+  }
+  return n;
 }
 
-function histSame_(x, y, cols) {
-  return cols.every(function (f) { return histText_(x[f]) === histText_(y[f]); });
+/** capHistoryValue が作った形（先頭がちょうど上限の字数＋上限より多い全体の字数の接尾辞）か。 */
+function histAlreadyCapped_(t) {
+  const m = HISTORY_CAPPED_RE.exec(t);
+  if (!m || m.index > HISTORY_VALUE_MAX * 2 || Number(m[1]) <= HISTORY_VALUE_MAX) return false;
+  return histCodePoints_(t.slice(0, m.index)) === HISTORY_VALUE_MAX;
+}
+
+/**
+ * 履歴に持つ値を HISTORY_VALUE_MAX 字（コードポイント）までに切り詰め、「…（以下省略・全 N 字）」を付ける。
+ * 上限以下はそのまま。切り詰め済みの値（先頭がちょうど上限の字数＋接尾辞。読み出しで再び通したとき）は変えない。サロゲートペアは割らない。
+ */
+function capHistoryValue(v) {
+  const t = histText_(v);
+  if (t.length <= HISTORY_VALUE_MAX) return t;
+  if (histAlreadyCapped_(t)) return t;
+  let count = 0;
+  let cut = -1;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < t.length) {
+      const d = t.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+    }
+    count++;
+    if (count === HISTORY_VALUE_MAX) cut = i + 1;
+  }
+  if (count <= HISTORY_VALUE_MAX) return t;
+  return t.slice(0, cut) + '…（以下省略・全 ' + count + ' 字）';
+}
+
+/** 比べる列の値を、取り違えの起きない1つの文字列にする（索引の鍵）。 */
+function histContentKey_(row, cols) {
+  return JSON.stringify(cols.map(function (f) { return histText_(row[f]); }));
 }
 
 /**
@@ -38,11 +76,32 @@ function histSame_(x, y, cols) {
  * 残りを並び順に対応づける。対応のつかない after の行は create、before の行は delete。
  * id の最初の行だけを見ると、雛形の陰にある本物の行の編集が記録されず、重複の片方の
  * 削除が「存在しない update」として記録される。
+ *
+ * 対応づけは id → 行、(id, 中身) → 行 の索引で行う（同じ id の行が多くても行数に線形）。
+ * どちらも before の並び順で「まだ対応のついていない最初の行」を選ぶ。
  */
 function diffRows(beforeRows, afterRows, fields, ignore) {
   const skip = ignore || [];
   const cols = (fields || []).filter(function (f) { return f !== 'id' && skip.indexOf(f) === -1; });
-  const b = histGroup_(beforeRows);
+  // id ごとの候補（before の並び順）と、次に見る位置。'__proto__' のような id でも壊れないように。
+  const byId = Object.create(null);
+  const byContent = Object.create(null);
+  // 同じ行（同じオブジェクト）が before に2回以上あるときも、消えた行は「その行のまだ使っていない候補」で数える。
+  const byRow = new Map();
+  (beforeRows || []).forEach(function (row) {
+    const id = histText_((row || {}).id).trim();
+    if (!id) return;
+    const cand = { row: row, used: false };
+    const same = byRow.get(row) || { list: [], next: 0 };
+    same.list.push(cand);
+    byRow.set(row, same);
+    const g = byId[id] || (byId[id] = { list: [], next: 0 });
+    g.list.push(cand);
+    const ck = byContent[id] || (byContent[id] = Object.create(null));
+    const key = histContentKey_(row, cols);
+    const q = ck[key] || (ck[key] = { list: [], next: 0 });
+    q.list.push(cand);
+  });
   const afterList = [];
   (afterRows || []).forEach(function (row) {
     const id = histText_((row || {}).id).trim();
@@ -50,18 +109,18 @@ function diffRows(beforeRows, afterRows, fields, ignore) {
   });
   // 1巡目: 中身の変わらない行どうし
   afterList.forEach(function (x) {
-    const cands = b[x.id] || [];
-    for (let i = 0; i < cands.length; i++) {
-      if (!cands[i].used && histSame_(cands[i].row, x.row, cols)) { cands[i].used = true; x.pair = cands[i].row; x.same = true; return; }
-    }
+    const q = byContent[x.id] && byContent[x.id][histContentKey_(x.row, cols)];
+    if (!q) return;
+    while (q.next < q.list.length && q.list[q.next].used) q.next++;
+    if (q.next < q.list.length) { const c = q.list[q.next++]; c.used = true; x.pair = c.row; x.same = true; }
   });
   // 2巡目: 残りを並び順に
   afterList.forEach(function (x) {
     if (x.pair) return;
-    const cands = b[x.id] || [];
-    for (let i = 0; i < cands.length; i++) {
-      if (!cands[i].used) { cands[i].used = true; x.pair = cands[i].row; return; }
-    }
+    const g = byId[x.id];
+    if (!g) return;
+    while (g.next < g.list.length && g.list[g.next].used) g.next++;
+    if (g.next < g.list.length) { const c = g.list[g.next++]; c.used = true; x.pair = c.row; }
   });
   const out = [];
   afterList.forEach(function (x) {
@@ -76,10 +135,9 @@ function diffRows(beforeRows, afterRows, fields, ignore) {
   (beforeRows || []).forEach(function (row) {
     const id = histText_((row || {}).id).trim();
     if (!id) return;
-    const cands = b[id];
-    for (let i = 0; i < cands.length; i++) {
-      if (cands[i].row === row && !cands[i].used) { cands[i].used = true; out.push({ target_id: id, action: 'delete' }); return; }
-    }
+    const same = byRow.get(row);
+    while (same.next < same.list.length && same.list[same.next].used) same.next++;
+    if (same.next < same.list.length) { same.list[same.next++].used = true; out.push({ target_id: id, action: 'delete' }); }
   });
   return out;
 }
@@ -94,8 +152,8 @@ function historyRows(events, meta) {
       target_id: histText_(e.target_id),
       action: histText_(e.action),
       field: histText_(e.field),
-      before: histText_(e.before),
-      after: histText_(e.after),
+      before: capHistoryValue(e.before),
+      after: capHistoryValue(e.after),
     };
   });
 }
@@ -116,7 +174,8 @@ function historyFor(rows, targetId, limit) {
   return hits.slice(0, limit === undefined ? HISTORY_LIMIT : limit).map(function (h) {
     return {
       at: histText_(h.row.at), actor: histText_(h.row.actor), action: histText_(h.row.action),
-      field: histText_(h.row.field), before: histText_(h.row.before), after: histText_(h.row.after),
+      // 上限より前に書かれた全文の行も、応答では同じく切り詰める。
+      field: histText_(h.row.field), before: capHistoryValue(h.row.before), after: capHistoryValue(h.row.after),
     };
   });
 }
@@ -174,6 +233,6 @@ function lineDiff(before, after) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { HISTORY_FIELDS, HISTORY_ACTIONS, HISTORY_TARGET_RE, HISTORY_LIMIT, LINE_DIFF_MAX,
-    diffRows, historyRows, historyFor, groupHistory, lineDiff };
+  module.exports = { HISTORY_FIELDS, HISTORY_ACTIONS, HISTORY_TARGET_RE, HISTORY_LIMIT, LINE_DIFF_MAX, HISTORY_VALUE_MAX,
+    capHistoryValue, diffRows, historyRows, historyFor, groupHistory, lineDiff };
 }

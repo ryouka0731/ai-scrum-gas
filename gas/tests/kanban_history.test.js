@@ -251,7 +251,7 @@ test('8h. 同じ障害物のパネルで履歴を開いている間に、通知�
   h.setValue('i-resolution', '直した');
   h.click('imp-panel-resolve');
   const resolvedRow = Object.assign({}, ROW, { status: 'Resolved', resolved_at: '2026-10-06', resolution: '直した' });
-  latest(h).handlers.success(impResponse([], { moved: ROW, resolvedRow: resolvedRow }));
+  latest(h).handlers.success(impResponse([], { moved: ROW, resolvedRow: resolvedRow, undoToken: 'tok-ROW' }));
   h.click('toast-undo');   // 取り消し → 途中で止まる（未解決にも行が見えている）
   latest(h).handlers.success(impResponse([ROW], { ok: false, reason: 'partial', message: '途中で止まりました。' }));
   h.clickImpRow('IMP-002');
@@ -272,7 +272,7 @@ test('8f. 解決の取り消しの historyWarning も、戻した旨の文言を
   h.setValue('i-resolution', '直した');
   h.click('imp-panel-resolve');
   const resolvedRow = Object.assign({}, ROW, { status: 'Resolved', resolved_at: '2026-10-06', resolution: '直した' });
-  latest(h).handlers.success(impResponse([], { moved: ROW, resolvedRow: resolvedRow }));
+  latest(h).handlers.success(impResponse([], { moved: ROW, resolvedRow: resolvedRow, undoToken: 'tok-ROW' }));
   h.click('toast-undo');
   latest(h).handlers.success(impResponse([ROW], { historyWarning: WARN }));
   assert.equal(h.textOf('message'), 'IMP-002 を未解決に戻しました。 ' + WARN);

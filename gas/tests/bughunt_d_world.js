@@ -117,7 +117,13 @@ function trueBoard(server) {
   const v = server.call('apiGetView', ['board']);
   return v.view.columns.map(function (c) { return { status: c.status, cards: c.cards.map(function (x) { return x.id; }) }; });
 }
-function trueComments(server) { return server.call('apiGetView', ['board']).comments; }
+/** コメントの真の値 { <target_id>: [comment] }。ビューは件数だけを運ぶので、件数のある対象を1つずつ取る。 */
+function trueComments(server) {
+  const counts = server.call('apiGetView', ['board']).commentCounts || {};
+  const out = {};
+  Object.keys(counts).forEach(function (t) { out[t] = server.call('apiGetComments', [t]).comments; });
+  return out;
+}
 function trueImp(server) {
   const v = server.call('apiGetView', ['impediment']).view;
   return {
@@ -198,6 +204,14 @@ function createWorld(opts) {
         if (world.unprocessedNs().indexOf(n) !== -1) world.process(n);
         world.deliver(n);
       }
+    },
+    /**
+     * パネルを開いたときのコメントの取得（apiGetComments）だけを、今のサーバで処理して届ける。
+     * 他の未応答の呼び出しには触らない（狙った順序のテストで、開くたびの取得を片付けるため）。
+     */
+    answerCommentReads: function () {
+      world.pendingNs().filter(function (n) { return world.methodOf(n) === 'apiGetComments'; })
+        .forEach(function (n) { world.process(n); world.deliver(n); });
     },
     /** 最初の読み込みを済ませる。 */
     boot: function () {

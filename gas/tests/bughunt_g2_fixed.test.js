@@ -165,7 +165,7 @@ test('C-1a: 解決が途中で止まり「未解決に戻す」で揃えると�
   assert.equal(plain(h.ctx.apiResolveImpediment('IMP-002', '直した', IMP2_ROW)).reason, 'partial');
   h.fault.setContentFailNames = [];
   const p = plain(h.ctx.apiGetView('impediment')).view.pending[0];
-  const res = plain(h.ctx.apiUnresolveImpediment(p.open, p.resolved));
+  const res = plain(h.ctx.apiUnresolveImpediment({ pendingId: p.id }));   // 2巡目 H1（S1）: 行ではなく id
   assert.equal(res.ok, true);
   assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '前提: 未解決に戻った');
   assert.equal(f['impediment_log_resolved.csv'].indexOf('IMP-002'), -1, '前提: 解決済から消えた');
@@ -179,7 +179,7 @@ test('C-1b: 取り消しが途中で止まり「解決済として完了」で�
   const h = createCtx(f);
   const r = plain(h.ctx.apiResolveImpediment('IMP-002', '直した', IMP2_ROW));
   h.fault.setContentFailNames = ['impediment_log_resolved.csv'];
-  assert.equal(plain(h.ctx.apiUnresolveImpediment(r.moved, r.resolvedRow)).reason, 'partial');
+  assert.equal(plain(h.ctx.apiUnresolveImpediment({ undoToken: r.undoToken })).reason, 'partial');   // 2巡目 H1（S1）: 鍵
   h.fault.setContentFailNames = [];
   const p = plain(h.ctx.apiGetView('impediment')).view.pending[0];
   assert.equal(plain(h.ctx.apiResolveImpediment(p.id, p.resolved.resolution, p.open)).ok, true);
@@ -210,7 +210,7 @@ const statusOf = (screen, id) => { const c = screen.find((x) => x.cards.includes
 test('[D-2] パネルの保存が busy（board: null）で返っても、カードの送信中の印が外れ、ドラッグできる', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-004');
+  h.openCard('PBI-004'); w.answerCommentReads();
   h.setValue('f-title', 'renamed');
   h.click('panel-save');
   const n = w.pendingNs()[0];
@@ -224,7 +224,7 @@ test('[D-2] パネルの保存が busy（board: null）で返っても、カー�
 test('[D-3] パネルを開いたままカードを移し、続けて削除し、両方が通信の失敗で（移動→削除の順に）返ると、カードは移す前の列に戻る', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-003');                   // In Progress
+  h.openCard('PBI-003'); w.answerCommentReads();                   // In Progress
   h.drag('PBI-003', 'New');
   const move = w.pendingNs()[0];
   h.click('panel-delete');
@@ -240,10 +240,10 @@ test('[D-3] パネルを開いたままカードを移し、続けて削除し�
 test('[D-1] コメント: 2つの PBI へ続けて追加し、サーバが後の方を先に処理しても、先に追加したコメントは消えない', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-001');
+  h.openCard('PBI-001'); w.answerCommentReads();
   h.setCommentInput('panel-comments', 'first');
   h.clickCommentSend('panel-comments');
-  h.openCard('PBI-002');
+  h.openCard('PBI-002'); w.answerCommentReads();
   h.setCommentInput('panel-comments', 'second');
   h.clickCommentSend('panel-comments');
   const [a, b] = w.pendingNs();
@@ -258,7 +258,7 @@ test('[D-1] コメント: 2つの PBI へ続けて追加し、サーバが後の
 test('[D-1] コメント: 追加の送信中に自分の古いコメントを消し、サーバが削除を先に処理しても、追加したコメントは一覧に残る', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-001');
+  h.openCard('PBI-001'); w.answerCommentReads();
   h.setCommentInput('panel-comments', 'new one');
   h.clickCommentSend('panel-comments');
   h.clickCommentDelete('panel-comments', 'CMT-0000000b');   // 送信中でも削除ボタンは押せる
@@ -276,12 +276,12 @@ test('[D-1] 障害物: IMP-002 を解決した直後に IMP-001 を保存し、�
   const w = boot();
   const h = w.h;
   h.clickTab('障害物'); w.drain();
-  h.clickImpRow('IMP-002');
+  h.clickImpRow('IMP-002'); w.answerCommentReads();
   h.click('imp-panel-resolve');
   h.setValue('i-resolution', 'fixed');
   h.click('imp-panel-resolve');            // 解決を確定（送信中）
   h.click('imp-panel-close');
-  h.clickImpRow('IMP-001');
+  h.clickImpRow('IMP-001'); w.answerCommentReads();
   h.setValue('i-title', 'renamed');
   h.click('imp-panel-save');
   const [resolve, save] = w.pendingNs();
@@ -319,7 +319,7 @@ test('[D-1] 盤面: 作成の応答が遅れて届いても、その後に移し
 function partialResolve(w, id) {
   const h = w.h;
   h.clickTab('障害物'); w.drain();
-  h.clickImpRow(id);
+  h.clickImpRow(id); w.answerCommentReads();
   h.click('imp-panel-resolve');
   h.setValue('i-resolution', 'fixed');
   h.click('imp-panel-resolve');
@@ -392,7 +392,7 @@ test('[D-1] 盤面: 作成の応答が遅れて届いても、その後に削除
   const load = w.pendingNs()[1];
   w.process(load);
   w.deliver(load);                         // PBI-005 が盤面に出る
-  h.openCard('PBI-005');
+  h.openCard('PBI-005'); w.answerCommentReads();
   h.click('panel-delete');
   const del = w.pendingNs()[1];
   w.process(del);

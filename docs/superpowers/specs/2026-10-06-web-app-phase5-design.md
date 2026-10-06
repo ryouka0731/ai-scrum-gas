@@ -69,14 +69,31 @@ PBI や障害物について話し合う場所が無い。今は説明欄に追�
 ## API
 
 ```
-apiAddComment(targetId, body)   → { ok, comments, comment }
-apiDeleteComment(commentId)     → { ok, comments, removed }
-apiRestoreComment(row)          → { ok, comments }
+apiAddComment(targetId, body)   → { ok, targetId, comments, count, comment }   （2026-10-07 から。下の追記）
+apiDeleteComment(commentId)     → { ok, targetId, comments, count, removed }
+apiRestoreComment(row)          → { ok, targetId, comments, count, restored }
+apiGetComments(targetId)        → { ok, comments }                            （2026-10-07 に追加）
 ```
 
-- `comments` は `{ <target_id>: [comment, …] }`（全対象。古い順）。パネルと件数の両方がこれを使う
-- 読み取りは**専用の API を作らない**。`apiGetView` の `board` / `list` / `impediment` の応答に
-  `comments` を載せる。パネルを開くたびの往復が無く、件数も同じ応答から出せる
+> **追記（2026-10-07）**: ビューと書き込みの応答に全対象・全件のコメントを載せる設計をやめた（コメントは増え続け、
+> 6,000 件で盤面を開くたび・コメントを送るたびに約 4.5MB を往復した。第6段階が履歴をビューに載せないのと同じ理由）。
+> - `apiGetView` の `board` / `list` / `impediment` と障害物の書き込みの応答は、件数 `commentCounts: { <target_id>: n }` だけを載せる
+> - 本文は読み取り専用の `apiGetComments(targetId)` で対象ごとに取る（古い順、`mine` 付き。形の不正は `invalid`、
+>   ファイルが無ければ空）。パネルを開いたときに呼び、応答までは「コメントを読み込んでいます…」を出す。
+>   遅れて届いた前の対象・前の取得の応答は通し番号で捨てる。失敗は節に出し、「最新にする」で取り直す
+> - コメントの書き込みの応答は、その対象の `comments`（一覧）・`count`（件数）・`targetId` だけ。
+>   対象の分からない失敗（`not_found`）は一覧を載せない
+> - 下の「画面」の順序の扱いは対象ごとに読み替える: 発行番号による新旧の判定は対象ごと。確定した自分の操作の
+>   重ね（足した行は消えない・消した `id` は戻らない）は、取得した一覧と書き込みの応答の一覧の両方に当てる。
+>   取得を出したあとにその対象への書き込みが確定していたら、取得の応答は使わない（書き込みの応答の一覧の方が新しい）
+> - カード・表の件数は `commentCounts` と、取り込んだ一覧の長さから出す。読み込みの件数が取得済みの一覧と
+>   食い違えば、閉じている対象の一覧は捨てる。開いている節の対象は、食い違っても食い違わなくても取り直し
+>   （他の人の削除と追加で件数だけが揃うことがある）、取り直しの応答までは今の一覧を出し続ける。
+>   取り直すと、それより前に出した取得の応答は捨てる（古い一覧の長さで件数を戻さない）
+
+- ~~`comments` は `{ <target_id>: [comment, …] }`（全対象。古い順）。パネルと件数の両方がこれを使う~~（2026-10-07 に廃止。上の追記）
+- ~~読み取りは専用の API を作らない。`apiGetView` の `board` / `list` / `impediment` の応答に
+  `comments` を載せる~~（2026-10-07 に廃止。件数だけを載せ、本文は `apiGetComments`）
 - 失敗: `{ ok:false, reason, message, comments? }`。`reason` は `busy` / `invalid` / `forbidden` / `not_found` / `error`
 - 各コメントには `mine`（ログイン中の人が書いたか）を付けて返す。画面は `mine` のときだけ「削除」を出す。
   判定はサーバでもう一度行う（画面の申告を信じない）
@@ -87,13 +104,13 @@ apiRestoreComment(row)          → { ok, comments }
   - 各コメント: 書いた人（メールの `@` より前）、日時、本文（改行を保つ）。自分のものには「削除」
   - 入力欄（textarea）と「コメントする」。空なら押せない。送信中は塞ぐ
 - 新規作成中のパネル（ID がまだ無い）ではコメントの節を出さない
-- 応答の順序: コメントの書き込みは対象ごとに独立。応答の `comments` で全体を差し替える。
-  別のパネルに移っていたら、そのパネルの表示は差し替えた `comments` から描き直す（応答が古い対象のものでも、
-  `comments` は全体なので食い違わない）。書き込みの応答どうしの順序は、障害物と同じく発行番号で新しいものだけ使う。
-  ただしサーバは発行順に処理するとは限らないので、写しとして古い成功の応答でも、その書き込み自身の操作
-  （追加した行・消した `id`・戻した行）だけは一覧へ入れる（同じ `id` は二重に入れない）
+- 応答の順序: コメントの書き込みは対象ごとに独立。画面は取得した対象ごとに一覧を持ち（`target_id` → 一覧）、
+  書き込みの応答の `comments`（その対象の一覧）でその対象の分だけを差し替え、件数もその長さに揃える。
+  別のパネルに移っていたら、開いている節はその対象の一覧から描き直す。書き込みの応答どうしの順序は、
+  対象ごとに発行番号で新しいものだけ使う。ただしサーバは発行順に処理するとは限らないので、写しとして古い
+  成功の応答でも、その書き込み自身の操作（追加した行・消した `id`・戻した行）だけは一覧へ入れる（同じ `id` は二重に入れない）
 - コメントの書き込みは盤面・表の中身を変えないため、読み込み（`loadView`）を「他の変更が入った」で捨てさせない。
-  読み込み中にコメントの書き込みが確定していたら、ビューは描き、応答の `comments` だけを使わない
+  読み込み中にコメントの書き込みが確定していたら、ビューは描き、応答の `commentCounts` だけを使わない
 - 一覧が描き直されても、同じ対象なら入力欄・送信ボタンは同じ要素のまま残す（書きかけ・フォーカス・変換中を保つ）
 
 ## エージェント（ローカルの Claude Code）
@@ -109,7 +126,7 @@ apiRestoreComment(row)          → { ok, comments }
 | `scrum/comments.csv`（新） | 雛形（ヘッダー行のみ） |
 | `gas/pure_comment.js`（新） | `COMMENT_FIELDS`、検証、追記・削除・戻しの純関数、`groupComments(rows, me)` |
 | `gas/pure_write_guard.js` | 許可リストに `comments.csv` |
-| `gas/web_app.js` | `withCommentWrite_`、3つの API、ビューの応答に `comments` |
+| `gas/web_app.js` | `withCommentWrite_`、3つの API、ビューの応答に `comments`（2026-10-07 から `commentCounts` と `apiGetComments`） |
 | `gas/kanban.html` | パネルのコメント節、カードと一覧の件数 |
 
 ID の採番はサーバの `Utilities.getUuid()` を使うが、純関数には ID を引数で渡す（テストで固定できるように）。
@@ -118,7 +135,7 @@ ID の採番はサーバの `Utilities.getUuid()` を使うが、純関数には
 
 - 純関数: 検証（空・2000字超・`target_id` の形）、追記、本人以外の削除拒否、戻しの冪等、`groupComments` の並びと `mine`
 - `web_app_flow`: ファイルが無いときの読み取り（空）と書き込み（案内付きで失敗）、ヘッダー不一致で書かない、
-  他人のコメントを消せない、`apiGetView` が `comments` を載せる
+  他人のコメントを消せない、`apiGetView` が `comments` を載せる（2026-10-07 から `commentCounts` を載せ、本文は `apiGetComments`）
 - DOM シム: パネルにコメントが出る・追加・自分のものだけ削除が出る・取り消し・新規作成中は節が無い・
   応答の順序（古い応答で戻らない）・件数の表示
 - 実ブラウザ: パネルの縦の並び（コメント節で保存ボタンが押せなくならない）

@@ -218,13 +218,36 @@ function main(destArg) {
     branch: gitOutput(['rev-parse', '--abbrev-ref', 'HEAD']) || 'unknown',
   };
   const recordPath = path.join(DEST_DIR, 'scrum', '.published.json');
-  fs.mkdirSync(path.dirname(recordPath), { recursive: true });
-  fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n', 'utf8');
+  const recordWritten = writePublishedRecord(recordPath, record);
+  if (!recordWritten) skippedLinkCount++;
 
   console.log('==> 完了しました（' + copiedCount + ' ファイルをコピー'
     + (skippedLinkCount > 0 ? '、' + skippedLinkCount + ' 件のリンク・通常でないファイルをスキップ' : '')
     + (untracked.length > 0 ? '、' + untracked.length + ' 件の未追跡ファイルを配布せず' : '') + '）');
-  console.log('配布記録: ' + recordPath + '（' + record.publishedAt + ' / ' + record.commit + ' / ' + record.branch + '）');
+  if (recordWritten) {
+    console.log('配布記録: ' + recordPath + '（' + record.publishedAt + ' / ' + record.commit + ' / ' + record.branch + '）');
+  }
+}
+
+/**
+ * 配布記録を書く。書けたら true。
+ * copyRecursive と同じく、リンクは辿らない（scrum/ や .published.json 自体がリンクだと、
+ * 配布フォルダの外のファイルを作る・上書きしてしまう）。その場合は書かずに警告して false を返す。
+ */
+function writePublishedRecord(recordPath, record) {
+  const lstatOrNull = function (p) { try { return fs.lstatSync(p); } catch (e) { return null; } };
+  const dirStat = lstatOrNull(path.dirname(recordPath));
+  const fileStat = lstatOrNull(recordPath);
+  let bad = null;
+  if (dirStat && !dirStat.isDirectory()) bad = path.dirname(recordPath);
+  else if (fileStat && !fileStat.isFile()) bad = recordPath;
+  if (bad) {
+    console.warn('配布先が通常のフォルダ・ファイルではないため、配布記録（.published.json）を書きませんでした: ' + bad);
+    return false;
+  }
+  fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+  fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n', 'utf8');
+  return true;
 }
 
 if (require.main === module) {

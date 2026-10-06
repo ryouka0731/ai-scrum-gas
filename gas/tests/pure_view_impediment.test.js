@@ -114,3 +114,15 @@ test('同じ ID が未解決に複数あれば、解決済と同じ中身でも�
   assert.deepEqual(v.pending, []);
   assert.equal(openImpedimentsShown([imp(), imp()], [done]).length, 2);
 });
+
+test('同じ ID が解決済に複数あれば、未解決の行を隠さず duplicate で出し、pending は作らない（PR #11 cubic）', () => {
+  const done = imp({ status: 'Resolved', resolution: '直した' });
+  const other = imp({ title: '別の', status: 'Resolved', resolution: '別' });
+  [[done, done], [done, other], [other, done]].forEach((resolved) => {
+    const v = buildImpedimentView([imp()], resolved);
+    assert.equal(v.open.length, 1);
+    assert.equal(v.open[0].duplicate, 'true');
+    assert.deepEqual(v.pending, []);
+    assert.equal(openImpedimentsShown([imp()], resolved).length, 1);
+  });
+});

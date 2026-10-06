@@ -75,10 +75,28 @@ function menuRemoveTrigger() {
   ui.alert('自動同期を止めました', 'メニューの「今すぐ同期」は引き続き使えます。', ui.ButtonSet.OK);
 }
 
-/** トリガーから呼ばれる。UI を触らないため toast も alert も使わない。 */
+// 自動同期が最後に成功した時刻（Date.now() の文字列）。頻度の上限（pure_sync_rate.js）に使う。
+const LAST_SCHEDULED_SYNC_KEY = 'LAST_SCHEDULED_SYNC_MS';
+
+/**
+ * トリガーから呼ばれる。UI を触らないため toast も alert も使わない。
+ *
+ * google.script.run からも呼べるため、前回の成功から60秒以内なら何もしない。
+ * 判定はロックの外で一度（ロックを取らずに済ませる）、ロックの中でもう一度行い、成功の記録もロックの中で書く。
+ * 並んだ呼び出しがそろって判定を通り、再構築を続けて走らせないため。30分毎のトリガーには影響しない。
+ */
 function scheduledSync() {
   try {
-    syncAll_();
+    const props = PropertiesService.getScriptProperties();
+    const tooSoon = function () { return isSyncTooSoon(props.getProperty(LAST_SCHEDULED_SYNC_KEY), Date.now()); };
+    if (tooSoon()) {
+      console.log('前回の自動同期から間もないため、今回は見送りました。');
+      return;
+    }
+    syncAll_({
+      shouldSync: function () { return !tooSoon(); },
+      onSynced: function () { props.setProperty(LAST_SCHEDULED_SYNC_KEY, String(Date.now())); },
+    });
   } catch (e) {
     // 例外をそのまま投げると30分毎に実行失敗メールが届く（フォルダ未設定なら鳴り止まない）。
     // 原因は Apps Script の実行ログに残す。

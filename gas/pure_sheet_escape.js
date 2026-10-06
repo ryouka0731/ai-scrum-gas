@@ -13,7 +13,9 @@
 const SHEET_FORMULA_LEAD_RE = /^\s*[=+\-@]|^[\t\r\n]/;
 // 数値だけの文字列（-3, +1.5, -1e3, -.5）は数式にならない。' を付けると数値として
 // 集計できなくなる。前後の空白はシートが数値として読むときに無視するので許す。
-const SHEET_PLAIN_NUMBER_RE = /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/;
+// 数字の並びの切り方が1通りに決まる形にしておく（\d+\.?\d* のように小数点が任意だと、
+// 長い数字の並びの後ろで照合に失敗したときに切り方を総当たりし、長さの2乗の時間がかかる）。
+const SHEET_PLAIN_NUMBER_RE = /^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*$/;
 
 function escapeSheetCell(value) {
   if (typeof value !== 'string') return value;

@@ -24,6 +24,11 @@ function validatePbiFields(fields, statuses) {
 
   const title = String(f.title === undefined || f.title === null ? '' : f.title).trim();
   if (!title) errors.push('タイトルを入力してください。');
+  // 雛形の行（（PBI タイトル））と同じ形は、isPlaceholderRow で盤面・一覧から隠れてしまうため受け付けない
+  // （validateImpedimentFields と同じ規則・同じ文面）。
+  else if (title.charAt(0) === '（' && title.charAt(title.length - 1) === '）') {
+    errors.push('タイトルを（）だけで囲まないでください。雛形の行と見分けられなくなります。');
+  }
 
   if (f.priority !== undefined && PBI_PRIORITIES.indexOf(String(f.priority)) === -1) {
     errors.push('優先度が不正です: ' + f.priority);

@@ -103,18 +103,33 @@ Drive に複数ファイルのトランザクションは無い。**「足して
 
 ### 取り消し
 
-解決の応答は、移す前の行（`moved`）を返す。画面は通知の「取り消す」で
-`apiUnresolveImpediment(moved, resolvedRow)` を呼ぶ。
+解決の応答は、移す前の行（`moved`）を返す。~~画面は通知の「取り消す」で
+`apiUnresolveImpediment(moved, resolvedRow)` を呼ぶ~~（2026-10-07 に変更。画面は行を送らず `{ undoToken }` を送る。下の追記）。
+下の検査は、サーバが預かった `moved` と `resolvedRow` に対して行う。
 
 - `resolvedRow` は解決で書いた行。resolved 側の今の行と全列が一致しなければ `conflict`
   （その間に誰かが書き換えた）
 - `moved.id` が `IMP-\d+` でない、`moved.title` が空、`moved.id` と `resolvedRow.id` が違う、のいずれかなら `invalid`
 - open に戻すのは `moved` のうち `IMPEDIMENT_FIELDS` の列だけ
 
+> **追記（2026-10-07）**: 取り消しはブラウザが送る行を受け取らない形に変えた（PBI の削除の取り消しと同じ理由。
+> 送られた `moved` をそのまま書くと、検証も履歴も通さずに任意の内容へ書き換えられた）。
+> - 解決の応答は `moved` / `resolvedRow`（表示用）に加えて `undoToken` を返す。サーバは解決前の行を
+>   `moved` と解決で書いた行 `resolvedRow` を `CacheService`（`impundo:` + 鍵、600 秒）に預ける（上の `conflict` の検査は
+>   預かった `resolvedRow` で行う）。預けられなければ `undoToken: null`（取り消しの通知を出さない）
+> - `apiUnresolveImpediment(arg)` の `arg` は `{ undoToken }` か `{ pendingId }` のどちらか1つだけ。それ以外の形は `invalid`
+>   - `{ undoToken }`: 預かった行を戻す。鍵は書く前に捨て（捨てられなければ `error`）、書き終えられなければ
+>     （失敗・`partial`）預け直しを試みる（ベストエフォート）。`partial` の「完了する」は同じ鍵で送り直す。無い・期限切れは `expired`
+>   - `{ pendingId }`: 「途中で止まった操作」の「未解決に戻す」。同じ障害物が両方のファイルに1行ずつあるときだけ、
+>     未解決側の行を正として解決済から消す。既に揃っていれば何も書かずに成功、どちらのファイルにも無ければ
+>     `not_found`、それ以外（どちらかに同じ ID が複数ある場合を含む）は `conflict`
+
 ### 追記（2026-10-06）
 未解決から隠すのは、解決済に ID と中身（id・タイトル・説明・報告者・報告日・スプリント）が同じ行があるときだけ。
 その状態は「途中で止まった操作」として画面に出し、「解決済として完了」「未解決に戻す」で完了できる
 （サーバが毎回見つけて返すので、開き直しても出る）。同じ ID で中身が違う行は押せない行として出し、CSV の修正を促す。
+同じ ID が未解決か解決済に複数あるときも、どれが対か決められないため、未解決の行を押せない行として出す
+（「途中で止まった操作」にはしない。サーバも `apiUpdateImpediment` を `duplicate_id` で断る。2026-10-07 追記）。
 
 ## API
 
@@ -123,12 +138,12 @@ Drive に複数ファイルのトランザクションは無い。**「足して
 ```
 apiCreateImpediment(fields)                     → { ok, view, summary, id }
 apiUpdateImpediment(id, fields, expected)       → { ok, view, summary }
-apiResolveImpediment(id, resolution, expected)  → { ok, view, summary, moved, resolvedRow }
-apiUnresolveImpediment(moved, resolvedRow)      → { ok, view, summary }
+apiResolveImpediment(id, resolution, expected)  → { ok, view, summary, moved, resolvedRow, undoToken }
+apiUnresolveImpediment({ undoToken } | { pendingId }) → { ok, view, summary }   （2026-10-07 から。上の追記）
 ```
 
 失敗時は `{ ok:false, reason, message, view?, summary? }`。`reason` は
-`busy` / `invalid` / `conflict` / `not_found` / `partial` / `error`。
+`busy` / `invalid` / `conflict` / `not_found` / `duplicate_id`（同じ ID の行が重なっている）/ `partial` / `expired`（取り消しの鍵が無い・期限切れ。2026-10-07 から）/ `error`。
 成功・競合のどちらでも最新のビューを返し、画面はそれで描き直す。
 
 ## アーキテクチャ

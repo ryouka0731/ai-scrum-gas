@@ -21,9 +21,16 @@ function ready() {
   h.calls[0].handlers.success({
     ok: true, name: 'board', view: h.boardOf(INITIAL),
     summary: { byStatus: [], total: { count: 2, points: 0 } },
-    comments: { 'PBI-001': [cmt('CMT-00000001', '2026-10-06 09:00:00'), cmt('CMT-00000002', '2026-10-06 10:00:00')] },
+    commentCounts: { 'PBI-001': 2 },
   });
   return h;
+}
+
+/** カードを開き、パネルが取りに行くコメント（apiGetComments。2巡目 H2 の P2 から）に答える。 */
+function openCard(h, id) {
+  h.openCard(id);
+  h.calls.filter((c) => c.method === 'apiGetComments').forEach((c) => c.handlers.success({ ok: true,
+    comments: c.args[0] === 'PBI-001' ? [cmt('CMT-00000001', '2026-10-06 09:00:00'), cmt('CMT-00000002', '2026-10-06 10:00:00')] : [] }));
 }
 const cards = (h) => h.sandbox.document.querySelectorAll('#board .card');
 
@@ -103,7 +110,7 @@ test('E2: 閉じるボタンでも、追加ボタンから開いたときは追�
 
 test('E5: PBI の削除は「PBI を削除」、コメントの削除は書き手と日時入りの名前になり、重複しない', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   assert.equal(h.sandbox.document.getElementById('panel-delete').getAttribute('aria-label'), 'PBI を削除');
   const dels = h.sandbox.document.querySelectorAll('#panel-comments .comment-delete');
   assert.equal(dels.length, 2);
@@ -114,7 +121,7 @@ test('E5: PBI の削除は「PBI を削除」、コメントの削除は書き�
 
 test('E3: コメントを消すと、次のコメントの削除ボタンへ焦点が移る', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   const dels = () => h.sandbox.document.querySelectorAll('#panel-comments .comment-delete');
   const first = dels()[0];
   first.focus();   // 実際に押すとそのボタンに焦点がある
@@ -123,7 +130,7 @@ test('E3: コメントを消すと、次のコメントの削除ボタンへ焦�
   assert.equal(call.method, 'apiDeleteComment');
   call.handlers.success({
     ok: true, removed: cmt('CMT-00000001', '2026-10-06 09:00:00'),
-    comments: { 'PBI-001': [cmt('CMT-00000002', '2026-10-06 10:00:00')] },
+    targetId: 'PBI-001', comments: [cmt('CMT-00000002', '2026-10-06 10:00:00')], count: 1,
   });
   const rest = dels();
   assert.equal(rest.length, 1);
@@ -132,19 +139,19 @@ test('E3: コメントを消すと、次のコメントの削除ボタンへ焦�
 
 test('E3: 最後の1件を消したら入力欄へ焦点が移る', () => {
   const h = ready();
-  h.openCard('PBI-001');
+  openCard(h, 'PBI-001');
   const dels = h.sandbox.document.querySelectorAll('#panel-comments .comment-delete');
   // 先に1件目を消し終えて、2件目だけにしてから消す
   dels[0].focus();
   dels[0].listeners.click.forEach((fn) => fn.call(dels[0], {}));
   h.calls[h.calls.length - 1].handlers.success({ ok: true, removed: cmt('CMT-00000001', '2026-10-06 09:00:00'),
-    comments: { 'PBI-001': [cmt('CMT-00000002', '2026-10-06 10:00:00')] } });
+    targetId: 'PBI-001', comments: [cmt('CMT-00000002', '2026-10-06 10:00:00')], count: 1 });
   const last = h.sandbox.document.querySelectorAll('#panel-comments .comment-delete')[0];
   const input = h.sandbox.document.querySelectorAll('#panel-comments .comment-input')[0];
   const before = input.focusCount;
   last.focus();
   last.listeners.click.forEach((fn) => fn.call(last, {}));
   h.calls[h.calls.length - 1].handlers.success({ ok: true, removed: cmt('CMT-00000002', '2026-10-06 10:00:00'),
-    comments: { 'PBI-001': [] } });
+    targetId: 'PBI-001', comments: [], count: 0 });
   assert.equal(input.focusCount, before + 1);
 });

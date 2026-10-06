@@ -148,7 +148,7 @@ test('I3: 「完了する」を送信中は、同じ障害物のパネルの保�
   h.click('imp-panel-resolve');
   h.setValue('i-resolution', '再起動した');
   h.click('imp-panel-resolve');
-  last(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  last(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW, undoToken: 'tok-ROW' }));
   h.click('toast-undo');
   last(h).handlers.success(partial([ROW], [RESOLVED_ROW]));
   h.clickImpRow('IMP-002');

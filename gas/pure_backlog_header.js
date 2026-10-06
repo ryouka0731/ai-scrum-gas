@@ -3,8 +3,8 @@
  */
 
 // GAS 上では同じグローバルに読み込まれる。Node ではここで解決する。
-if (typeof require !== 'undefined' && typeof parseCsv === 'undefined') {
-  var { parseCsv } = require('./pure_csv.js');
+if (typeof require !== 'undefined' && typeof csvHeaderRow === 'undefined') {
+  var { csvHeaderRow } = require('./pure_csv.js');
 }
 
 /**
@@ -17,7 +17,8 @@ if (typeof require !== 'undefined' && typeof parseCsv === 'undefined') {
  * toCsv の出力は既存ファイルと食い違うため、順序まで含めた完全一致を要求する。
  */
 function assertHeaderMatches(text, fields) {
-  const header = parseCsv(text)[0] || [];
+  // 見出しの行だけを解釈する（ファイル全体を解釈し直さない）。
+  const header = csvHeaderRow(text);
   const matches = header.length === fields.length &&
     header.every(function (name, i) { return name === fields[i]; });
   if (!matches) {

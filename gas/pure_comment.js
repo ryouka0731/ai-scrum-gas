@@ -91,7 +91,26 @@ function groupComments(rows, me) {
   return out;
 }
 
+/** 1つの対象のコメント（groupComments と同じ並び・同じ形）。対象の形が不正なら空。 */
+function commentsForTarget(rows, targetId, me) {
+  const t = cmtText_(targetId).trim();
+  if (!COMMENT_TARGET_RE.test(t)) return [];
+  const picked = (rows || []).filter(function (r) { return cmtText_((r || {}).target_id).trim() === t; });
+  return groupComments(picked, me)[t] || [];
+}
+
+/** 対象ごとの件数 { <target_id>: n }。groupComments と同じく、形の不正な target_id は数えない。 */
+function countComments(rows) {
+  const out = {};
+  (rows || []).forEach(function (r) {
+    const t = cmtText_((r || {}).target_id).trim();
+    if (!COMMENT_TARGET_RE.test(t)) return;
+    out[t] = (out[t] || 0) + 1;
+  });
+  return out;
+}
+
 if (typeof module !== 'undefined') {
   module.exports = { COMMENT_FIELDS, COMMENT_TARGET_RE, COMMENT_ID_RE, COMMENT_BODY_MAX,
-    validateComment, appendComment, deleteComment, restoreComment, groupComments };
+    validateComment, appendComment, deleteComment, restoreComment, groupComments, commentsForTarget, countComments };
 }

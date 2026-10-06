@@ -52,7 +52,7 @@
   button:hover { background: var(--card-2); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* カードの開く入口（タイトル、tabindex=0）と、焦点の戻り先の入れ物（tabindex=-1）にも輪郭を出す */
-  .card .title:focus-visible, #board:focus-visible, #table-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card .title:focus-visible, #board:focus-visible, #table-view:focus-visible, .history-group:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button[disabled] { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   button.primary:hover { filter: brightness(1.08); }
@@ -177,6 +177,7 @@
   .comment-meta button { font-size: 12px; padding: var(--sp-1) var(--sp-2); min-height: 24px; }
   .comment-body { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .comment-empty { font-size: 12px; color: var(--ink-3); }
+  .comment-empty.error { color: var(--danger); }
   .comment-input {
     font: inherit; line-height: 1.7; color: var(--ink); background: var(--card-2);
     border: 1px solid var(--line); border-radius: 8px; padding: var(--sp-2) var(--sp-3);
@@ -205,6 +206,7 @@
   .history-line.del { color: var(--danger); text-decoration: line-through; }
   .history-line.add { color: var(--accent); }
   .history-line.same { color: var(--ink-2); }
+  .history-more { margin-top: var(--sp-2); font-size: 12px; }
   /* カードと障害物の表の件数 */
   .comment-count { font-size: 11px; color: var(--ink-2); }
   td .comment-count { margin-left: var(--sp-2); white-space: nowrap; }
@@ -1361,6 +1363,7 @@ function openPanel(id, presetStatus, opener) {
   render(board);   // 選択中のカードに印を付ける
   renderHistory('panel-history', id);   // 閉じた状態から始める。新規作成なら隠れる
   renderComments('panel-comments', id, true);   // 新規作成（id が null）なら節は隠れる
+  if (id) fetchComments('panel-comments', id);
   document.getElementById('f-title').focus();
 }
 
@@ -1784,6 +1787,7 @@ function openImpPanel(id, opener) {
   document.getElementById('imp-panel').hidden = false;
   renderHistory('imp-panel-history', id);   // 閉じた状態から始める。新規作成なら隠れる
   renderComments('imp-panel-comments', id, true);   // 新規作成（id が null）なら節は隠れる
+  if (id) fetchComments('imp-panel-comments', id);
   document.getElementById('i-title').focus();
 }
 
@@ -1907,20 +1911,15 @@ function applyImpResponse(res, issued, commentSeen, ownId) {
   lastAppliedImp = issued;
   impView = overlayImpView(res.view);
   impSummary = impSummaryFor(impView, res.summary, res.view);
-  // 応答が運ぶコメントは、読み込み（loadView）と同じ「全体の写し」として扱う。ただし
+  // 応答が運ぶコメントの件数は、読み込み（loadView）と同じ「全体の写し」として扱う。ただし
   // コメントの書き込みと競りうるときは使わない: 障害物の書き込みを出した時点で送信中の
   // コメントがあった、または出してから新たにコメントを書いた（commentSeen が今の
   // commentWriteIssued と違う）なら、この写しはそれを含まないかもしれない。
-  var takeComments = !!res.comments && commentSeen === commentWriteIssued;
-  if (takeComments) {
-    commentsByTarget = withoutDeletedComments(res.comments);
-    lastAppliedComment = commentWriteIssued;
-  }
+  if (res.commentCounts && commentSeen === commentWriteIssued) takeCommentCounts(res.commentCounts);
   if (activeView === 'impediment') {
     renderTable(impView);
     renderSummary(impSummary);
   }
-  if (takeComments) refreshOpenComments();
   releaseStickyIfDone(impView);
   pruneImpOverlay();
 }
@@ -2026,7 +2025,13 @@ function showResolveOutcome(id, resolution, expected, res) {
   if (res.ok) {
     // 通知の題は送った側の行から取る（編集欄の値ではない）。
     var title = (res.moved && res.moved.title) || (expected && expected.title) || '';
-    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); },
+    // 取り消しはサーバが預かった解決前の行を鍵（undoToken）で戻す。預けられなかったときは取り消しを出さない。
+    if (!res.undoToken) {
+      setMessage(id + '「' + title + '」を解決しました。', 'info');
+      return;
+    }
+    var undoArg = { undoToken: res.undoToken };
+    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(id, undoArg); },
       undefined, undefined, false, id);
     return;
   }
@@ -2116,29 +2121,33 @@ function retryResolveImp(id, resolution, expected) {
     .apiResolveImpediment(id, resolution, expected);
 }
 
-function unresolveImp(moved, resolvedRow) {
-  if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
-  if (impSettlingNow(moved.id)) return;
-  var key = String(moved.id || '').trim();
+/**
+ * 解決を取り消す（未解決に戻す）。arg はサーバへそのまま送る { undoToken } か { pendingId }。
+ * 行の中身は送らない（サーバが預かった行・ファイルの行から戻す）。途中で止まったら同じ arg で送り直す。
+ */
+function unresolveImp(id, arg) {
+  if (!id || !arg) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  if (impSettlingNow(id)) return;
+  var key = String(id || '').trim();
   markImpBusy(key, true);
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
-  setMessage(moved.id + ' を戻しています…', 'info');
+  setMessage(id + ' を戻しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
       markImpBusy(key, false);
       if (res.ok || res.reason === 'partial') writeSeq++;
-      applyImpResponse(res, issued, commentSeen, moved.id);
-      setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
+      applyImpResponse(res, issued, commentSeen, id);
+      setMessage(res.ok ? id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
       if (res.reason === 'partial') {
         // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
-        showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
-          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', moved.id);
+        showUndoToast(id + ' の取り消しが途中で止まりました。',
+          function () { unresolveImp(id, arg); }, '完了する', 'check', id);
       }
-      afterHistoryWrite(res, res.ok ? moved.id : null, msgMark);
+      afterHistoryWrite(res, res.ok ? id : null, msgMark);
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
@@ -2146,32 +2155,69 @@ function unresolveImp(moved, resolvedRow) {
       pruneImpOverlay();
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
-    .apiUnresolveImpediment(moved, resolvedRow);
+    .apiUnresolveImpediment(arg);
 }
 
 // --- コメント ---------------------------------------------------------------
-// 全対象のコメント { <target_id>: [comment（古い順）] }。読み込み（board / list / impediment）と
-// コメント・障害物の書き込みの応答が運ぶ全体の写しで差し替える。運ばない応答では触らない。
-var commentsByTarget = {};
+// 件数 { <target_id>: n } は、読み込み（board / list / impediment）と障害物の書き込みの応答が運ぶ
+// commentCounts で差し替える。本文は増え続けるのでビューには載らない。パネルを開いたときに
+// その対象の分を apiGetComments で取り、コメントの書き込みの応答（その対象の一覧と件数）で差し替える。
+var commentCounts = {};
+var commentsByTarget = {};    // 取得した対象だけ。target_id → [comment（古い順）]
 var commentWriteIssued = 0;   // コメントの書き込みを発行した通し番号（古い応答で一覧を戻さないため）
-var lastAppliedComment = 0;   // 反映した応答のうち、最も新しい書き込みの通し番号
+var commentLastApplied = {};  // target_id → その対象の一覧に反映した、最も新しい書き込みの通し番号
 var commentPending = {};      // 送信中のコメントの書き込みの発行番号 → true（応答・失敗のどちらでも外す）
-// 成功したコメントの書き込みの数。loadView() はこれが変わっていたら応答の comments だけを使わない
+// 成功したコメントの書き込みの数。loadView() はこれが変わっていたら応答の commentCounts だけを使わない
 // （コメントは盤面・表の中身を変えないので、writeSeq は進めず読み込みそのものは捨てさせない）。
 var commentWritesDone = 0;
+var commentWritesDoneFor = {}; // target_id → 成功した書き込みの数（取得の応答が書き込みより古いかを見分ける）
+var commentFetchReq = 0;      // 取得（apiGetComments）の通し番号。応答はこれが節の req と一致するときだけ使う
+var commentFetch = {};        // 節の id → { req, targetId, error }（最後に出した取得）
 var commentSending = {};      // target_id → 送信中の本文（送信中は入力を塞ぎ、その本文を出し続ける）
 var commentDeletedIds = {};   // この画面で削除に成功したコメントの id → true（遅れた追加の応答で戻さないため。戻す成功で外す）
 var commentDeleting = {};     // コメントの id → true（削除の送信中は削除ボタンを塞ぐ）
 var commentUi = {};           // 節の id → { targetId, input, send, message }（最後に描いたもの）
 
+function commentsKnown(targetId) {
+  return !!targetId && Object.prototype.hasOwnProperty.call(commentsByTarget, targetId)
+    && Array.isArray(commentsByTarget[targetId]);
+}
+
 function commentsOf(targetId) {
-  var list = targetId && commentsByTarget ? commentsByTarget[targetId] : null;
-  return Array.isArray(list) ? list : [];
+  return commentsKnown(targetId) ? commentsByTarget[targetId] : [];
+}
+
+function commentCountOf(targetId) {
+  if (!targetId || !Object.prototype.hasOwnProperty.call(commentCounts, targetId)) return 0;
+  var n = Number(commentCounts[targetId]);
+  return n > 0 ? Math.floor(n) : 0;
+}
+
+/** 対象の一覧を差し替え、件数もその長さに揃える（一覧はその対象の全件）。 */
+function setCommentList(targetId, list) {
+  commentsByTarget[targetId] = list;
+  commentCounts[targetId] = list.length;
+}
+
+/**
+ * 読み込み・障害物の書き込みの応答が運ぶ件数で差し替える。取得済みの一覧と件数が食い違う対象は、
+ * 一覧が古い（他の人が書いた等）ので捨てる（開いたときに取る）。開いている節の対象は、件数が同じでも
+ * 取り直す（他の人の削除と追加で件数だけが揃うことがある）。取り直すと、この件数より前に出した取得の
+ * 応答は捨てられる（古い一覧の長さで件数を戻さない）。取れるまでは今の一覧を出し続ける。
+ */
+function takeCommentCounts(counts) {
+  commentCounts = Object.assign({}, counts || {});
+  var open = openCommentHost();
+  Object.keys(commentsByTarget).forEach(function (t) {
+    if (commentsOf(t).length === commentCountOf(t)) return;
+    if (!open || open.targetId !== t) delete commentsByTarget[t];
+  });
+  if (open) fetchComments(open.hostId, open.targetId);
 }
 
 /** カード・表に添える件数。コメントが無ければ null。 */
 function makeCommentCount(targetId) {
-  var n = commentsOf(targetId).length;
+  var n = commentCountOf(targetId);
   if (n === 0) return null;
   var span = document.createElement('span');
   span.className = 'comment-count';
@@ -2271,9 +2317,18 @@ function syncCommentForm(ui) {
   ui.send.disabled = sending || ui.input.value.trim() === '';
 }
 
-/** 一覧（box の中身）を、今の commentsByTarget から作り直す。 */
+/** 一覧（box の中身）を、今の commentsByTarget から作り直す。まだ取れていなければ読み込み中・失敗を出す。 */
 function fillCommentList(box, hostId, targetId) {
   box.innerHTML = '';
+  if (!commentsKnown(targetId)) {
+    var f = commentFetch[hostId];
+    var failed = !!(f && f.targetId === targetId && f.error);
+    var status = document.createElement('div');
+    status.className = 'comment-empty' + (failed ? ' error' : '');
+    status.textContent = failed ? f.error : 'コメントを読み込んでいます…';
+    box.appendChild(status);
+    return;
+  }
   var list = commentsOf(targetId);
   var ul = document.createElement('ul');
   ul.className = 'comment-list';
@@ -2327,26 +2382,59 @@ function refreshOpenComments() {
   if (open) renderComments(open.hostId, open.targetId, false);
 }
 
-/** 受け入れる写しから、この画面で削除に成功したコメントを外す。戻す成功で集合から外れる。 */
-function withoutDeletedComments(comments) {
-  if (!comments || Object.keys(commentDeletedIds).length === 0) return comments;
-  var out = {};
-  Object.keys(comments).forEach(function (k) {
-    var list = comments[k];
-    out[k] = Array.isArray(list) ? list.filter(function (c) { return !commentDeletedIds[c.id]; }) : list;
-  });
-  return out;
+/**
+ * 開いた節の対象のコメントを取りに行く。応答は、その節が同じ対象で開いたままで、
+ * これが最後に出した取得のときだけ使う（遅れて届いた前の対象・前の取得の応答は捨てる）。
+ * 取得を出したあとにこの対象への書き込みが確定していたら、その応答の一覧（取得より新しいかもしれない）を使い続ける。
+ */
+function fetchComments(hostId, targetId) {
+  var req = ++commentFetchReq;
+  var mark = { req: req, targetId: targetId, error: '' };
+  commentFetch[hostId] = mark;
+  var seenWrites = commentWritesDoneFor[targetId] || 0;
+  // 応答で「ここまでは反映済み」とみなす発行番号は、取得を出した時点で控える（loadView と同じ）。
+  var floor = seqFloor(commentPending, commentWriteIssued);
+  var current = function () { return commentFetch[hostId] === mark && !!commentUiFor(hostId, targetId); };
+  var fail = function (text) {
+    if (commentsKnown(targetId)) return;   // 前に取れた一覧があれば、それを出し続ける
+    mark.error = 'コメントを読み込めませんでした: ' + text;
+    refreshOpenComments();
+  };
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (!current()) return;
+      if (!res || !res.ok || !Array.isArray(res.comments)) { fail((res && res.message) || ''); return; }
+      if ((commentWritesDoneFor[targetId] || 0) !== seenWrites && commentsKnown(targetId)) return;
+      commentLastApplied[targetId] = Math.max(commentLastApplied[targetId] || 0, floor);
+      var before = commentCountOf(targetId);
+      setCommentList(targetId, overlayComments(targetId, withoutDeletedComments(res.comments)));
+      // 件数が変わらなければ盤面・表は描き直さない（パネルを開くたびに盤面全体を描き直さない）。
+      if (commentCountOf(targetId) !== before) redrawComments();
+      else refreshOpenComments();
+    })
+    .withFailureHandler(function (err) {
+      if (!current()) return;
+      fail((err && err.message) || '');
+    })
+    .apiGetComments(targetId);
+}
+
+/** 受け入れる一覧から、この画面で削除に成功したコメントを外す。戻す成功で集合から外れる。 */
+function withoutDeletedComments(list) {
+  if (!Array.isArray(list)) return [];
+  if (Object.keys(commentDeletedIds).length === 0) return list;
+  return list.filter(function (c) { return !commentDeletedIds[c.id]; });
 }
 
 /**
- * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
+ * コメントの書き込みの応答が運ぶ、その対象の一覧を取り込む。その対象へ後から発行した書き込みの応答を
  * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
- * 取り込む写しには、確定した自分の操作（commentOverlay）を当て直す。
+ * 取り込む一覧には、確定した自分の操作（commentOverlay）を当て直す。
  */
-function applyComments(comments, issued) {
-  if (!comments || issued <= lastAppliedComment) return false;
-  lastAppliedComment = issued;
-  commentsByTarget = overlayComments(withoutDeletedComments(comments));
+function applyComments(targetId, list, issued) {
+  if (!targetId || !Array.isArray(list) || issued <= (commentLastApplied[targetId] || 0)) return false;
+  commentLastApplied[targetId] = issued;
+  setCommentList(targetId, overlayComments(targetId, withoutDeletedComments(list)));
   redrawComments();
   return true;
 }
@@ -2392,19 +2480,24 @@ function pruneCommentOverlay() {
   commentOverlay = commentOverlay.filter(function (e) { return oldest <= e.mark; });
 }
 
-/** comments に控えを当てた写しを返す。変わらなければ同じものを返す。 */
-function overlayComments(comments) {
-  var out = comments;
-  commentOverlay.forEach(function (e) { out = withOwnComment(out, e.id, e.row); });
+/** 対象 targetId の一覧 list に控えを当てた写しを返す。変わらなければ同じものを返す。 */
+function overlayComments(targetId, list) {
+  var out = list;
+  commentOverlay.forEach(function (e) { out = withOwnComment(out, targetId, e.id, e.row); });
   return out;
 }
 
-/** 今の一覧に控えを当て、変わったら描き直す（写しを取り込まなかった応答で使う）。 */
+/** 取得済みの一覧に控えを当て、変わったら描き直す（一覧を取り込まなかった応答で使う）。 */
 function applyCommentOverlay() {
-  var next = overlayComments(commentsByTarget);
-  if (next === commentsByTarget) return;
-  commentsByTarget = next;
-  redrawComments();
+  var changed = false;
+  Object.keys(commentsByTarget).forEach(function (t) {
+    var list = commentsOf(t);
+    var next = overlayComments(t, list);
+    if (next === list) return;
+    setCommentList(t, next);
+    changed = true;
+  });
+  if (changed) redrawComments();
 }
 
 /** 件数（盤面・障害物の表）と開いている節を、今の commentsByTarget から描き直す。 */
@@ -2415,37 +2508,30 @@ function redrawComments() {
 }
 
 /**
- * 確定した自分のコメントの操作1件を comments に当てた写しを返す（変わらなければ同じもの）。
+ * 確定した自分のコメントの操作1件を、対象 targetId の一覧 list に当てた写しを返す（変わらなければ同じもの）。
  * 何度当てても同じ結果になる。
- * row があれば: その行を row.target_id の一覧へ足す（同じ id が無ければ。作成日時の古い順、
- * 同じ日時なら既存の後ろ）。他の対象の一覧に同じ id があれば外す。
- * row が null なら: id の行をどの一覧からも外す。
+ * row があり row.target_id がこの対象なら: その行を足す（同じ id が無ければ。作成日時の古い順、
+ * 同じ日時なら既存の後ろ）。そうでなければ（row が null・他の対象）: id の行を外す。
  */
-function withOwnComment(comments, id, row) {
-  var src = comments || {};
-  var next = {};
-  Object.keys(src).forEach(function (k) { next[k] = src[k]; });
-  var changed = false;
-  var home = row && row.target_id ? row.target_id : null;
-  Object.keys(next).forEach(function (k) {
-    if (k === home) return;
-    var list = Array.isArray(next[k]) ? next[k] : [];
-    var kept = list.filter(function (c) { return c.id !== id; });
-    if (kept.length !== list.length) { next[k] = kept; changed = true; }
-  });
-  if (home) {
-    var cur = Array.isArray(next[home]) ? next[home] : [];
-    var exists = cur.some(function (c) { return c.id === id; });
-    if (!exists) {
-      var at = cur.length;
-      for (var i = 0; i < cur.length; i++) {
-        if (String(cur[i].created_at || '') > String(row.created_at || '')) { at = i; break; }
-      }
-      next[home] = cur.slice(0, at).concat([row], cur.slice(at));
-      changed = true;
-    }
+function withOwnComment(list, targetId, id, row) {
+  var cur = Array.isArray(list) ? list : [];
+  if (!row || row.target_id !== targetId) {
+    var kept = cur.filter(function (c) { return c.id !== id; });
+    return kept.length === cur.length ? list : kept;
   }
-  return changed ? next : comments;
+  if (cur.some(function (c) { return c.id === id; })) return list;
+  var at = cur.length;
+  for (var i = 0; i < cur.length; i++) {
+    if (String(cur[i].created_at || '') > String(row.created_at || '')) { at = i; break; }
+  }
+  return cur.slice(0, at).concat([row], cur.slice(at));
+}
+
+/** コメントの書き込みの成功を数える（読み込み・取得の応答が、それより古いかを見分ける）。 */
+function noteCommentWriteDone(targetId) {
+  commentWritesDone++;
+  var t = String(targetId || '').trim();
+  if (t) commentWritesDoneFor[t] = (commentWritesDoneFor[t] || 0) + 1;
 }
 
 function sendComment(hostId, targetId) {
@@ -2468,12 +2554,12 @@ function sendComment(hostId, targetId) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       settle();
       if (res.ok) {
-        commentWritesDone++;   // loadView() が発行後のコメントの書き込みを見分けるための会計
+        noteCommentWriteDone(res.targetId || targetId);   // loadView() / 取得が発行後の書き込みを見分けるための会計
         var cur = commentUiFor(hostId, targetId);
         if (cur) cur.input.value = '';   // 描き直しで引き継がれないよう、先に空にする
       }
       if (res.ok && res.comment) noteOwnComment(res.comment.id, issued, res.comment);
-      if (!applyComments(res.comments, issued)) {
+      if (!applyComments(res.targetId || targetId, res.comments, issued)) {
         applyCommentOverlay();
         refreshOpenComments();
       }
@@ -2557,12 +2643,12 @@ function deleteComment(hostId, targetId, commentId) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       settle();
-      if (res.ok) commentWritesDone++;
+      if (res.ok) noteCommentWriteDone(res.targetId || targetId);
       if (res.ok && res.removed && res.removed.id) {
         commentDeletedIds[res.removed.id] = true;
         noteOwnComment(res.removed.id, issued, null);
       }
-      if (!applyComments(res.comments, issued)) {
+      if (!applyComments(res.targetId || targetId, res.comments, issued)) {
         applyCommentOverlay();
         refreshOpenComments();
       }
@@ -2599,14 +2685,14 @@ function restoreComment(row) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete commentPending[issued];
-      if (res.ok) commentWritesDone++;
+      if (res.ok) noteCommentWriteDone(res.targetId || row.target_id);
       // 重ねるのはサーバが保存した形の行（restored。id の前後の空白を落としたもの）。
       // 送った行のままだと id が食い違い、写しの行と一時的に二重に出る。無ければ送った行を使う。
       var back = (res.ok && res.restored) || row;
       if (res.ok && row.id) delete commentDeletedIds[row.id];
       if (res.ok && back.id) delete commentDeletedIds[back.id];
       if (res.ok) noteOwnComment(back.id, issued, back);
-      if (!applyComments(res.comments, issued)) applyCommentOverlay();
+      if (!applyComments(res.targetId || String(row.target_id || '').trim(), res.comments, issued)) applyCommentOverlay();
       pruneCommentOverlay();
       if (res.ok) setMessage('コメントを戻しました。', 'info');
       else failRestore(res.message);
@@ -2628,6 +2714,8 @@ var HISTORY_LINE_DIFF_MAX = 500;
 // 1回の描画で行差分に使ってよい LCS の表の大きさの合計（(n+1)*(m+1) を更新ごとに足す）。
 // 使い切った後の複数行の更新は、LCS を使わず丸ごと del → add で出す（画面の固まりを防ぐ）。
 var HISTORY_DIFF_BUDGET = 2000000;
+// 履歴の一覧を一度に描く件数。残りは「さらに表示」で同じ件数ずつ足す（DOM の大きさを縛る）。
+var HISTORY_PAGE = 50;
 
 // 項目名は一覧・障害物の表の列見出しと同じ言葉（kanban_history.test.js が LIST_COLUMNS /
 // IMPEDIMENT_COLUMNS との一致を固定している）。
@@ -2828,7 +2916,9 @@ function historyValue(v) {
 
 /**
  * 一覧を描く。文字はすべて textContent で入れる（値に <b> 等があっても文字のまま）。
- * truncated（サーバが上限件で切った）なら、最後に省略した旨を出す。
+ * 最初は HISTORY_PAGE 件まで描き、残りは「さらに表示（残り N 件）」で HISTORY_PAGE 件ずつ足す
+ * （DOM の大きさを描いた件数で縛る。HISTORY_DIFF_BUDGET は1回の描画の LCS の計算だけを縛る）。
+ * truncated（サーバが上限件で切った）なら、すべて出したあとの最後に省略した旨を出す。
  */
 function fillHistory(content, entries, truncated) {
   clearHost(content);
@@ -2836,66 +2926,122 @@ function fillHistory(content, entries, truncated) {
     setHistoryStatus(content, 'まだ履歴がありません', 'info');
     return;
   }
-  var budget = HISTORY_DIFF_BUDGET;
-  historyGroups(entries).forEach(function (g) {
+  var list = document.createElement('div');
+  content.appendChild(list);
+  var footer = document.createElement('div');
+  content.appendChild(footer);
+  // last は最後に描いたまとまり（次のページの先頭が同じ時刻・同じ人なら、そこへ続けて足す）。
+  var state = { entries: entries, truncated: truncated, shown: 0, budget: 0, list: list, footer: footer, last: null };
+  appendHistoryPage(state);
+}
+
+/**
+ * 次の HISTORY_PAGE 件を足し、末尾（「さらに表示」か省略の注記）を描き直す。最初に足したまとまりを返す
+ * （先頭が前のまとまりへ続けて足しただけなら、そのまとまり）。
+ */
+function appendHistoryPage(state) {
+  var end = Math.min(state.entries.length, state.shown + HISTORY_PAGE);
+  var first = null;
+  state.budget = HISTORY_DIFF_BUDGET;   // 予算は1回の描画（1ページ）ごと
+  historyGroups(state.entries.slice(state.shown, end)).forEach(function (g) {
+    var box = appendHistoryGroup(state, g);
+    if (!first) first = box || state.last.box;
+  });
+  state.shown = end;
+  var footer = state.footer;
+  clearHost(footer);
+  footer.className = '';
+  var rest = state.entries.length - state.shown;
+  if (rest > 0) {
+    var more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'history-more';
+    more.textContent = 'さらに表示（残り ' + rest + ' 件）';
+    more.addEventListener('click', function () {
+      var added = appendHistoryPage(state);
+      // 押したボタンは描き直しで消える。焦点は次の「さらに表示」か、足した先頭のまとまりへ移す。
+      var next = state.footer.querySelector('.history-more');
+      var target = next || added;
+      if (target && typeof target.focus === 'function') target.focus();
+    });
+    footer.appendChild(more);
+  } else if (state.truncated) {
+    footer.className = 'history-status info';
+    footer.textContent = 'これより前の履歴は省略しています';
+  }
+  return first;
+}
+
+/**
+ * まとまり g（同じ at + actor の連続）を描いて足す。直前に描いたまとまりと同じ at + actor なら
+ * （ページの境目で分かれたもの）、そこへ続けて足す。新しく作ったまとまり（続けたなら null）を返す。
+ */
+function appendHistoryGroup(state, g) {
+  var last = state.last;
+  var cont = !!last && last.at === g.at && last.actor === g.actor;
+  if (!cont) {
     var box = document.createElement('div');
     box.className = 'history-group';
-    var actions = [];
-    g.items.forEach(function (e) {
-      var label = HISTORY_ACTION_LABELS[e.action] || historyText(e.action);
-      if (actions.indexOf(label) === -1) actions.push(label);
-    });
+    box.tabIndex = -1;   // 「さらに表示」の後に焦点を移せるように
     var head = document.createElement('div');
     head.className = 'history-head';
-    head.textContent = historyText(g.at) + ' · ' + commentAuthorLabel(g.actor) + ' · ' + actions.join('・');
     box.appendChild(head);
     var ul = document.createElement('ul');
     ul.className = 'history-items';
-    g.items.forEach(function (e) {
-      if (e.action !== 'update') return;   // 項目の変更以外は見出しの操作名で足りる
-      var li = document.createElement('li');
-      li.className = 'history-item';
-      var label = HISTORY_FIELD_LABELS[e.field] || historyText(e.field);
-      var text = document.createElement('div');
-      text.className = 'history-item-text';
-      li.appendChild(text);
-      if (HISTORY_MULTILINE[e.field]) {
-        text.textContent = label + ':';
-        var diff = document.createElement('div');
-        diff.className = 'history-diff';
-        var beforeLines = historyLines(e.before);
-        var afterLines = historyLines(e.after);
-        var lcsCost = (beforeLines.length + 1) * (afterLines.length + 1);
-        var lcsUsed = beforeLines.length <= HISTORY_LINE_DIFF_MAX && afterLines.length <= HISTORY_LINE_DIFF_MAX;
-        var lines;
-        if (lcsUsed && lcsCost > budget) {
-          lines = beforeLines.map(function (t) { return { op: 'del', text: t }; })
-            .concat(afterLines.map(function (t) { return { op: 'add', text: t }; }));
-        } else {
-          if (lcsUsed) budget -= lcsCost;
-          lines = historyLineDiff(e.before, e.after);
-        }
-        lines.forEach(function (d) {
-          var line = document.createElement('div');
-          line.className = 'history-line ' + d.op;
-          line.textContent = (d.op === 'del' ? '−' : d.op === 'add' ? '＋' : '　') + d.text;
-          diff.appendChild(line);
-        });
-        li.appendChild(diff);
-      } else {
-        text.textContent = label + ': ' + historyValue(e.before) + ' → ' + historyValue(e.after);
-      }
-      ul.appendChild(li);
-    });
-    if (ul.children.length) box.appendChild(ul);
-    content.appendChild(box);
-  });
-  if (truncated) {
-    var more = document.createElement('div');
-    more.className = 'history-status info';
-    more.textContent = 'これより前の履歴は省略しています';
-    content.appendChild(more);
+    last = { at: g.at, actor: g.actor, box: box, head: head, ul: ul, ulShown: false, actions: [] };
+    state.last = last;
+    state.list.appendChild(box);
   }
+  g.items.forEach(function (e) {
+    var label = HISTORY_ACTION_LABELS[e.action] || historyText(e.action);
+    if (last.actions.indexOf(label) === -1) last.actions.push(label);
+    var li = historyItem(state, e);
+    if (li) last.ul.appendChild(li);
+  });
+  last.head.textContent = historyText(g.at) + ' · ' + commentAuthorLabel(g.actor) + ' · ' + last.actions.join('・');
+  if (!last.ulShown && last.ul.children.length) {
+    last.box.appendChild(last.ul);
+    last.ulShown = true;
+  }
+  return cont ? null : last.box;
+}
+
+/** 項目の変更1件の行（li）。項目の変更以外は見出しの操作名で足りるので null。 */
+function historyItem(state, e) {
+  if (e.action !== 'update') return null;
+  var li = document.createElement('li');
+  li.className = 'history-item';
+  var label = HISTORY_FIELD_LABELS[e.field] || historyText(e.field);
+  var text = document.createElement('div');
+  text.className = 'history-item-text';
+  li.appendChild(text);
+  if (!HISTORY_MULTILINE[e.field]) {
+    text.textContent = label + ': ' + historyValue(e.before) + ' → ' + historyValue(e.after);
+    return li;
+  }
+  text.textContent = label + ':';
+  var diff = document.createElement('div');
+  diff.className = 'history-diff';
+  var beforeLines = historyLines(e.before);
+  var afterLines = historyLines(e.after);
+  var lcsCost = (beforeLines.length + 1) * (afterLines.length + 1);
+  var lcsUsed = beforeLines.length <= HISTORY_LINE_DIFF_MAX && afterLines.length <= HISTORY_LINE_DIFF_MAX;
+  var lines;
+  if (lcsUsed && lcsCost > state.budget) {
+    lines = beforeLines.map(function (t) { return { op: 'del', text: t }; })
+      .concat(afterLines.map(function (t) { return { op: 'add', text: t }; }));
+  } else {
+    if (lcsUsed) state.budget -= lcsCost;
+    lines = historyLineDiff(e.before, e.after);
+  }
+  lines.forEach(function (d) {
+    var line = document.createElement('div');
+    line.className = 'history-line ' + d.op;
+    line.textContent = (d.op === 'del' ? '−' : d.op === 'add' ? '＋' : '　') + d.text;
+    diff.appendChild(line);
+  });
+  li.appendChild(diff);
+  return li;
 }
 
 /**
@@ -3085,8 +3231,7 @@ function loadView() {
   var requestedView = activeView;
   // 応答で「ここまでは反映済み」とみなす発行番号は、読み込みを出した時点で控える。
   // 出した時点で送信中だった書き込みと、出したあとの書き込みの応答は、引き続き使えるようにする
-  // （応答時の発行番号まで進めると、送信中に書いたコメントが応答ごと捨てられて消える）。
-  var commentFloor = seqFloor(commentPending, commentWriteIssued);
+  // （応答時の発行番号まで進めると、送信中の書き込みの結果が応答ごと捨てられて消える）。
   var impFloor = seqFloor(impPending, impWriteIssued);
   viewSeq++;
   var seq = viewSeq;   // この読み込みが今も最新かを応答時に見分ける通し番号（panelSeq と同型）
@@ -3117,18 +3262,13 @@ function loadView() {
         // hidden の切替と要約のクリアは showView() が発行前（クリック時点）に済ませている。
         // ここでは中身を描くだけにする（応答任せにすると、失敗・遅延のたびに前のタブの
         // 操作可能な盤面や表が残ってしまう）。
-        // コメントは board / list / impediment の応答だけが運ぶ。件数を描く前に差し替える。
+        // コメントの件数は board / list / impediment の応答だけが運ぶ。件数を描く前に差し替える。
         // 読み込みは、出した時点で確定していたコメントの書き込みより新しい状態。
         // 応答までにコメントの書き込みが確定していたら、この写しはそれを含まないかもしれない。
-        // ビューは描くが、コメントは今の一覧（書き込みの応答で入れたもの）を使い続ける。
-        var takeComments = !!res.comments && commentWritesDone === seenCommentWrites;
-        if (takeComments) {
-          commentsByTarget = withoutDeletedComments(res.comments);
-          lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
-        }
+        // ビューは描くが、件数は今のもの（書き込みの応答で入れたもの）を使い続ける。
+        if (res.commentCounts && commentWritesDone === seenCommentWrites) takeCommentCounts(res.commentCounts);
         if (requestedView === 'board') { render(trustBoard(res.view)); } else { renderTable(res.view); }
         renderSummary(res.summary);
-        if (takeComments) refreshOpenComments();
         // 障害物の読み直しは、出した時点で確定していた書き込みより新しい状態。それより古い応答で表を戻さない。
         if (requestedView === 'impediment') {
           lastAppliedImp = Math.max(lastAppliedImp, impFloor);
@@ -3287,7 +3427,7 @@ function pendingSection(pending) {
     back.type = 'button';
     fillButton(back, 'undo', '未解決に戻す');
     back.disabled = impBusyId(p.id);
-    back.addEventListener('click', function () { unresolveImp(p.open, p.resolved); });
+    back.addEventListener('click', function () { unresolveImp(p.id, { pendingId: p.id }); });
     actionTd.appendChild(done);
     actionTd.appendChild(back);
     tr.appendChild(actionTd);

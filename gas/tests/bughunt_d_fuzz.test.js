@@ -74,7 +74,7 @@ const own = 'CMT-0000000b';   // PBI-001 の自分のコメント
 test('削除の送信中に出した読み込みが、削除より前の写しで先に届いても、削除の応答の後に消したコメントは出ない', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-001');
+  h.openCard('PBI-001'); w.answerCommentReads();
   h.clickCommentDelete('panel-comments', own);
   const del = w.pendingNs()[0];
   h.click('reload');
@@ -90,7 +90,7 @@ test('削除の送信中に出した読み込みが、削除より前の写し�
 test('削除の応答の後に、削除より前の写しの読み込みが届いても、消したコメントは戻らない', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-001');
+  h.openCard('PBI-001'); w.answerCommentReads();
   h.click('reload');
   const load = w.pendingNs()[0];
   h.clickCommentDelete('panel-comments', own);
@@ -105,7 +105,7 @@ test('削除の応答の後に、削除より前の写しの読み込みが届�
 test('削除の取り消しは、送信中に届いた古い写しでは出さず、成功の応答で出す', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-001');
+  h.openCard('PBI-001'); w.answerCommentReads();
   h.clickCommentDelete('panel-comments', own);
   w.drain();
   h.click('toast-undo');             // 取り消す
@@ -126,7 +126,7 @@ test('「完了する」の通知は Escape でも時間でも消えず、上に
   const w = boot();
   const h = w.h;
   h.clickTab('障害物'); w.drain();
-  h.clickImpRow('IMP-002');
+  h.clickImpRow('IMP-002'); w.answerCommentReads();
   h.click('imp-panel-resolve'); h.setValue('i-resolution', 'fixed'); h.click('imp-panel-resolve');
   const n = w.pendingNs()[0];
   w.process(n, 'partial'); w.deliver(n);
@@ -135,7 +135,7 @@ test('「完了する」の通知は Escape でも時間でも消えず、上に
   assert.equal(h.hiddenOf('toast'), false);
   assert.equal(h.labelOf('toast-undo'), '完了する');
   // 普通の通知（コメントの削除）を上に出す
-  h.clickImpRow('IMP-001');
+  h.clickImpRow('IMP-001'); w.answerCommentReads();
   h.clickCommentDelete('imp-panel-comments', 'CMT-0000000c');
   w.drain();
   assert.equal(h.labelOf('toast-undo'), '取り消す');
@@ -149,7 +149,7 @@ test('「完了する」の通知は Escape でも時間でも消えず、上に
 test('履歴: 閉じて開き直した節に、前に出した取得の応答は描かれない（新しい応答で描く）', () => {
   const w = boot();
   const h = w.h;
-  h.openCard('PBI-001');
+  h.openCard('PBI-001'); w.answerCommentReads();
   h.historyToggle('panel-history');
   const first = w.pendingNs()[0];
   h.historyToggle('panel-history');   // 閉じる
@@ -168,7 +168,7 @@ test('障害物の書き込みの応答は、別のタブへ移った後に届�
   const w = boot();
   const h = w.h;
   h.clickTab('障害物'); w.drain();
-  h.clickImpRow('IMP-001');
+  h.clickImpRow('IMP-001'); w.answerCommentReads();
   h.setValue('i-title', 'renamed');
   h.click('imp-panel-save');
   const save = w.pendingNs()[0];
