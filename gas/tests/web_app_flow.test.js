@@ -878,3 +878,307 @@ test('apiGetView(list) も comments を載せる', () => {
   const { ctx } = createTestContext(cmtFiles('CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\n'));
   assert.equal(plain(ctx.apiGetView('list').comments)['PBI-001'].length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// 変更履歴（第6段階）
+// ---------------------------------------------------------------------------
+
+const CHG_HEADER = 'id,at,actor,target_id,action,field,before,after\n';
+
+/** change_log.csv を行オブジェクトにして返す。 */
+function histRows(ctx, files) {
+  return plain(ctx.csvToObjects(files['change_log.csv']));
+}
+
+/** 履歴ありの PBI 用ファイル群。 */
+function histPbiFiles() {
+  return { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': CHG_HEADER };
+}
+
+test('履歴: 状態の変更は status の update 1行。updated_at は出ず、actor はログイン中のメール', () => {
+  const { ctx, files } = createTestContext(histPbiFiles());
+  const c = ctx.apiCreatePbi(fullFields('A'));
+  const card = findCardInBoard(c.board, 'PBI-001');
+  const res = ctx.apiUpdateStatus('PBI-001', 'Ready', card.updated_at);
+  assert.equal(res.ok, true, res.message);
+  assert.equal(res.historyWarning, undefined);
+  const rows = histRows(ctx, files);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0].action, 'create');
+  assert.deepEqual([rows[1].target_id, rows[1].action, rows[1].field, rows[1].before, rows[1].after, rows[1].actor],
+    ['PBI-001', 'update', 'status', 'New', 'Ready', 'me@example.com']);
+  assert.ok(rows.every((r) => r.field !== 'updated_at'));
+  assert.match(rows[1].id, /^CHG-[0-9a-f]{8}$/);
+});
+
+test('履歴: 作成は create、削除は delete、取り消しは restore（create ではない）', () => {
+  const { ctx, files } = createTestContext(histPbiFiles());
+  const c = ctx.apiCreatePbi(fullFields('A'));
+  const card = findCardInBoard(c.board, 'PBI-001');
+  const del = ctx.apiDeletePbi('PBI-001', card.updated_at);
+  assert.equal(del.ok, true, del.message);
+  const back = ctx.apiRestorePbi(plain(del.removed));
+  assert.equal(back.ok, true, back.message);
+  assert.deepEqual(histRows(ctx, files).map((r) => [r.target_id, r.action]),
+    [['PBI-001', 'create'], ['PBI-001', 'delete'], ['PBI-001', 'restore']]);
+});
+
+test('履歴: 2項目の変更は2行で、同じ at', () => {
+  const { ctx, files } = createTestContext(histPbiFiles());
+  const c = ctx.apiCreatePbi(fullFields('A'));
+  const card = findCardInBoard(c.board, 'PBI-001');
+  const res = ctx.apiUpdatePbi('PBI-001', Object.assign(fullFields('B'), { priority: 'High' }), card.updated_at);
+  assert.equal(res.ok, true, res.message);
+  const rows = histRows(ctx, files).filter((r) => r.action === 'update');
+  assert.deepEqual(rows.map((r) => r.field).sort(), ['priority', 'title']);
+  assert.equal(rows[0].at, rows[1].at);
+  assert.notEqual(rows[0].id, rows[1].id);
+});
+
+function histImpFiles(openBody, resolvedBody) {
+  return Object.assign(impFiles(openBody, resolvedBody), { 'change_log.csv': CHG_HEADER });
+}
+
+test('履歴: 障害物の作成・編集・解決・取り消し', () => {
+  const { ctx, files } = createTestContext(histImpFiles(IMP2));
+  const cr = ctx.apiCreateImpediment({ title: '新規', description: '', reported_by: 'マヤ', sprint: '' });
+  assert.equal(cr.ok, true, cr.message);
+  const up = ctx.apiUpdateImpediment('IMP-002', { title: '新しい題', description: '', reported_by: 'マヤ', sprint: 'sprint001' }, IMP2_ROW);
+  assert.equal(up.ok, true, up.message);
+  const row = plain(up.view.open).find((r) => r.id === 'IMP-002');
+  const res = ctx.apiResolveImpediment('IMP-002', '再起動した', row);
+  assert.equal(res.ok, true, res.message);
+  const back = ctx.apiUnresolveImpediment(plain(res.moved), plain(res.resolvedRow));
+  assert.equal(back.ok, true, back.message);
+  assert.deepEqual(histRows(ctx, files).map((r) => [r.target_id, r.action, r.field]), [
+    ['IMP-003', 'create', ''],
+    ['IMP-002', 'update', 'title'],
+    ['IMP-002', 'resolve', ''],
+    ['IMP-002', 'unresolve', ''],
+  ]);
+});
+
+test('履歴: 解決が2ファイル目で失敗しても resolve は1行。完了の再送では増えない', () => {
+  const f = histImpFiles(IMP2);
+  const first = createTestContext(f, { failWriteFile: 'impediment_log.csv' });
+  const res = first.ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(res.reason, 'partial');
+  assert.equal(res.historyWarning, undefined);
+  assert.deepEqual(histRows(first.ctx, f).map((r) => [r.target_id, r.action]), [['IMP-002', 'resolve']]);
+  const retry = createTestContext(f);
+  assert.equal(retry.ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW).ok, true);
+  assert.equal(histRows(retry.ctx, f).length, 1);
+});
+
+test('履歴: 解決が1ファイル目で失敗すれば何も記録しない', () => {
+  const f = histImpFiles(IMP2);
+  const res = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv' }).ctx
+    .apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(res.reason, 'error');
+  assert.equal(f['change_log.csv'], CHG_HEADER);
+});
+
+test('履歴: コメントの追加・削除・戻しは記録するが、本文は残さない', () => {
+  const f = Object.assign(cmtFiles(), { 'change_log.csv': CHG_HEADER });
+  const { ctx, files } = createTestContext(f);
+  const add = ctx.apiAddComment('PBI-001', '秘密の本文');
+  assert.equal(add.ok, true, add.message);
+  const del = ctx.apiDeleteComment(add.comment.id);
+  assert.equal(del.ok, true, del.message);
+  const back = ctx.apiRestoreComment(plain(del.removed));
+  assert.equal(back.ok, true, back.message);
+  const rows = histRows(ctx, files);
+  assert.deepEqual(rows.map((r) => [r.target_id, r.action]),
+    [['PBI-001', 'comment_add'], ['PBI-001', 'comment_delete'], ['PBI-001', 'comment_restore']]);
+  rows.forEach((r) => { assert.equal(r.field, ''); assert.equal(r.before, ''); assert.equal(r.after, ''); });
+  assert.equal(files['change_log.csv'].indexOf('秘密の本文'), -1);
+});
+
+test('履歴: 戻しが unchanged（既にある）なら記録しない', () => {
+  const row = { id: 'CMT-0000000a', target_id: 'PBI-001', author: 'me@example.com', created_at: '2026-10-06 10:00:00', body: 'x' };
+  const f = Object.assign(cmtFiles('CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,x\n'), { 'change_log.csv': CHG_HEADER });
+  const { ctx, files } = createTestContext(f);
+  assert.equal(ctx.apiRestoreComment(row).ok, true);
+  assert.equal(files['change_log.csv'], CHG_HEADER);
+});
+
+test('履歴: change_log.csv が無くても本体は成功し、historyWarning に配布し直しを案内する', () => {
+  const { ctx, files } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  const res = ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(res.ok, true, res.message);
+  assert.ok(findCardInBoard(res.board, 'PBI-001'));
+  assert.ok(files['product_backlog.csv'].indexOf('PBI-001') !== -1);
+  assert.ok(res.historyWarning.indexOf('配布し直してください') !== -1, res.historyWarning);
+  assert.equal(Object.prototype.hasOwnProperty.call(files, 'change_log.csv'), false);
+});
+
+test('履歴: change_log.csv が 0 バイト（空・空白のみ）でも、見出し行を書き直して記録し、警告は出さない', () => {
+  ['', ' \n\t\n'].forEach(function (empty) {
+    const { ctx, files } = createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': empty });
+    const res = ctx.apiCreatePbi(fullFields('A'));
+    assert.equal(res.ok, true, res.message);
+    assert.equal(res.historyWarning, undefined);
+    assert.equal(files['change_log.csv'].split('\n')[0], CHG_HEADER.trim());
+    const rows = histRows(ctx, files);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].action, 'create');
+  });
+});
+
+test('履歴: ヘッダーが違うと本体は成功し、historyWarning を返して change_log.csv は変えない', () => {
+  const bad = 'id,at,who\n';
+  const f = { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': bad };
+  const { ctx, files } = createTestContext(f);
+  const res = ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(res.ok, true, res.message);
+  assert.ok(files['product_backlog.csv'].indexOf('PBI-001') !== -1);
+  assert.ok(res.historyWarning.indexOf('変更履歴を記録できませんでした') !== -1, res.historyWarning);
+  assert.equal(files['change_log.csv'], bad);
+});
+
+test('履歴: 履歴の書き込みが失敗しても本体は成功し、障害物・コメントでも historyWarning を返す', () => {
+  const a = createTestContext(histPbiFiles(), { failWriteFile: 'change_log.csv' });
+  const r1 = a.ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(r1.ok, true, r1.message);
+  assert.ok(r1.historyWarning);
+  const b = createTestContext(histImpFiles(IMP2), { failWriteFile: 'change_log.csv' });
+  const r2 = b.ctx.apiUpdateImpediment('IMP-002', { title: 'X', description: '', reported_by: 'マヤ', sprint: '' }, IMP2_ROW);
+  assert.equal(r2.ok, true, r2.message);
+  assert.ok(r2.historyWarning);
+  const c = createTestContext(Object.assign(cmtFiles(), { 'change_log.csv': CHG_HEADER }), { failWriteFile: 'change_log.csv' });
+  const r3 = c.ctx.apiAddComment('PBI-001', 'x');
+  assert.equal(r3.ok, true, r3.message);
+  assert.ok(r3.historyWarning);
+});
+
+test('apiGetHistory: 新しい順の entries。不正な対象は invalid。ファイルが無ければ空', () => {
+  const log = CHG_HEADER +
+    'CHG-00000001,2026-10-07 09:00:00,a@x.jp,PBI-001,update,title,A,B\n' +
+    'CHG-00000002,2026-10-07 10:00:00,a@x.jp,PBI-001,update,status,New,Ready\n' +
+    'CHG-00000003,2026-10-07 11:00:00,a@x.jp,PBI-002,create,,,\n';
+  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': log });
+  const res = plain(ctx.apiGetHistory(' PBI-001 '));
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.entries.map((e) => e.field), ['status', 'title']);
+  assert.deepEqual(Object.keys(res.entries[0]).sort(), ['action', 'actor', 'after', 'at', 'before', 'field']);
+  const bad = plain(ctx.apiGetHistory('x'));
+  assert.equal(bad.ok, false);
+  assert.equal(bad.reason, 'invalid');
+  assert.ok(bad.message);
+  assert.equal(plain(ctx.apiGetHistory(undefined)).reason, 'invalid');
+  const none = createTestContext({ 'product_backlog.csv': headerOnlyCsv() }).ctx;
+  assert.deepEqual(plain(none.apiGetHistory('PBI-001')), { ok: true, entries: [] });
+});
+
+test('apiGetHistory: ちょうど上限件なら truncated を付けず、上限を超えたときだけ付けて上限件を返す', () => {
+  const mk = (n) => CHG_HEADER + Array.from({ length: n }, function (_, i) {
+    const s = String(100 + i);
+    return 'CHG-' + s.padStart(8, '0') + ',2026-10-07 09:00:' + String(i % 60).padStart(2, '0') + ',a@x.jp,PBI-001,update,title,A' + i + ',B' + i + '\n';
+  }).join('');
+  const exact = createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': mk(200) }).ctx;
+  const r1 = plain(exact.apiGetHistory('PBI-001'));
+  assert.equal(r1.entries.length, 200);
+  assert.equal(Object.prototype.hasOwnProperty.call(r1, 'truncated'), false);
+  const over = createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': mk(201) }).ctx;
+  const r2 = plain(over.apiGetHistory('PBI-001'));
+  assert.equal(r2.entries.length, 200);
+  assert.equal(r2.truncated, true);
+});
+
+test('履歴: 差分の組み立てが例外でも本体は成功し、historyWarning を返す', () => {
+  const { ctx, files } = createTestContext(histPbiFiles());
+  vm.runInContext('diffRows = function () { throw new Error("組み立て失敗"); };', ctx);
+  const res = ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(res.ok, true, res.message);
+  assert.ok(files['product_backlog.csv'].indexOf('PBI-001') !== -1);
+  assert.ok(res.historyWarning.indexOf('組み立て失敗') !== -1, res.historyWarning);
+  assert.equal(files['change_log.csv'], CHG_HEADER);
+});
+
+test('履歴: 既存の行は解釈し直さず、バイト単位でそのまま残して末尾に足す', () => {
+  // 引用符・改行入りの値、CRLF、BOM。パースして書き直すと形が変わる行をわざと置く。
+  const existing = '﻿' + CHG_HEADER.replace('\n', '\r\n') +
+    'CHG-00000001,2026-10-07 09:00:00,a@x.jp,PBI-009,update,description,"1行目\r\n2行目 ""引用""","a,b"\r\n' +
+    'CHG-00000002,2026-10-07 09:00:01,a@x.jp,PBI-009,update,title,"x",y\r\n';
+  const f = { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': existing };
+  const { ctx, files } = createTestContext(f);
+  const res = ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(res.ok, true, res.message);
+  assert.equal(res.historyWarning, undefined, res.historyWarning);
+  assert.equal(files['change_log.csv'].slice(0, existing.length), existing, '既存部分が変わった');
+  const added = files['change_log.csv'].slice(existing.length);
+  assert.match(added, /^CHG-[0-9a-f]{8},[^,]+,me@example\.com,PBI-001,create,,,\n$/);
+  assert.equal(added.indexOf('id,at,'), -1, '見出し行を二重に足した');
+});
+
+test('履歴: 末尾に改行が無いファイルには、改行を補ってから足す', () => {
+  const existing = CHG_HEADER + 'CHG-00000001,2026-10-07 09:00:00,a@x.jp,PBI-009,create,,,';
+  const f = { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': existing };
+  const { ctx, files } = createTestContext(f);
+  assert.equal(ctx.apiCreatePbi(fullFields('A')).ok, true);
+  assert.equal(files['change_log.csv'].slice(0, existing.length + 1), existing + '\n');
+  const rows = histRows(ctx, files);
+  assert.deepEqual(rows.map((r) => [r.target_id, r.action]), [['PBI-009', 'create'], ['PBI-001', 'create']]);
+});
+
+test('履歴: 見出し行だけを見る。2行目以降が見出しと違っても足す', () => {
+  // 見出しが正しければ中身は解釈しない（全体の再解釈をしない担保）。
+  const existing = CHG_HEADER + 'x,y\n';
+  const f = { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': existing };
+  const { ctx, files } = createTestContext(f);
+  const res = ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(res.historyWarning, undefined, res.historyWarning);
+  assert.equal(files['change_log.csv'].slice(0, existing.length), existing);
+});
+
+test('履歴: ファイルが 1,000,000 文字を超えたら、記録はしたうえで切り替えを案内する', () => {
+  const filler = 'CHG-00000001,2026-10-07 09:00:00,a@x.jp,PBI-009,update,description,' + 'a'.repeat(1000) + ',b\n';
+  const existing = CHG_HEADER + filler.repeat(1000);
+  assert.ok(existing.length > 1000000);
+  const f = { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': existing };
+  const { ctx, files } = createTestContext(f);
+  const res = ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(res.ok, true, res.message);
+  assert.ok(files['change_log.csv'].length > existing.length, '記録していない');
+  const kb = Math.round(files['change_log.csv'].length / 1000);
+  assert.equal(res.historyWarning,
+    '変更履歴のファイルが大きくなっています（約 ' + kb + ' KB）。docs/setup.md の手順で切り替えてください');
+});
+
+test('履歴: 1,000,000 文字以下なら大きさの案内は出さない', () => {
+  const { ctx } = createTestContext(histPbiFiles());
+  assert.equal(ctx.apiCreatePbi(fullFields('A')).historyWarning, undefined);
+});
+
+test('取り消し: 2つ目（解決済から消す）で失敗しても unresolve は1行。完了の再送では増えない', () => {
+  const f = histImpFiles(IMP2);
+  const done = createTestContext(f).ctx.apiResolveImpediment('IMP-002', '再起動した', IMP2_ROW);
+  assert.equal(done.ok, true, done.message);
+  const moved = plain(done.moved);
+  const resolvedRow = plain(done.resolvedRow);
+  const first = createTestContext(f, { failWriteFile: 'impediment_log_resolved.csv' });
+  const res = first.ctx.apiUnresolveImpediment(moved, resolvedRow);
+  assert.equal(res.reason, 'partial');
+  assert.equal(res.historyWarning, undefined);
+  assert.deepEqual(histRows(first.ctx, f).map((r) => [r.target_id, r.action]),
+    [['IMP-002', 'resolve'], ['IMP-002', 'unresolve']]);
+  const retry = createTestContext(f);
+  assert.equal(retry.ctx.apiUnresolveImpediment(moved, resolvedRow).ok, true);
+  assert.equal(histRows(retry.ctx, f).length, 2, '完了の再送で増えた');
+});
+
+test('apiGetHistory: ちょうど上限件なら truncated を付け、それ未満なら付けない', () => {
+  function log(n) {
+    let s = CHG_HEADER;
+    for (let i = 0; i < n; i++) s += 'CHG-' + ('0000000' + i).slice(-8) + ',2026-10-07 09:00:00,a@x.jp,PBI-001,update,title,A,B\n';
+    return s;
+  }
+  const limit = vm.runInContext('HISTORY_LIMIT', createTestContext({ 'product_backlog.csv': headerOnlyCsv() }).ctx);
+  assert.equal(limit, 200);
+  const over = plain(createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': log(limit + 5) }).ctx.apiGetHistory('PBI-001'));
+  assert.equal(over.entries.length, limit);
+  assert.equal(over.truncated, true);
+  const under = plain(createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': log(limit - 1) }).ctx.apiGetHistory('PBI-001'));
+  assert.equal(under.entries.length, limit - 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(under, 'truncated'), false);
+});

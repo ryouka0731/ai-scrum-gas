@@ -12,7 +12,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { responses, ROWS } = require('./fixtures.js');
+const { responses, historyResponse, HISTORY_PBI, ROWS } = require('./fixtures.js');
 
 const GAS_DIR = path.join(__dirname, '..', '..');
 const KANBAN_PATH = path.join(GAS_DIR, 'kanban.html');
@@ -38,6 +38,8 @@ function stubScript(delayMs) {
     + '  window.__pageToken = "__PAGE_TOKEN__";\n'
     + '  var RESPONSES = ' + JSON.stringify(responses()) + ';\n'
     + '  var ROWS = ' + JSON.stringify(ROWS) + ';\n'
+    + '  var HISTORY = ' + JSON.stringify(historyResponse(HISTORY_PBI)) + ';\n'
+    + '  var HISTORY_PBI = ' + JSON.stringify(HISTORY_PBI) + ';\n'
     + '  var DELAY = ' + Number(delayMs || 0) + ';\n'
     + '  window.__calls = [];\n'
     + '  window.__errors = [];\n'
@@ -49,7 +51,7 @@ function stubScript(delayMs) {
     + '      withSuccessHandler: function (f) { ok = f; return runner; },\n'
     + '      withFailureHandler: function (f) { ng = f; return runner; }\n'
     + '    };\n'
-    + '    ["apiGetView"].concat(WRITE).forEach(function (m) {\n'
+    + '    ["apiGetView", "apiGetHistory"].concat(WRITE).forEach(function (m) {\n'
     + '      runner[m] = function () {\n'
     + '        var args = Array.prototype.slice.call(arguments);\n'
     + '        window.__calls.push({ method: m, args: args });\n'
@@ -58,6 +60,8 @@ function stubScript(delayMs) {
     + '          if (m === "apiGetView") {\n'
     + '            ok(RESPONSES[args[0]]\n'
     + '              || { ok: false, name: args[0], message: "見本がありません", view: null, summary: null });\n'
+    + '          } else if (m === "apiGetHistory") {\n'
+    + '            ok(String(args[0]) === HISTORY_PBI ? HISTORY : { ok: true, entries: [] });\n'
     + '          } else if (m === "apiDeletePbi") {\n'
     // 本物の apiDeletePbi は「消した行そのもの」を返す（取り消しに使う）。ここで
     // null を返すと、「取り消す」を押した先が必ず restorePbi の

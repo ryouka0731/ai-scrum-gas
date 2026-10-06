@@ -19,8 +19,10 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
   障害物も同様に、作成・編集は `scrum/impediment_log.csv` へ、解決は未解決の行を
   `scrum/impediment_log_resolved.csv` へ移す形で書き戻される。
   PBI・障害物のコメントは `scrum/comments.csv` へ書き戻される。
+  Web アプリからの変更の履歴は `scrum/change_log.csv` へ追記される。エージェントは読むだけでよく、書かない
+  （列は `id,at,actor,target_id,action,field,before,after`）。
   **Web アプリが書き戻すのは `product_backlog.csv`・`impediment_log.csv`・
-  `impediment_log_resolved.csv`・`comments.csv` の4ファイルだけ**で、共有スプレッドシートには触れない
+  `impediment_log_resolved.csv`・`comments.csv`・`change_log.csv`（追記のみ）の5ファイルだけ**で、共有スプレッドシートには触れない
 - 人のコメントは `scrum/comments.csv`（`target_id` で PBI・障害物に紐づく）。PBI や障害物を扱う前に
   該当コメントを読む。返答を書くときは `author` に自分のエージェント名を入れて追記する
   （列は `id,target_id,author,created_at,body`。`target_id` は `PBI-…` か `IMP-…`、
@@ -52,7 +54,7 @@ GitHub と AI の API を使わず、Google Drive と Google Apps Script だけ�
 - 変更は管理者のリポジトリで行われ、`node scripts/publish.js` でこのフォルダへ配布される。
   再配布されるまで、ここでの手作業の変更は次回配布で上書きされる。ただし Web アプリが書き戻す
   `scrum/product_backlog.csv`・`scrum/impediment_log.csv`・`scrum/impediment_log_resolved.csv`・
-  `scrum/comments.csv` は、ここに既にあれば上書きされない（雛形の変更は管理者が手で反映する）
+  `scrum/comments.csv`・`scrum/change_log.csv` は、ここに既にあれば上書きされない（雛形の変更は管理者が手で反映する）
 - スプレッドシート上の編集は次回同期で失われる。ただし「メモ」列だけは ID をキーに引き継がれる
 - ダッシュボードの「配布日時」で、この内容がいつ配布されたものかを確認できる
 

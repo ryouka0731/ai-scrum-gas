@@ -698,6 +698,62 @@
     },
 
     /**
+     * 長い履歴を持つ PBI のパネルを開き、履歴の節を開いて (a) 保存へ届く
+     * (b) 長い行が節の幅を超えない (c) ページが横に伸びない、を測る。測ったら Escape で閉じる。
+     */
+    historyPanel: async function (pbiId) {
+      var card = document.querySelector('#board .card[data-id="' + pbiId + '"]');
+      if (!card) throw new Error('履歴を持つカード ' + pbiId + ' が盤面にありません');
+      card.click();
+      await frame();
+      var panel = document.getElementById('panel');
+      if (panel.hidden) throw new Error('パネルが開きませんでした');
+      var host = document.getElementById('panel-history');
+      var toggle = host.querySelector('button.history-toggle');
+      if (!toggle) throw new Error('履歴の開閉ボタン（button.history-toggle）がありません');
+      toggle.click();
+      var until = Date.now() + 3000;
+      while (!host.querySelector('.history-line') && Date.now() < until) await sleep(20);
+      await frame();
+      var save = document.getElementById('panel-save');
+      save.scrollIntoView({ block: 'nearest' });
+      await frame();
+      var sr = save.getBoundingClientRect();
+      var pr = panel.getBoundingClientRect();
+      var hr = host.getBoundingClientRect();
+      var lines = list('.history-line', host).map(function (l) {
+        var r = l.getBoundingClientRect();
+        return { scrollWidth: l.scrollWidth, clientWidth: l.clientWidth, right: r.right,
+          hasUrl: l.textContent.indexOf('https://') !== -1 };
+      });
+      var cs = getComputedStyle(panel);
+      var out = {
+        lineCount: lines.length,
+        urlLines: lines.filter(function (l) { return l.hasUrl; }).length,
+        groupCount: list('.history-group', host).length,
+        overflowing: lines.filter(function (l) {
+          return l.scrollWidth > l.clientWidth || l.right > hr.right + 0.5;
+        }).length,
+        save: { top: sr.top, bottom: sr.bottom, left: sr.left, right: sr.right },
+        viewport: { w: root.clientWidth, h: root.clientHeight },
+        panelBox: { top: pr.top, bottom: pr.bottom },
+        saveInViewport: sr.top >= -0.5 && sr.bottom <= root.clientHeight + 0.5
+          && sr.left >= -0.5 && sr.right <= root.clientWidth + 0.5,
+        saveInPanel: sr.top >= pr.top - 0.5 && sr.bottom <= pr.bottom + 0.5,
+        panelScrollHeight: panel.scrollHeight,
+        panelClientHeight: panel.clientHeight,
+        panelOverflowY: cs.overflowY,
+        docScrollWidth: root.scrollWidth,
+        docClientWidth: root.clientWidth,
+      };
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await frame();
+      window.scrollTo(0, 0);
+      if (!panel.hidden) throw new Error('Escape でパネルが閉じませんでした');
+      return out;
+    },
+
+    /**
      * 障害物パネル（#imp-panel）の実測幅。.side-panel の規則が効いているかを見る。
      * 障害物タブへ切り替え、未解決の最初の行を押して開き、測ったら Escape で閉じる。
      * 画面の状態を変えるので、他の測定が済んだあとに呼ぶこと。
