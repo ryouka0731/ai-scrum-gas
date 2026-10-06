@@ -18,6 +18,9 @@ const { KANBAN_STATUSES } = require('../../pure_grid_board.js');
 const { sprintChoices } = require('../../pure_sprint_options.js');
 const { countComments } = require('../../pure_comment.js');
 const { historyFor, HISTORY_LIMIT } = require('../../pure_history.js');
+const path = require('node:path');
+// 代役の中でも本番と同じ並び・形でコメントを返すため、pure_comment.js をそのまま埋め込む（PR #11 cubic）。
+const PURE_COMMENT_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'pure_comment.js'), 'utf8').replace(/<\/script/gi, '<\\/script');
 
 /** 実行されたら立つ旗の名前。 */
 const XSS_FLAG = '__xss';
@@ -89,7 +92,8 @@ function stubScript(data) {
     + 'window.__calls = []; window.__errors = [];\n'
     + 'window.addEventListener("error", function (e) { window.__errors.push(String(e.message)); });\n'
     + 'var seq = 100;\n'
-    + 'function listOf(t) { return CFG.commentRows.filter(function (c) { return c.target_id === t; }).map(function (c) { return Object.assign({}, c, { mine: c.author === CFG.me }); }); }\n'
+    + PURE_COMMENT_SRC + '\n'
+    + 'function listOf(t) { return commentsForTarget(CFG.commentRows, t, CFG.me); }\n'
     + 'function forTarget(t) { var l = listOf(t); return { targetId: t, comments: l, count: l.length }; }\n'
     + 'function makeRunner() {\n'
     + '  var ok = null, ng = null;\n'
@@ -102,7 +106,9 @@ function stubScript(data) {
     + '    var c = { id: "CMT-" + ("0000000" + (seq++).toString(16)).slice(-8), target_id: id, author: CFG.me, created_at: "2026-10-01 12:00:00", body: body };\n'
     + '    CFG.commentRows.push(c); return Object.assign({ ok: true, comment: Object.assign({}, c) }, forTarget(id)); }); };\n'
     + '  r.apiDeleteComment = function (id) { window.__calls.push({ method: "apiDeleteComment", args: [id] }); reply(function () {\n'
-    + '    var i = CFG.commentRows.findIndex(function (c) { return c.id === id; }); var rem = CFG.commentRows.splice(i, 1)[0];\n'
+    + '    var i = CFG.commentRows.findIndex(function (c) { return c.id === id; });\n'
+    + '    if (i === -1) return { ok: false, reason: "not_found", target: "", message: "このコメントが見つかりません。" };\n'
+    + '    var rem = CFG.commentRows.splice(i, 1)[0];\n'
     + '    return Object.assign({ ok: true, removed: rem }, forTarget(rem.target_id)); }); };\n'
     + '  r.apiDeletePbi = function (id) { window.__calls.push({ method: "apiDeletePbi", args: [id] }); reply(function () {\n'
     + '    var row = CFG.rows.filter(function (x) { return x.id === id; })[0] || null;\n'
