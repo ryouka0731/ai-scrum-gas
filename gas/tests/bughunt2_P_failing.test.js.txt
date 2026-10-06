@@ -9,7 +9,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const S = require('./bughunt2_P_support.js');
 const { createHarness } = require('./kanban_harness.js');
-const impView = require('../pure_view_impediment.js');
 
 const NEW_PBI = { title: 'n', description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' };
 
@@ -62,24 +61,4 @@ test('BUG-P4. 履歴 200 件 × 500 行の説明で、履歴パネルの DOM ノ
   let nodes = 0;
   (function walk(e) { nodes++; (e.children || []).forEach(walk); })(h.sandbox.document.getElementById('panel-history'));
   assert.ok(nodes <= 50000, '履歴パネルの DOM ノード ' + nodes);
-});
-
-// ---------------------------------------------------------------------------
-// BUG-P7 (low): 障害物のビューが 未解決 × 解決済 に2乗
-// ---------------------------------------------------------------------------
-// openImpedimentsShown は未解決の1行ごとに done.some(...)、impDuplicateOpenRows_ は1行ごとに resolved.filter(...)、
-// build...View は shown.forEach で dups.indexOf(r)。未解決 1,000 × 解決済 1,000 で約 0.1 秒、4,000 × 4,000 で約 2.8 秒、
-// 未解決 200 × 解決済 20,000 で約 0.85 秒（Node。GAS ではデータの読み取りが加わる）。解決済は増える一方。
-// 現実の件数（解決済 数百〜数千）では小さいので low。
-// 期待: ID をキーにした索引で、未解決と解決済の件数に線形。
-test('BUG-P7. buildImpedimentView: 未解決・解決済が同数 n のとき n を2倍にすると 4倍近い', () => {
-  const fields = ['id', 'title', 'description', 'reported_by', 'reported_at', 'status', 'resolved_at', 'resolution', 'sprint'];
-  const mk = (n, tag) => Array.from({ length: n }, (_, i) => {
-    const o = {}; fields.forEach((f) => { o[f] = 'x'; }); o.id = 'IMP-' + (tag === 'o' ? '1' : '5') + String(i).padStart(6, '0'); return o;
-  });
-  const time = (n) => { const a = mk(n, 'o'); const b = mk(n, 'r'); return S.bestOf(() => impView.buildImpedimentView(a, b), 3); };
-  const t1 = Math.max(time(500), 1);
-  const t2 = time(1000);
-  const t3 = time(2000);
-  assert.ok(t3 / t2 < 3 && t2 / t1 < 3, '500 → 1000 → 2000 件で ' + t1.toFixed(0) + 'ms → ' + t2.toFixed(0) + 'ms → ' + t3.toFixed(0) + 'ms（線形なら比は約2）');
 });

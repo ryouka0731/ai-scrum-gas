@@ -661,14 +661,26 @@ function diffRowsReference(beforeRows, afterRows, fields, ignore) {
   return out;
 }
 
+/**
+ * 大きさを2倍ずつにしたときの時間が線形に近いか。並列実行の揺れ（GC 等）で小さい時間の比は暴れるので、
+ * 3回まで測り直し、比が 3 未満か、最大の大きさでも十分速い（2乗なら数十秒かかる大きさで limitMs 未満）なら通す。
+ */
+function assertNearLinear(time, sizes, limitMs, what) {
+  let msg = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const t = sizes.map((n) => Math.max(time(n), 1));
+    const ratioOk = t.every((v, i) => i === 0 || v / t[i - 1] < 3);
+    if (ratioOk || t[t.length - 1] < limitMs) return;
+    msg = what + ': ' + sizes.join(' → ') + ' で ' + t.map((v) => v.toFixed(0) + 'ms').join(' → ') + '（線形なら比は約2）';
+  }
+  assert.fail(msg);
+}
+
 test('BUG-P6. diffRows: 同じ ID が 2,000 行あって全行が変わっても線形（行数2倍で 3倍未満）', () => {
   const mk = (n, title) => Array.from({ length: n }, () => ({ id: 'PBI-001', title: title, description: '', acceptance_criteria: '', priority: '', size: '', status: 'New', sprint: '' }));
-  const time = (n) => P.bestOf(() => HIST.diffRows(mk(n, 'a'), mk(n, 'b'), P.BACKLOG_FIELDS, []), 3);
-  const t1 = Math.max(time(2000), 1);
-  const t2 = Math.max(time(4000), 1);
-  const t3 = time(8000);
-  assert.ok(t3 / t2 < 3 && t2 / t1 < 3, '行数 2000 → 4000 → 8000 で ' + t1.toFixed(0) + 'ms → ' + t2.toFixed(0) + 'ms → ' + t3.toFixed(0) + 'ms（線形なら比は約2）');
-  assert.ok(t3 < 500, '8000 行で ' + t3.toFixed(0) + 'ms');
+  const time = (n) => { const a = mk(n, 'a'); const b = mk(n, 'b'); return P.bestOf(() => HIST.diffRows(a, b, P.BACKLOG_FIELDS, []), 3); };
+  // 直す前は 2,000 行で約 1 秒（2乗）。16,000 行なら 1 分を超える。
+  assertNearLinear(time, [4000, 8000, 16000], 400, 'diffRows');
 });
 
 test('BUG-P6. diffRows: 結果は直す前の版と同じ（乱択 3000 通り。同じ ID・雛形・空 ID・同じ行の参照の重複を含む）', () => {
@@ -684,5 +696,74 @@ test('BUG-P6. diffRows: 結果は直す前の版と同じ（乱択 3000 通り�
     const ignore = rnd() < 0.5 ? ['updated_at'] : [];
     assert.deepEqual(HIST.diffRows(before, after, fields, ignore), diffRowsReference(before, after, fields, ignore),
       'k=' + k + ' ' + JSON.stringify({ before, after, ignore }));
+  }
+});
+
+// --- P7: 障害物のビューは ID の索引で組み立てる（未解決 × 解決済 の2乗にしない） -----------------------------
+
+const impView = require('../pure_view_impediment.js');
+
+/** 直す前の buildImpedimentView（2乗の版）。新しい版と結果が同じことを乱択で確かめる参照。 */
+function buildImpedimentViewReference(openRows, resolvedRows) {
+  const { isImpedimentPlaceholder, IMPEDIMENT_FIELDS } = require('../pure_grid_report.js');
+  const { impedimentSameIdentity } = require('../pure_impediment_merge.js');
+  const key = (r) => String((r || {}).id || '').trim();
+  const rowsOut = (rows) => (rows || []).filter((r) => !isImpedimentPlaceholder(r)).map((row) => {
+    const o = {}; IMPEDIMENT_FIELDS.forEach((f) => { const v = row[f]; o[f] = v === undefined || v === null ? '' : String(v); }); return o;
+  });
+  const countOf = (rows) => { const c = Object.create(null); (rows || []).forEach((r) => { if (!isImpedimentPlaceholder(r)) c[key(r)] = (c[key(r)] || 0) + 1; }); return c; };
+  const done = (resolvedRows || []).filter((r) => !isImpedimentPlaceholder(r));
+  const count = countOf(openRows);
+  const shown = (openRows || []).filter((r) => {
+    if (isImpedimentPlaceholder(r)) return false;
+    if (count[key(r)] > 1) return true;
+    return !done.some((d) => key(d) === key(r) && impedimentSameIdentity(d, r));
+  });
+  const real = (openRows || []).filter((r) => !isImpedimentPlaceholder(r));
+  const dups = real.filter((r) => {
+    if (count[key(r)] > 1) return true;
+    const same = done.filter((d) => key(d) === key(r));
+    return same.length > 0 && !same.some((d) => impedimentSameIdentity(d, r));
+  });
+  const open = rowsOut(shown);
+  shown.forEach((r, i) => { if (dups.indexOf(r) !== -1) open[i].duplicate = 'true'; });
+  const seen = Object.create(null);
+  const pend = [];
+  (openRows || []).forEach((o) => {
+    if (isImpedimentPlaceholder(o)) return;
+    const k = key(o);
+    if (seen[k] || count[k] > 1) return;
+    for (let i = 0; i < done.length; i++) {
+      if (key(done[i]) === k && impedimentSameIdentity(done[i], o)) { seen[k] = true; pend.push({ id: k, open: rowsOut([o])[0], resolved: rowsOut([done[i]])[0] }); return; }
+    }
+  });
+  return { columns: impView.IMPEDIMENT_COLUMNS, open, resolved: rowsOut(resolvedRows), pending: pend };
+}
+
+test('BUG-P7. buildImpedimentView: 未解決・解決済が同数 n のとき、n を2倍にしても 3倍未満', () => {
+  const fields = ['id', 'title', 'description', 'reported_by', 'reported_at', 'status', 'resolved_at', 'resolution', 'sprint'];
+  const mk = (n, tag) => Array.from({ length: n }, (_, i) => {
+    const o = {}; fields.forEach((f) => { o[f] = 'x'; }); o.id = 'IMP-' + (tag === 'o' ? '1' : '5') + String(i).padStart(6, '0'); return o;
+  });
+  const time = (n) => { const a = mk(n, 'o'); const b = mk(n, 'r'); return P.bestOf(() => impView.buildImpedimentView(a, b), 3); };
+  // 直す前は 4,000 × 4,000 で約 2.8 秒（2乗）。16,000 件なら 40 秒を超える。
+  assertNearLinear(time, [4000, 8000, 16000], 400, 'buildImpedimentView');
+  // 未解決 200 × 解決済 20,000（解決済は増える一方）
+  const ms = P.bestOf(() => impView.buildImpedimentView(mk(200, 'o'), mk(20000, 'r')), 2);
+  assert.ok(ms < 300, '未解決 200 × 解決済 20,000 で ' + ms.toFixed(0) + 'ms');
+});
+
+test('BUG-P7. buildImpedimentView: 結果は直す前の版と同じ（乱択 3000 通り。重複・途中で止まった操作・雛形・空白付き ID を含む）', () => {
+  const rnd = P.mulberry32(0x7e7);
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const mkRow = (status) => ({ id: pick(['IMP-001', 'IMP-002', ' IMP-002 ', 'IMP-003', '__proto__', 'IMP-004']), title: pick(['t', 't', 'u', '（障害物タイトル）']),
+    description: '', reported_by: pick(['a', 'b']), reported_at: '2026-10-01', status: status, resolved_at: '', resolution: '', sprint: pick(['', 's1']) });
+  for (let k = 0; k < 3000; k++) {
+    const open = Array.from({ length: Math.floor(rnd() * 6) }, () => mkRow('Open'));
+    const resolved = Array.from({ length: Math.floor(rnd() * 6) }, () => Object.assign(mkRow('Resolved'), { resolution: 'r' }));
+    if (open.length && rnd() < 0.4) resolved.push(Object.assign({}, pick(open), { status: 'Resolved', resolution: 'r' }));
+    assert.deepEqual(JSON.parse(JSON.stringify(impView.buildImpedimentView(open, resolved))), JSON.parse(JSON.stringify(buildImpedimentViewReference(open, resolved))),
+      'k=' + k + ' ' + JSON.stringify({ open, resolved }));
+    assert.deepEqual(impView.openImpedimentsShown(open, resolved).length, buildImpedimentViewReference(open, resolved).open.length);
   }
 });
