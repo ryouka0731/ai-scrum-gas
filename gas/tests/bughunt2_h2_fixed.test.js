@@ -215,9 +215,16 @@ function bigHistory(n, lines) {
   }
   return entries;
 }
+/** 要素だけの数（シムは文字を textContent の値で持ち、テキストノードを作らない）。 */
 function countNodes(h, id) {
   let nodes = 0;
   (function walk(e) { nodes++; (e.children || []).forEach(walk); })(h.sandbox.document.getElementById(id));
+  return nodes;
+}
+/** ブラウザでの総ノード数の見積もり: 要素 + 文字を持つ要素ごとのテキストノード1つ（PR #11 cubic）。 */
+function countAllNodes(h, id) {
+  let nodes = 0;
+  (function walk(e) { nodes++; if (e.textContent) nodes++; (e.children || []).forEach(walk); })(h.sandbox.document.getElementById(id));
   return nodes;
 }
 function moreButton(h) {
@@ -234,8 +241,8 @@ const items = function (h) {
 };
 
 // 元の再現（BUG-P4）は「1回の描画で 50,000 ノード以下」としていた。裁定（50 件ずつ描く）では、
-// 1件 = 前 500 行 + 後 500 行 の差分なので 50 件で約 50,300 ノードになる。上限は「50 件分」に合わせた
-// （元の 20 万ノードの約 1/4）。
+// 1件 = 前 500 行 + 後 500 行 の差分なので 50 件で約 50,300 要素になる。上限は「50 件分」に合わせた
+// （元の 20 万要素の約 1/4）。要素の上限とは別に、テキストノードを含む総数も 50 件分で縛る。
 test('BUG-P4. 履歴 200 件 × 500 行の説明でも、最初の描画は 50 件まで（DOM は 50 件分で頭打ち）', () => {
   const h = bootBoard();
   h.openCard('PBI-001');
@@ -243,7 +250,10 @@ test('BUG-P4. 履歴 200 件 × 500 行の説明でも、最初の描画は 50 �
   pendingOf(h, 'apiGetHistory')[0].handlers.success({ ok: true, entries: bigHistory(200, 500) });
   assert.equal(items(h), 50);
   const nodes = countNodes(h, 'panel-history');
-  assert.ok(nodes <= 50 * 1010 + 20, '履歴パネルの DOM ノード ' + nodes);
+  assert.ok(nodes <= 50 * 1010 + 20, '履歴パネルの要素（テキストノードを除く） ' + nodes);
+  // テキストノードを含む総数: 1行 = 要素 + テキストノード で、50 件分（前後 1000 行 × 2）で頭打ち。
+  const all = countAllNodes(h, 'panel-history');
+  assert.ok(all <= 50 * 2020 + 40, '履歴パネルの総ノード（テキストノードを含む） ' + all);
   const more = moreButton(h);
   assert.equal(more.length, 1);
   const t = [];

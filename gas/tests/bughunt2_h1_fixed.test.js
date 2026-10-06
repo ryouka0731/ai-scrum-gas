@@ -7,24 +7,22 @@ const plain = H.plain;
 
 // --- S2: 利用者が書ける値に効く正規表現が、長い入力で二乗時間にならない ---------------------------------
 
-function timeIt(fn) {
-  const t = Date.now();
-  fn();
-  return Date.now() - t;
-}
+// 実時間の絶対値ではなく、長さを2倍にしたときの時間の比で確かめる（機械の速さに依らない。PR #11 cubic）。
+// assertNearLinear（P6 の節）: 比が 3 未満なら線形。2乗なら比は約 4。
 
 test('S-BUG-2a: シートへの無害化（escapeSheetCell）が、- と長い数字の並びで二乗時間にならない', () => {
   const E = require('../pure_sheet_escape.js');
   const shapes = [
-    '-' + '1'.repeat(40000) + 'x',
-    '-' + '1'.repeat(20000) + '.' + '1'.repeat(20000) + 'x',
-    '-1e' + '1'.repeat(40000) + 'x',
-    '-1' + ' '.repeat(40000) + 'x',
-    ' '.repeat(40000) + '-x',
+    (n) => '-' + '1'.repeat(n) + 'x',
+    (n) => '-' + '1'.repeat(n / 2) + '.' + '1'.repeat(n / 2) + 'x',
+    (n) => '-1e' + '1'.repeat(n) + 'x',
+    (n) => '-1' + ' '.repeat(n) + 'x',
+    (n) => ' '.repeat(n) + '-x',
   ];
-  shapes.forEach((s) => {
-    const ms = timeIt(() => E.escapeSheetCell(s));
-    assert.ok(ms < 100, 'escapeSheetCell が ' + ms + 'ms かかった（長さ ' + s.length + '）');
+  shapes.forEach((shape, k) => {
+    const time = (n) => { const s = shape(n); return P.bestOf(() => E.escapeSheetCell(s), 3); };
+    assertNearLinear(time, [5000, 10000, 20000], 20, 'escapeSheetCell の形 ' + k);
+    const s = shape(40000);
     assert.equal(E.escapeSheetCell(s), "'" + s, '数値でない値は無害化する');
   });
 });
@@ -37,9 +35,9 @@ test('S-BUG-2a: 数値だけの文字列の扱いは変わらない', () => {
 
 test('S-BUG-2b: スプリント名の正規化（normalizeSprint）が、長い数字の並び＋末尾の非数字で二乗時間にならない', () => {
   const F = require('../pure_filter.js');
+  const time = (n) => { const s = '1'.repeat(n) + 'x'; return P.bestOf(() => F.normalizeSprint(s), 3); };
+  assertNearLinear(time, [5000, 10000, 20000], 20, 'normalizeSprint（/^(.*?)(\\d+)$/ のバックトラック）');
   const s = '1'.repeat(40000) + 'x';
-  const ms = timeIt(() => F.normalizeSprint(s));
-  assert.ok(ms < 100, 'normalizeSprint が ' + ms + 'ms かかった（/^(.*?)(\\d+)$/ のバックトラック）');
   assert.equal(F.normalizeSprint(s), s);
 });
 
@@ -57,13 +55,14 @@ test('S-BUG-2b: normalizeSprint の結果は変わらない', () => {
 });
 
 test('S-BUG-2c: 1回の apiUpdatePbi で入れたスプリント値で、全員の盤面の読み込み（apiGetView board）が遅くならない', () => {
-  const h = H.createCtx(H.baseFiles());
-  const u = plain(h.ctx.apiUpdatePbi('PBI-001', { title: 'A', sprint: '1'.repeat(40000) + 'x' }, '2026-10-01 00:00:00'));
-  assert.equal(u.ok, true, '前提: 長いスプリント値が受け付けられる');
-  let v;
-  const ms = timeIt(() => { v = plain(h.ctx.apiGetView('board')); });
-  assert.equal(v.ok, true);
-  assert.ok(ms < 200, '盤面の読み込みに ' + ms + 'ms（sprintChoices → normalizeSprint）');
+  const time = (n) => {
+    const h = H.createCtx(H.baseFiles());
+    const u = plain(h.ctx.apiUpdatePbi('PBI-001', { title: 'A', sprint: '1'.repeat(n) + 'x' }, '2026-10-01 00:00:00'));
+    assert.equal(u.ok, true, '前提: 長いスプリント値が受け付けられる');
+    assert.equal(plain(h.ctx.apiGetView('board')).ok, true);
+    return P.bestOf(() => h.ctx.apiGetView('board'), 3);
+  };
+  assertNearLinear(time, [5000, 10000, 20000], 40, '盤面の読み込み（sprintChoices → normalizeSprint）');
 });
 
 // --- V1: 全角括弧だけで囲んだ PBI のタイトルは、雛形の行と見分けられないので拒否する --------------------
@@ -788,9 +787,16 @@ test('BUG-P7. buildImpedimentView: 未解決・解決済が同数 n のとき、
   const time = (n) => { const a = mk(n, 'o'); const b = mk(n, 'r'); return P.bestOf(() => impView.buildImpedimentView(a, b), 3); };
   // 直す前は 4,000 × 4,000 で約 2.8 秒（2乗）。16,000 件なら 40 秒を超える。
   assertNearLinear(time, [4000, 8000, 16000], 400, 'buildImpedimentView');
-  // 未解決 200 × 解決済 20,000（解決済は増える一方）
-  const ms = P.bestOf(() => impView.buildImpedimentView(mk(200, 'o'), mk(20000, 'r')), 2);
-  assert.ok(ms < 300, '未解決 200 × 解決済 20,000 で ' + ms.toFixed(0) + 'ms');
+  // 未解決 200 × 解決済 20,000（解決済は増える一方）。解決済を読むだけ（未解決 1 件）の時間との比で見る
+  // （機械に依らない。PR #11 cubic）。索引なら比は約 1、未解決 × 解決済 なら約 200 倍。
+  const big = mk(20000, 'r');
+  const one = mk(1, 'o');
+  const many = mk(200, 'o');
+  let ratio = Infinity;
+  for (let attempt = 0; attempt < 3 && ratio >= 3; attempt++) {
+    ratio = P.bestOf(() => impView.buildImpedimentView(many, big), 3) / Math.max(P.bestOf(() => impView.buildImpedimentView(one, big), 3), 0.01);
+  }
+  assert.ok(ratio < 3, '未解決 200 は 1 件の ' + ratio.toFixed(1) + ' 倍（解決済 20,000）');
 });
 
 test('BUG-P7. buildImpedimentView: 結果は直す前の版と同じ（乱択 3000 通り。重複・途中で止まった操作・雛形・空白付き ID を含む）', () => {
