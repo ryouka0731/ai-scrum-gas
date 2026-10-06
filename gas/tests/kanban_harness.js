@@ -224,7 +224,7 @@ const VOID_TAGS = { input: true, img: true, br: true, hr: true, meta: true, link
  * 追跡する。id が無い要素をスタックから丸ごと飛ばしていた頃は、
  * `<div hidden><span><button id="x">` のような構造で `#x` の祖先探索が
  * `<div hidden>` を素通りしていた（今の kanban.html では hidden が付くのは
- * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field`/`#panel-comments`/`#imp-panel-comments` だけなので実害は無いが、id を持たない
+ * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field`/`#panel-comments`/`#imp-panel-comments`/`#panel-history`/`#imp-panel-history` だけなので実害は無いが、id を持たない
  * 祖先に hidden が増えた瞬間にシムだけが実ブラウザとずれる）。
  * 親子は parentNode だけで結び、children には積まない — 積むと `clearHost()` の
  * innerHTML = '' が静的な子まで消してしまう。
@@ -302,7 +302,8 @@ const API_METHODS = [
   'apiGetView', 'apiUpdateStatus', 'apiUpdatePbi',
   'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi',
   'apiCreateImpediment', 'apiUpdateImpediment', 'apiResolveImpediment', 'apiUnresolveImpediment',
-  'apiAddComment', 'apiDeleteComment', 'apiRestoreComment'
+  'apiAddComment', 'apiDeleteComment', 'apiRestoreComment',
+  'apiGetHistory'
 ];
 
 /** 呼び出しをキューに積むだけの google.script.run を作る。 */
@@ -474,6 +475,12 @@ function createHarness(initialColumns) {
   // コメント節の中の、その class を持つ要素をちょうど1つ返す。
   const commentPart = function (host, cls, hostId) {
     const hit = collect(host, function (e) { return e.classList.contains(cls); });
+    if (hit.length !== 1) throw new Error(hostId + ' の .' + cls + ' が ' + hit.length + ' 件見つかりました');
+    return hit[0];
+  };
+  // 履歴節の中の、その class を持つ要素をちょうど1つ返す。
+  const historyPart = function (hostId, cls) {
+    const hit = collect(el(hostId), function (e) { return e.classList.contains(cls); });
     if (hit.length !== 1) throw new Error(hostId + ' の .' + cls + ' が ' + hit.length + ' 件見つかりました');
     return hit[0];
   };
@@ -883,6 +890,55 @@ function createHarness(initialColumns) {
       const hit = collect(cardElement(id), function (e) { return e.classList.contains('comment-count'); });
       if (hit.length > 1) throw new Error('カード ' + id + ' の件数が ' + hit.length + ' 件あります');
       return hit.length ? hit[0].textContent : null;
+    },
+
+    /** 履歴節（#panel-history / #imp-panel-history）の開閉ボタンを押す（隠れていれば例外）。 */
+    historyToggle: function (hostId) {
+      fireVisible(historyPart(hostId, 'history-toggle'), 'click', {}, hostId + ' の「履歴」');
+    },
+
+    /** 開閉ボタンの aria-expanded・本体が隠れているか・状態の文言（読み込み中・0件・失敗）・注記を読む。 */
+    historyStateOf: function (hostId) {
+      const toggle = historyPart(hostId, 'history-toggle');
+      const body = historyPart(hostId, 'history-body');
+      const status = collect(body, function (e) { return e.classList.contains('history-status'); });
+      const note = collect(body, function (e) { return e.classList.contains('history-note'); });
+      return {
+        expanded: toggle.getAttribute('aria-expanded'),
+        bodyHidden: !!body.hidden,
+        status: status.length ? status[0].textContent : null,
+        note: note.length ? note[0].textContent : null
+      };
+    },
+
+    /**
+     * 履歴のまとまりを DOM 順に読む。head は .history-head の文字、items は各 .history-item の
+     * .history-item-text の文字（行差分の行は含めない。それは historyLinesIn で読む）。
+     */
+    historyGroupsIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.classList.contains('history-group'); })
+        .map(function (g) {
+          const head = collect(g, function (e) { return e.classList.contains('history-head'); });
+          if (head.length !== 1) throw new Error(hostId + ' のまとまりの見出しが ' + head.length + ' 件あります');
+          return {
+            head: head[0].textContent,
+            items: collect(g, function (e) { return e.classList.contains('history-item'); }).map(function (it) {
+              const t = collect(it, function (e) { return e.classList.contains('history-item-text'); });
+              if (t.length !== 1) throw new Error(hostId + ' の項目の文字が ' + t.length + ' 件あります');
+              return t[0].textContent;
+            })
+          };
+        });
+    },
+
+    /** 行差分の行（.history-line）を DOM 順に { op: del|add|same, text } で読む。text は行頭の記号を含む。 */
+    historyLinesIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.classList.contains('history-line'); })
+        .map(function (l) {
+          const op = ['del', 'add', 'same'].filter(function (c) { return l.classList.contains(c); });
+          if (op.length !== 1) throw new Error(hostId + ' の行の種類が決まりません: ' + l.className);
+          return { op: op[0], text: l.textContent, children: l.children.length };
+        });
     },
 
     /** hostId の下の件数（span.comment-count）の文字を DOM 順に返す。 */

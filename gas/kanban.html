@@ -184,6 +184,25 @@
   .comment-actions { display: flex; align-items: center; gap: var(--sp-3); }
   .comment-message { font-size: 12px; white-space: pre-line; }
   .comment-message.error { color: var(--danger); }
+  /* 履歴の節。コメントの節の直前に置く。初めは畳んであり、開いたときに読み込む。 */
+  .history { display: flex; flex-direction: column; gap: var(--sp-2);
+    border-top: 1px solid var(--line); padding-top: var(--sp-3); }
+  .history-toggle { align-self: flex-start; font-size: 13px; font-weight: 600; }
+  .history-body { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .history-note, .history-status { font-size: 12px; color: var(--ink-2); }
+  .history-status.error { color: var(--danger); }
+  .history-group { padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
+  .history-group:last-child { border-bottom: none; }
+  .history-head { font-size: 12px; color: var(--ink-2); }
+  .history-items { list-style: none; margin: var(--sp-1) 0 0; padding: 0; }
+  .history-item { font-size: 13px; }
+  .history-item-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .history-diff { margin-top: var(--sp-1); }
+  /* 色だけに頼らない。行頭の「−」「＋」は textContent に入っている。 */
+  .history-line { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .history-line.del { color: var(--danger); text-decoration: line-through; }
+  .history-line.add { color: var(--accent); }
+  .history-line.same { color: var(--ink-2); }
   /* カードと障害物の表の件数 */
   .comment-count { font-size: 11px; color: var(--ink-2); }
   td .comment-count { margin-left: var(--sp-2); white-space: nowrap; }
@@ -381,6 +400,8 @@
       <span class="spacer"></span>
       <button id="panel-delete" class="danger" type="button"></button>
     </div>
+    <!-- 中身は renderHistory() が作る。新規作成中（ID がまだ無い）は hidden のまま。 -->
+    <div id="panel-history" class="history" hidden></div>
     <!-- 中身は renderComments() が作る。新規作成中（ID がまだ無い）は hidden のまま。 -->
     <div id="panel-comments" class="comments" hidden></div>
   </aside>
@@ -418,6 +439,7 @@
       <span class="spacer"></span>
       <button id="imp-panel-resolve" type="button"></button>
     </div>
+    <div id="imp-panel-history" class="history" hidden></div>
     <div id="imp-panel-comments" class="comments" hidden></div>
   </aside>
 </div>
@@ -1158,6 +1180,7 @@ function openPanel(id, presetStatus) {
   setPanelBusy(false);
   document.getElementById('panel').hidden = false;
   render(board);   // 選択中のカードに印を付ける
+  renderHistory('panel-history', id);   // 閉じた状態から始める。新規作成なら隠れる
   renderComments('panel-comments', id, true);   // 新規作成（id が null）なら節は隠れる
   document.getElementById('f-title').focus();
 }
@@ -1166,6 +1189,7 @@ function closePanel() {
   document.getElementById('panel').hidden = true;
   panelSeq++;   // 閉じたあとに応答が来ても、そのパネルは既に無い
   panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
+  forgetHistory('panel-history');
   render(board);
 }
 
@@ -1227,6 +1251,7 @@ function savePanel() {
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, newId));
         if (mine) closePanel();
         setMessage((id ? id + ' を保存しました。' : res.id + ' を作成しました。'), 'info');
+        afterHistoryWrite(res, newId);
       } else {
         // 検証エラーではパネルを閉じない。閉じると入力が消える。
         if (res.board) {
@@ -1360,6 +1385,7 @@ function deletePbi() {
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         if (mine) closePanel();
         showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
+        afterHistoryWrite(res, id);
       } else {
         if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         // パネルを開いたままの間にこのカードが board から消えていることがある
@@ -1413,6 +1439,7 @@ function restorePbi(row) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
         setMessage(row.id + ' を戻しました。', 'info');
+        afterHistoryWrite(res, row.id);
       } else {
         if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
         setMessage(res.message, 'error');
@@ -1530,6 +1557,7 @@ function openImpPanel(id) {
   setImpPanelMessage('', 'info');
   setImpPanelBusy(false);
   document.getElementById('imp-panel').hidden = false;
+  renderHistory('imp-panel-history', id);   // 閉じた状態から始める。新規作成なら隠れる
   renderComments('imp-panel-comments', id, true);   // 新規作成（id が null）なら節は隠れる
   document.getElementById('i-title').focus();
 }
@@ -1538,6 +1566,7 @@ function closeImpPanel() {
   document.getElementById('imp-panel').hidden = true;
   impPanelSeq++;
   impPanelState = { id: null, expected: null, resolving: false };
+  forgetHistory('imp-panel-history');
 }
 
 function readImpForm() {
@@ -1599,8 +1628,10 @@ function sendImpWrite(method, args, label, after, onPartial) {
       if (mine) setImpPanelBusy(false);
       if (res.ok) writeSeq++;
       applyImpResponse(res, issued, commentSeen);
-      if (res.ok) { after(res, mine); return; }
-      if (res.reason === 'partial' && onPartial) { onPartial(res, mine); return; }
+      // 対象は先頭の引数（更新・解決）か、作成なら応答の id。
+      var target = typeof args[0] === 'string' ? args[0] : res.id;
+      if (res.ok) { after(res, mine); afterHistoryWrite(res, target); return; }
+      if (res.reason === 'partial' && onPartial) { onPartial(res, mine); afterHistoryWrite(res, null); return; }
       // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
       if (mine && impPanelState.id) {
         var latest = findImpRow(impPanelState.id);   // 古い応答なら表は戻していないので、最新のまま
@@ -1688,6 +1719,7 @@ function retryResolveImp(id, resolution, expected) {
       if (res.ok || res.reason === 'partial') {
         if (res.ok) setMessage(id + ' を解決しました。', 'info');
         showResolveOutcome(id, resolution, expected, res);
+        afterHistoryWrite(res, res.ok ? id : null);
         return;
       }
       // 「既に解決済みです」など、サーバが使い分けた文言をそのまま出す。
@@ -1717,6 +1749,7 @@ function unresolveImp(moved, resolvedRow) {
         showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
           function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', true);
       }
+      afterHistoryWrite(res, res.ok ? moved.id : null);
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
@@ -1990,6 +2023,7 @@ function sendComment(hostId, targetId) {
       } else {
         setMessage(targetId + ': ' + res.message, 'error');
       }
+      afterHistoryWrite(res, res.ok ? targetId : null);
     })
     .withFailureHandler(function (err) {
       settle();
@@ -2028,6 +2062,7 @@ function deleteComment(hostId, targetId, commentId) {
       }
       if (res.ok) showUndoToast('コメントを削除しました。', function () { restoreComment(res.removed); });
       else fail(res.message);
+      afterHistoryWrite(res, res.ok ? targetId : null);
     })
     .withFailureHandler(function (err) {
       settle();
@@ -2058,12 +2093,274 @@ function restoreComment(row) {
       if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
       if (res.ok) setMessage('コメントを戻しました。', 'info');
       else failRestore(res.message);
+      afterHistoryWrite(res, res.ok ? row.target_id : null);
     })
     .withFailureHandler(function (err) {
       delete commentPending[issued];
       failRestore('取り消せませんでした: ' + err.message);
     })
     .apiRestoreComment(row);
+}
+
+// --- 変更履歴 ---------------------------------------------------------------
+// historyGroups / historyLineDiff / HISTORY_LINE_DIFF_MAX は gas/pure_history.js の
+// groupHistory / lineDiff / LINE_DIFF_MAX の写し（サーバ側の .js はブラウザから呼べない）。
+// gas/tests/kanban_history.test.js が同じ見本で結果の一致を固定している。直すときは両方を直すこと。
+var HISTORY_LINE_DIFF_MAX = 500;
+
+// 項目名は一覧・障害物の表の列見出しと同じ言葉（kanban_history.test.js が LIST_COLUMNS /
+// IMPEDIMENT_COLUMNS との一致を固定している）。
+var HISTORY_FIELD_LABELS = {
+  title: 'タイトル', description: '説明', acceptance_criteria: '受入基準', status: 'ステータス',
+  priority: '優先度', size: 'ポイント', sprint: 'スプリント', reported_by: '報告者',
+  reported_at: '報告日', resolved_at: '解決日', resolution: '解決策'
+};
+// 複数行になりうる列。行単位の差分で見せる。
+var HISTORY_MULTILINE = { description: true, acceptance_criteria: true, resolution: true };
+var HISTORY_ACTION_LABELS = {
+  create: '作成', update: '変更', delete: '削除', restore: '削除の取り消し',
+  resolve: '解決', unresolve: '解決の取り消し', comment_add: 'コメント追加',
+  comment_delete: 'コメント削除', comment_restore: 'コメント削除の取り消し'
+};
+var HISTORY_NOTE = 'Web アプリからの変更だけを記録しています';
+
+// 節の id → { targetId, toggle, body, content, open, req }（最後に描いたもの）。パネルを閉じたら null。
+var historyUi = {};
+// 取りに行くたびに増える通し番号。応答はこれが自分の節の req と一致するときだけ描く。
+var historyReq = 0;
+
+/** 連続する同じ at + actor をまとめる（groupHistory の写し）。 */
+function historyGroups(entries) {
+  var out = [];
+  (entries || []).forEach(function (e) {
+    var last = out[out.length - 1];
+    if (last && last.at === e.at && last.actor === e.actor) last.items.push(e);
+    else out.push({ at: e.at, actor: e.actor, items: [e] });
+  });
+  return out;
+}
+
+function historyText(v) { return v === undefined || v === null ? '' : String(v); }
+
+function historyLines(s) {
+  var t = historyText(s);
+  return t === '' ? [] : t.split('\n');
+}
+
+/** 行単位の差分（LCS。lineDiff の写し）。どちらかが上限を超えたら丸ごと del / add。 */
+function historyLineDiff(before, after) {
+  var a = historyLines(before);
+  var b = historyLines(after);
+  if (a.length > HISTORY_LINE_DIFF_MAX || b.length > HISTORY_LINE_DIFF_MAX) {
+    return a.map(function (t) { return { op: 'del', text: t }; })
+      .concat(b.map(function (t) { return { op: 'add', text: t }; }));
+  }
+  var n = a.length;
+  var m = b.length;
+  var L = [];
+  var i, j;
+  for (i = 0; i <= n; i++) {
+    var row = [];
+    for (j = 0; j <= m; j++) row.push(0);
+    L.push(row);
+  }
+  for (i = 1; i <= n; i++) {
+    for (j = 1; j <= m; j++) {
+      L[i][j] = a[i - 1] === b[j - 1] ? L[i - 1][j - 1] + 1 : Math.max(L[i - 1][j], L[i][j - 1]);
+    }
+  }
+  var rev = [];
+  i = n;
+  j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      rev.push({ op: 'same', text: a[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || L[i][j - 1] >= L[i - 1][j])) {
+      rev.push({ op: 'add', text: b[j - 1] });
+      j--;
+    } else {
+      rev.push({ op: 'del', text: a[i - 1] });
+      i--;
+    }
+  }
+  return rev.reverse();
+}
+
+/** その節が今もその対象のパネルとして開いているか（パネルが見えていて、対象が同じ）。 */
+function historyPanelShows(hostId, targetId) {
+  if (hostId === 'panel-history') {
+    return !document.getElementById('panel').hidden && panelState.id === targetId;
+  }
+  return !document.getElementById('imp-panel').hidden && impPanelState.id === targetId;
+}
+
+/**
+ * 履歴の節を描く（パネルを開くたびに呼ぶ）。いつも閉じた状態から始める。
+ * targetId が空（新規作成中）なら節ごと隠す。
+ */
+function renderHistory(hostId, targetId) {
+  var host = document.getElementById(hostId);
+  host.innerHTML = '';
+  historyUi[hostId] = null;
+  host.hidden = !targetId;
+  if (!targetId) return;
+
+  var toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'history-toggle';
+  toggle.textContent = '履歴';
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.setAttribute('aria-controls', hostId + '-body');
+  host.appendChild(toggle);
+
+  var body = document.createElement('div');
+  body.id = hostId + '-body';
+  body.className = 'history-body';
+  body.hidden = true;
+  var note = document.createElement('div');
+  note.className = 'history-note';
+  note.textContent = HISTORY_NOTE;
+  body.appendChild(note);
+  var content = document.createElement('div');
+  body.appendChild(content);
+  host.appendChild(body);
+
+  var ui = { targetId: targetId, toggle: toggle, body: body, content: content, open: false, req: 0 };
+  toggle.addEventListener('click', function () {
+    if (historyUi[hostId] !== ui) return;
+    if (ui.open) {
+      ui.open = false;
+      ui.req = 0;   // 閉じたあとに届いた応答は描かない
+      body.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+      clearHost(content);
+      return;
+    }
+    ui.open = true;
+    body.hidden = false;
+    toggle.setAttribute('aria-expanded', 'true');
+    fetchHistory(hostId);
+  });
+  historyUi[hostId] = ui;
+}
+
+/** パネルを閉じたら節の状態を手放す（閉じたパネルへ届いた応答・書き込み後の取り直しを無効にする）。 */
+function forgetHistory(hostId) {
+  historyUi[hostId] = null;
+}
+
+function setHistoryStatus(content, text, kind) {
+  clearHost(content);
+  var s = document.createElement('div');
+  s.className = 'history-status ' + (kind || 'info');
+  s.textContent = text;
+  content.appendChild(s);
+}
+
+/** 開いている節の履歴を取りに行く。応答はその節が同じ対象で開いたままのときだけ描く。 */
+function fetchHistory(hostId) {
+  var ui = historyUi[hostId];
+  if (!ui || !ui.open) return;
+  var seq = ++historyReq;
+  ui.req = seq;
+  var targetId = ui.targetId;
+  setHistoryStatus(ui.content, '読み込んでいます…', 'info');
+  var current = function () {
+    return historyUi[hostId] === ui && ui.open && ui.req === seq && historyPanelShows(hostId, targetId);
+  };
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (!current()) return;
+      if (!res || !res.ok) {
+        setHistoryStatus(ui.content, '履歴を読み込めませんでした: ' + ((res && res.message) || ''), 'error');
+        return;
+      }
+      fillHistory(ui.content, res.entries || []);
+    })
+    .withFailureHandler(function (err) {
+      if (!current()) return;
+      setHistoryStatus(ui.content, '履歴を読み込めませんでした: ' + ((err && err.message) || ''), 'error');
+    })
+    .apiGetHistory(targetId);
+}
+
+function historyValue(v) {
+  var t = historyText(v);
+  return t === '' ? '（空）' : t;
+}
+
+/** 一覧を描く。文字はすべて textContent で入れる（値に <b> 等があっても文字のまま）。 */
+function fillHistory(content, entries) {
+  clearHost(content);
+  if (entries.length === 0) {
+    setHistoryStatus(content, 'まだ履歴がありません', 'info');
+    return;
+  }
+  historyGroups(entries).forEach(function (g) {
+    var box = document.createElement('div');
+    box.className = 'history-group';
+    var actions = [];
+    g.items.forEach(function (e) {
+      var label = HISTORY_ACTION_LABELS[e.action] || historyText(e.action);
+      if (actions.indexOf(label) === -1) actions.push(label);
+    });
+    var head = document.createElement('div');
+    head.className = 'history-head';
+    head.textContent = historyText(g.at) + ' · ' + commentAuthorLabel(g.actor) + ' · ' + actions.join('・');
+    box.appendChild(head);
+    var ul = document.createElement('ul');
+    ul.className = 'history-items';
+    g.items.forEach(function (e) {
+      if (e.action !== 'update') return;   // 項目の変更以外は見出しの操作名で足りる
+      var li = document.createElement('li');
+      li.className = 'history-item';
+      var label = HISTORY_FIELD_LABELS[e.field] || historyText(e.field);
+      var text = document.createElement('div');
+      text.className = 'history-item-text';
+      li.appendChild(text);
+      if (HISTORY_MULTILINE[e.field]) {
+        text.textContent = label + ':';
+        var diff = document.createElement('div');
+        diff.className = 'history-diff';
+        historyLineDiff(e.before, e.after).forEach(function (d) {
+          var line = document.createElement('div');
+          line.className = 'history-line ' + d.op;
+          line.textContent = (d.op === 'del' ? '−' : d.op === 'add' ? '＋' : '　') + d.text;
+          diff.appendChild(line);
+        });
+        li.appendChild(diff);
+      } else {
+        text.textContent = label + ': ' + historyValue(e.before) + ' → ' + historyValue(e.after);
+      }
+      ul.appendChild(li);
+    });
+    if (ul.children.length) box.appendChild(ul);
+    content.appendChild(box);
+  });
+}
+
+/**
+ * 書き込みの応答を受けた後の共通処理。どの書き込みでも、成功分岐（途中で止まった応答を含む）の
+ * **最後**に呼ぶ（先に呼ぶと、その後の「保存しました」等で警告が消える）。
+ * - historyWarning があれば全体メッセージに出す。途中で止まった応答なら、出ているエラーの後ろへ足す
+ * - 成功していて、その対象の履歴の節が開いていれば取り直す
+ */
+function afterHistoryWrite(res, targetId) {
+  if (!res) return;
+  if (res.historyWarning) {
+    var el = document.getElementById('message');
+    // 途中で止まった応答（ok でない）は、この経路が直前に出した止まった旨の文言を消さない。
+    // 成功の応答では置き換える（前の操作の古いエラーへ足し続けない）。
+    var cur = !res.ok && el.className === 'error' ? el.textContent : '';
+    setMessage(cur && cur.indexOf(res.historyWarning) === -1 ? cur + ' ' + res.historyWarning : res.historyWarning,
+      'error');
+  }
+  if (!targetId) return;
+  ['panel-history', 'imp-panel-history'].forEach(function (hostId) {
+    var ui = historyUi[hostId];
+    if (ui && ui.open && ui.targetId === targetId && historyPanelShows(hostId, targetId)) fetchHistory(hostId);
+  });
 }
 
 function renderTabs() {
@@ -2509,6 +2806,7 @@ function move(id, newStatus) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         render(applyServerBoard(res.board, id, trustWholeBoard));
         setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
+        afterHistoryWrite(res, id);
       } else {
         // res.board があれば競合等でサーバが返した最新の内容、無ければ
         // 今の画面からこのカードだけを元の列へ戻す。
