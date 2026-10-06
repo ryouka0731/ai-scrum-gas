@@ -418,8 +418,10 @@ test('publish: 空白・日本語のファイル名、空ディレクトリ、�
     assert.equal(fs.readFileSync(path.join(dest, 'scrum', 'comments.csv.bak'), 'utf8'), 'y');
     // 空ディレクトリは追跡されないため配布しない（G4 F5 で仕様変更）
     assert.equal(fs.existsSync(path.join(dest, 'scrum', 'emptydir')), false);
-    // 配布対象外（Scrum/ は4点に無い）
-    assert.equal(fs.existsSync(path.join(dest, 'Scrum')) && !fs.existsSync(path.join(dest, 'scrum')), false);
+    // 配布対象外（Scrum/ は4点に無い）。大文字小文字を区別しないファイルシステム（macOS 既定）では
+    // existsSync('Scrum') が scrum/ に当たるので、名前の一覧で大文字の Scrum が無いことを直に見る。
+    assert.equal(fs.readdirSync(dest).indexOf('Scrum'), -1, 'dest に Scrum/ ができた: ' + JSON.stringify(fs.readdirSync(dest)));
+    assert.ok(fs.readdirSync(dest).indexOf('scrum') !== -1, '前提: scrum/ は配布される');
     const rec = JSON.parse(fs.readFileSync(path.join(dest, 'scrum', '.published.json'), 'utf8'));
     assert.ok(rec.publishedAt && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(rec.publishedAt));
   } finally {
