@@ -603,7 +603,11 @@ function apiCreateImpediment(fields) {
 
 /** 未解決の障害物を書き換える。expected は画面が描いた時点の行（全列）。 */
 function apiUpdateImpediment(id, fields, expected) {
-  return withImpedimentWrite_('open', function (open) {
+  return withImpedimentWrite_('open', function (open, resolved) {
+    // 解決が途中で止まった行を片側だけ直すと、揃えるときにどちらの内容を残すか決まらない。先に揃えさせる。
+    if (impedimentHalfResolved(open, resolved, id)) {
+      return { ok: false, reason: 'conflict', message: '解決が途中で止まっています。先に「完了する」か「未解決に戻す」で揃えてください' };
+    }
     const picked = pickImpedimentFields_(fields);
     const v = validateImpedimentFields(picked);
     if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };

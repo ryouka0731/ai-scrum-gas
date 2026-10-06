@@ -156,3 +156,14 @@ test('impedimentSameIdentity: 解決で変わらない列だけを比べる', ()
   assert.equal(m.impedimentSameIdentity(imp(), imp({ title: '別' })), false);
   assert.equal(m.impedimentSameIdentity(imp(), imp({ sprint: 'sprint002' })), false);
 });
+
+test('impedimentHalfResolved: 未解決と解決済に同じ障害物（ID と変わらない列が同じ）があるときだけ真', () => {
+  const tpl = imp({ id: 'IMP-001', title: '（障害物タイトル）', description: '（詳細説明）', reported_by: '（報告者）', reported_at: 'YYYY-MM-DD', resolution: '（解決策）' });
+  const done = imp({ status: 'Resolved', resolved_at: '2026-10-02', resolution: '直した' });
+  assert.equal(m.impedimentHalfResolved([imp()], [done], 'IMP-002'), true);
+  assert.equal(m.impedimentHalfResolved([imp()], [done], ' IMP-002 '), true);
+  assert.equal(m.impedimentHalfResolved([imp()], [], 'IMP-002'), false);
+  assert.equal(m.impedimentHalfResolved([imp()], [imp({ title: '別', status: 'Resolved' })], 'IMP-002'), false, '中身の違う行は別の障害物');
+  assert.equal(m.impedimentHalfResolved([], [done], 'IMP-002'), false);
+  assert.equal(m.impedimentHalfResolved([tpl], [Object.assign({}, tpl, { status: 'Resolved' })], 'IMP-001'), false, '雛形は数えない');
+});

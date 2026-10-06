@@ -764,6 +764,25 @@ test('途中で止まった解決: apiGetView が pending を返し、「解決�
   assert.deepEqual(plain(res.view.pending), []);
 });
 
+test('途中で止まった解決: 未解決側の行の編集は conflict で止め、どのファイルも書かない（I3）', () => {
+  const f = halfResolvedFiles();
+  const before = [f['impediment_log.csv'], f['impediment_log_resolved.csv']];
+  const { ctx } = createTestContext(f);
+  const res = ctx.apiUpdateImpediment('IMP-002', { title: '新しい題', description: '', reported_by: 'マヤ', sprint: 'sprint001' }, IMP2_ROW);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'conflict');
+  assert.equal(res.message, '解決が途中で止まっています。先に「完了する」か「未解決に戻す」で揃えてください');
+  assert.deepEqual([f['impediment_log.csv'], f['impediment_log_resolved.csv']], before);
+  assert.equal(plain(res.view.pending).length, 1, '最新のビュー（途中で止まった操作）を返す');
+});
+
+test('同じ ID でも中身の違う行が解決済にあるだけなら、未解決側の編集は止めない（I3 の対象外）', () => {
+  const f = impFiles(IMP2, 'IMP-002,別の障害物,,マヤ,2026-09-01,Resolved,2026-09-02,直した,sprint001\n');
+  const { ctx } = createTestContext(f);
+  const res = ctx.apiUpdateImpediment('IMP-002', { title: '新しい題', description: '', reported_by: 'マヤ', sprint: 'sprint001' }, IMP2_ROW);
+  assert.equal(res.ok, true, res.message);
+});
+
 test('途中で止まった解決: 「未解決に戻す」で未解決だけに揃う', () => {
   const f = halfResolvedFiles();
   const pending = plain(createTestContext(f).ctx.apiGetView('impediment').view.pending)[0];
