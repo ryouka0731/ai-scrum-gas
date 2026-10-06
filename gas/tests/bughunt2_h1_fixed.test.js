@@ -636,3 +636,53 @@ test('BUG-P5. 書き込み前の解釈（pure）: 1回の解釈で行と、列�
   assert.deepEqual(r.overlong, C.findOverlongCsvRow(t));
   assert.equal(C.csvToObjectsChecked('id,b\nX,1\n').overlong, null);
 });
+
+// --- P6: diffRows は id → 行の索引で対応づける（同じ ID の行が多くても線形） ----------------------------------
+
+/** 直す前の diffRows（2乗の版）。新しい版と結果が同じことを乱択で確かめる参照。 */
+function diffRowsReference(beforeRows, afterRows, fields, ignore) {
+  const t = (v) => (v === undefined || v === null ? '' : String(v));
+  const skip = ignore || [];
+  const cols = (fields || []).filter((f) => f !== 'id' && skip.indexOf(f) === -1);
+  const b = Object.create(null);
+  (beforeRows || []).forEach((row) => { const id = t((row || {}).id).trim(); if (id) (b[id] = b[id] || []).push({ row, used: false }); });
+  const same = (x, y) => cols.every((f) => t(x[f]) === t(y[f]));
+  const afterList = [];
+  (afterRows || []).forEach((row) => { const id = t((row || {}).id).trim(); if (id) afterList.push({ id, row, pair: null }); });
+  afterList.forEach((x) => { const c = b[x.id] || []; for (let i = 0; i < c.length; i++) if (!c[i].used && same(c[i].row, x.row)) { c[i].used = true; x.pair = c[i].row; x.same = true; return; } });
+  afterList.forEach((x) => { if (x.pair) return; const c = b[x.id] || []; for (let i = 0; i < c.length; i++) if (!c[i].used) { c[i].used = true; x.pair = c[i].row; return; } });
+  const out = [];
+  afterList.forEach((x) => {
+    if (!x.pair) { out.push({ target_id: x.id, action: 'create' }); return; }
+    if (x.same) return;
+    cols.forEach((f) => { const v0 = t(x.pair[f]); const v1 = t(x.row[f]); if (v0 !== v1) out.push({ target_id: x.id, action: 'update', field: f, before: v0, after: v1 }); });
+  });
+  (beforeRows || []).forEach((row) => { const id = t((row || {}).id).trim(); if (!id) return; const c = b[id]; for (let i = 0; i < c.length; i++) if (c[i].row === row && !c[i].used) { c[i].used = true; out.push({ target_id: id, action: 'delete' }); return; } });
+  return out;
+}
+
+test('BUG-P6. diffRows: 同じ ID が 2,000 行あって全行が変わっても線形（行数2倍で 3倍未満）', () => {
+  const mk = (n, title) => Array.from({ length: n }, () => ({ id: 'PBI-001', title: title, description: '', acceptance_criteria: '', priority: '', size: '', status: 'New', sprint: '' }));
+  const time = (n) => P.bestOf(() => HIST.diffRows(mk(n, 'a'), mk(n, 'b'), P.BACKLOG_FIELDS, []), 3);
+  const t1 = Math.max(time(2000), 1);
+  const t2 = Math.max(time(4000), 1);
+  const t3 = time(8000);
+  assert.ok(t3 / t2 < 3 && t2 / t1 < 3, '行数 2000 → 4000 → 8000 で ' + t1.toFixed(0) + 'ms → ' + t2.toFixed(0) + 'ms → ' + t3.toFixed(0) + 'ms（線形なら比は約2）');
+  assert.ok(t3 < 500, '8000 行で ' + t3.toFixed(0) + 'ms');
+});
+
+test('BUG-P6. diffRows: 結果は直す前の版と同じ（乱択 3000 通り。同じ ID・雛形・空 ID・同じ行の参照の重複を含む）', () => {
+  const rnd = P.mulberry32(0x6e6);
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const fields = ['id', 'title', 'status', 'updated_at'];
+  for (let k = 0; k < 3000; k++) {
+    const mkRow = () => ({ id: pick(['PBI-1', 'PBI-1', ' PBI-1 ', 'PBI-2', '', '__proto__', 'constructor']), title: pick(['a', 'b', '', undefined]), status: pick(['New', 'Done']), updated_at: pick(['t1', 't2']) });
+    const before = Array.from({ length: Math.floor(rnd() * 7) }, mkRow);
+    if (before.length && rnd() < 0.2) before.push(before[0]);   // 同じオブジェクトが2回
+    const after = before.filter(() => rnd() < 0.7).map((r) => (rnd() < 0.5 ? Object.assign({}, r, { title: pick(['a', 'b', 'c']) }) : r));
+    Array.from({ length: Math.floor(rnd() * 3) }, mkRow).forEach((r) => after.splice(Math.floor(rnd() * (after.length + 1)), 0, r));
+    const ignore = rnd() < 0.5 ? ['updated_at'] : [];
+    assert.deepEqual(HIST.diffRows(before, after, fields, ignore), diffRowsReference(before, after, fields, ignore),
+      'k=' + k + ' ' + JSON.stringify({ before, after, ignore }));
+  }
+});

@@ -41,19 +41,9 @@ function capHistoryValue(v) {
   return t.slice(0, cut) + '…（以下省略・全 ' + count + ' 字）';
 }
 
-/** 行配列を id（trim）ごとの行の並びにする。id が空の行は無視する。 */
-function histGroup_(rows) {
-  const map = Object.create(null);   // '__proto__' のような id でも壊れないように
-  (rows || []).forEach(function (row) {
-    const id = histText_((row || {}).id).trim();
-    if (!id) return;
-    (map[id] = map[id] || []).push({ row: row, used: false });
-  });
-  return map;
-}
-
-function histSame_(x, y, cols) {
-  return cols.every(function (f) { return histText_(x[f]) === histText_(y[f]); });
+/** 比べる列の値を、取り違えの起きない1つの文字列にする（索引の鍵）。 */
+function histContentKey_(row, cols) {
+  return JSON.stringify(cols.map(function (f) { return histText_(row[f]); }));
 }
 
 /**
@@ -65,11 +55,32 @@ function histSame_(x, y, cols) {
  * 残りを並び順に対応づける。対応のつかない after の行は create、before の行は delete。
  * id の最初の行だけを見ると、雛形の陰にある本物の行の編集が記録されず、重複の片方の
  * 削除が「存在しない update」として記録される。
+ *
+ * 対応づけは id → 行、(id, 中身) → 行 の索引で行う（同じ id の行が多くても行数に線形）。
+ * どちらも before の並び順で「まだ対応のついていない最初の行」を選ぶ。
  */
 function diffRows(beforeRows, afterRows, fields, ignore) {
   const skip = ignore || [];
   const cols = (fields || []).filter(function (f) { return f !== 'id' && skip.indexOf(f) === -1; });
-  const b = histGroup_(beforeRows);
+  // id ごとの候補（before の並び順）と、次に見る位置。'__proto__' のような id でも壊れないように。
+  const byId = Object.create(null);
+  const byContent = Object.create(null);
+  // 同じ行（同じオブジェクト）が before に2回以上あるときも、消えた行は「その行のまだ使っていない候補」で数える。
+  const byRow = new Map();
+  (beforeRows || []).forEach(function (row) {
+    const id = histText_((row || {}).id).trim();
+    if (!id) return;
+    const cand = { row: row, used: false };
+    const same = byRow.get(row) || { list: [], next: 0 };
+    same.list.push(cand);
+    byRow.set(row, same);
+    const g = byId[id] || (byId[id] = { list: [], next: 0 });
+    g.list.push(cand);
+    const ck = byContent[id] || (byContent[id] = Object.create(null));
+    const key = histContentKey_(row, cols);
+    const q = ck[key] || (ck[key] = { list: [], next: 0 });
+    q.list.push(cand);
+  });
   const afterList = [];
   (afterRows || []).forEach(function (row) {
     const id = histText_((row || {}).id).trim();
@@ -77,18 +88,18 @@ function diffRows(beforeRows, afterRows, fields, ignore) {
   });
   // 1巡目: 中身の変わらない行どうし
   afterList.forEach(function (x) {
-    const cands = b[x.id] || [];
-    for (let i = 0; i < cands.length; i++) {
-      if (!cands[i].used && histSame_(cands[i].row, x.row, cols)) { cands[i].used = true; x.pair = cands[i].row; x.same = true; return; }
-    }
+    const q = byContent[x.id] && byContent[x.id][histContentKey_(x.row, cols)];
+    if (!q) return;
+    while (q.next < q.list.length && q.list[q.next].used) q.next++;
+    if (q.next < q.list.length) { const c = q.list[q.next++]; c.used = true; x.pair = c.row; x.same = true; }
   });
   // 2巡目: 残りを並び順に
   afterList.forEach(function (x) {
     if (x.pair) return;
-    const cands = b[x.id] || [];
-    for (let i = 0; i < cands.length; i++) {
-      if (!cands[i].used) { cands[i].used = true; x.pair = cands[i].row; return; }
-    }
+    const g = byId[x.id];
+    if (!g) return;
+    while (g.next < g.list.length && g.list[g.next].used) g.next++;
+    if (g.next < g.list.length) { const c = g.list[g.next++]; c.used = true; x.pair = c.row; }
   });
   const out = [];
   afterList.forEach(function (x) {
@@ -103,10 +114,9 @@ function diffRows(beforeRows, afterRows, fields, ignore) {
   (beforeRows || []).forEach(function (row) {
     const id = histText_((row || {}).id).trim();
     if (!id) return;
-    const cands = b[id];
-    for (let i = 0; i < cands.length; i++) {
-      if (cands[i].row === row && !cands[i].used) { cands[i].used = true; out.push({ target_id: id, action: 'delete' }); return; }
-    }
+    const same = byRow.get(row);
+    while (same.next < same.list.length && same.list[same.next].used) same.next++;
+    if (same.next < same.list.length) { same.list[same.next++].used = true; out.push({ target_id: id, action: 'delete' }); }
   });
   return out;
 }

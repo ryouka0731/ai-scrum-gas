@@ -9,7 +9,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const S = require('./bughunt2_P_support.js');
 const { createHarness } = require('./kanban_harness.js');
-const history = require('../pure_history.js');
 const impView = require('../pure_view_impediment.js');
 
 const NEW_PBI = { title: 'n', description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' };
@@ -63,20 +62,6 @@ test('BUG-P4. 履歴 200 件 × 500 行の説明で、履歴パネルの DOM ノ
   let nodes = 0;
   (function walk(e) { nodes++; (e.children || []).forEach(walk); })(h.sandbox.document.getElementById('panel-history'));
   assert.ok(nodes <= 50000, '履歴パネルの DOM ノード ' + nodes);
-});
-
-// ---------------------------------------------------------------------------
-// BUG-P6 (low, 作為的): diffRows が同じ ID の行の数 k に 2乗
-// ---------------------------------------------------------------------------
-// 同じ ID の行が k 本ある（ローカルで ID が重なった、雛形の複製など）と、1巡目・2巡目が id ごとの候補を毎回先頭から
-// 走り直す。k = 2,000 で全行が変わると約2秒。現実の k は 2〜3 なので影響は小さい。
-test('BUG-P6. diffRows: 同じ ID が 2,000 行あって全行が変わると 2乗（行数2倍で 4倍以上）', () => {
-  const mk = (n, title) => Array.from({ length: n }, () => ({ id: 'PBI-001', title: title, description: '', acceptance_criteria: '', priority: '', size: '', status: 'New', sprint: '' }));
-  const time = (n) => S.bestOf(() => history.diffRows(mk(n, 'a'), mk(n, 'b'), S.BACKLOG_FIELDS, []), 3);
-  const t1 = Math.max(time(500), 1);
-  const t2 = time(1000);
-  const t3 = time(2000);
-  assert.ok(t3 / t2 < 3 && t2 / t1 < 3, '行数 500 → 1000 → 2000 で ' + t1.toFixed(0) + 'ms → ' + t2.toFixed(0) + 'ms → ' + t3.toFixed(0) + 'ms（線形なら比は約2）');
 });
 
 // ---------------------------------------------------------------------------
