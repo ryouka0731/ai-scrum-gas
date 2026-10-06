@@ -193,3 +193,63 @@ test('S-BUG-3: 頻度の判定（pure）', () => {
   assert.equal(R.isSyncTooSoon(String(now + 1), now), false, '未来の記録は信じない（時計のずれで止まり続けない）');
   [null, undefined, '', 'x', '12abc', 'NaN', 'Infinity'].forEach((v) => assert.equal(R.isSyncTooSoon(v, now), false, String(v)));
 });
+
+// --- S4: PBI の削除の取り消しは、鍵を捨ててから戻す（捨てられなければ戻さない） ------------------------------
+
+function sharedPbi002Files() {
+  const f = H.baseFiles();
+  f['product_backlog.csv'] += H.csvLine(H.PBI_FIELDS, { id: 'PBI-002', title: 'B2', status: 'New', created_at: '2026-10-01 00:00:00', updated_at: '2026-10-01 00:00:05' }) + '\n';
+  return f;
+}
+const pbi002Lines = (h) => h.files['product_backlog.csv'].split('\n').filter((l) => /^PBI-002,/.test(l)).length;
+
+test('S-BUG-4: 同じ ID の行が2つある PBI の削除を取り消すとき、鍵の破棄（CacheService.remove）が失敗したら戻さない（同じ鍵で2回戻らない）', () => {
+  const opts = {};
+  const h = H.createCtx(sharedPbi002Files(), opts);
+  const d = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:01'));
+  assert.equal(d.ok, true);
+  assert.equal(pbi002Lines(h), 1);
+  opts.failCacheRemove = true;
+  const before = h.files['product_backlog.csv'];
+  const r1 = plain(h.ctx.apiRestorePbi(d.undoToken));
+  assert.equal(r1.ok, false);
+  assert.equal(r1.reason, 'error');
+  assert.equal(h.files['product_backlog.csv'], before, '鍵を捨てられないのに戻した');
+  const r2 = plain(h.ctx.apiRestorePbi(d.undoToken));
+  assert.equal(r2.ok, false);
+  assert.equal(pbi002Lines(h), 1, '取り消しが効いて PBI-002 が ' + pbi002Lines(h) + ' 行になった');
+  // 破棄が直れば、同じ鍵で1回だけ戻せる。
+  opts.failCacheRemove = false;
+  assert.equal(plain(h.ctx.apiRestorePbi(d.undoToken)).ok, true);
+  assert.equal(pbi002Lines(h), 2);
+  assert.equal(plain(h.ctx.apiRestorePbi(d.undoToken)).reason, 'expired');
+  assert.equal(pbi002Lines(h), 2);
+});
+
+test('S-BUG-4: 鍵は本体を書く前に捨てる。本体を書けなかったときは鍵を預け直す（取り消しをやり直せる）', () => {
+  const opts = {};
+  const h = H.createCtx(sharedPbi002Files(), opts);
+  const d = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:01'));
+  h.log.length = 0;
+  opts.readOnly = true;
+  const r1 = plain(h.ctx.apiRestorePbi(d.undoToken));
+  assert.equal(r1.ok, false);
+  assert.equal(r1.reason, 'error');
+  const rm = h.log.indexOf('Cache.remove');
+  const write = h.log.indexOf('Drive.setContent:product_backlog.csv');
+  assert.ok(rm !== -1 && write !== -1 && rm < write, '順序: ' + h.log.join(', '));
+  assert.equal(pbi002Lines(h), 1);
+  opts.readOnly = false;
+  assert.equal(plain(h.ctx.apiRestorePbi(d.undoToken)).ok, true, '預け直した鍵で戻せる');
+  assert.equal(pbi002Lines(h), 2);
+  assert.equal(plain(h.ctx.apiRestorePbi(d.undoToken)).reason, 'expired');
+});
+
+test('S-BUG-4: 戻さなかったとき（既に存在する等）は鍵を捨てない', () => {
+  const h = H.createCtx(H.baseFiles());
+  const d = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:01'));
+  h.log.length = 0;
+  assert.equal(plain(h.ctx.apiRestorePbi('no-such-token')).reason, 'expired');
+  assert.equal(h.log.indexOf('Cache.remove'), -1);
+  assert.equal(plain(h.ctx.apiRestorePbi(d.undoToken)).ok, true);
+});

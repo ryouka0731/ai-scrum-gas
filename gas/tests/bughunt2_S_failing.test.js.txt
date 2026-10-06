@@ -35,16 +35,3 @@ test('S-BUG-1b: 解決の取り消しで、障害物を雛形の形（（…）�
   const visible = view.open.concat(view.resolved).some((x) => String(x.id).trim() === 'IMP-002');
   assert.ok(visible, 'IMP-002 が未解決・解決済のどちらからも見えなくなった（削除の無い障害物を実質的に消せる）');
 });
-
-// --- S-BUG-4 ---------------------------------------------------------------
-test('S-BUG-4: 同じ ID の行が2つある PBI の削除を取り消したあと、鍵の破棄（CacheService.remove）が失敗しても、同じ鍵で2回目は戻らない', () => {
-  const f = H.baseFiles();
-  f['product_backlog.csv'] += H.csvLine(H.PBI_FIELDS, { id: 'PBI-002', title: 'B2', status: 'New', created_at: '2026-10-01 00:00:00', updated_at: '2026-10-01 00:00:05' }) + '\n';
-  const h = H.createCtx(f, { failCacheRemove: true });
-  const d = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:01'));
-  assert.equal(d.ok, true);
-  assert.equal(plain(h.ctx.apiRestorePbi(d.undoToken)).ok, true);
-  const r2 = plain(h.ctx.apiRestorePbi(d.undoToken));
-  const n = h.files['product_backlog.csv'].split('\n').filter((l) => /^PBI-002,/.test(l)).length;
-  assert.equal(n, 2, '取り消しが2回効いて PBI-002 が ' + n + ' 行になった（2回目: ' + JSON.stringify(r2.ok) + '）');
-});

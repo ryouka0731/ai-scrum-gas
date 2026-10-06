@@ -224,11 +224,15 @@ test('apiRestorePbi: 同じ ID が既にあれば既存と案内し、鍵は消�
   assert.ok(('undo:' + del.undoToken) in e.cache, '失敗したのに鍵を捨てた');
 });
 
-test('apiRestorePbi: 鍵の削除が失敗しても復元は成功する', () => {
+// 2巡目 H1（S4）で仕様を変えた: 鍵は書く前に捨て、捨てられなければ戻さない（同じ鍵で2回戻させない）。
+test('apiRestorePbi: 鍵の削除が失敗したら復元しない（reason error、本体は書かない）', () => {
   const e = makeEnv(scrum(), { cacheRemoveThrows: true });
   const del = e.ctx.apiDeletePbi('PBI-002', T);
+  const before = e.scrumSpec.files['product_backlog.csv'];
   const r = e.ctx.apiRestorePbi(del.undoToken);
-  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.reason, 'error');
+  assert.equal(e.scrumSpec.files['product_backlog.csv'], before);
 });
 
 test('apiRestorePbi: 預かりの ID が形式違い・採番範囲外・タイトル空なら拒否する', () => {

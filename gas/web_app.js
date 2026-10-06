@@ -263,7 +263,15 @@ function withBacklogWrite_(mutate) {
         board: Object.prototype.hasOwnProperty.call(result, 'board') ? result.board : buildBoardData(rows)
       };
     }
-    writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
+    try {
+      writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
+    } catch (e) {
+      // 書く前に済ませた後始末（取り消しの鍵の破棄）を戻す。戻せなくても本体の失敗をそのまま返す。
+      if (typeof result.onWriteFailed === 'function') {
+        try { result.onWriteFailed(); } catch (e2) { /* best-effort */ }
+      }
+      throw e;
+    }
     // 本体が書けた直後（まだロックの中）に、操作ごとの後始末を行う（取り消しの鍵の預け入れ・破棄）。
     // 返した項目は応答に足す。
     const extra = typeof result.afterWrite === 'function' ? result.afterWrite() : null;
@@ -454,7 +462,8 @@ function takeHeldPbi_(token) {
  *
  * 引数は apiDeletePbi が返した undoToken だけ。戻すのはサーバが預かった行で、ブラウザが
  * 送る中身は使わない（google.script.run はブラウザから任意の値で呼べるため、行を受け取ると
- * 別の行を同じ ID で差し込める）。鍵は戻せたときに捨てる（一度しか使えない）。
+ * 別の行を同じ ID で差し込める）。鍵は本体を書く前に捨てる（一度しか使えない）。捨てられなければ
+ * reason 'error' で断り、本体を書けなければ預け直す。
  * 鍵が無い・期限切れなら reason 'expired' で断る。
  *
  * 復元は「今そこに表示・編集・削除できていた行を、そのまま戻す」操作である。
@@ -500,12 +509,20 @@ function apiRestorePbi(token) {
         : 'この PBI は既に存在します。取り消しは要りません。';
       return { ok: false, reason: r.reason, message: message };
     }
+    // 鍵は本体を書く前に捨てる（一度しか使えない保証を、捨てられたことで確かめる）。捨てられなければ戻さない。
+    // 書いた後に捨てる形だと、破棄の失敗を握りつぶしたときに同じ鍵で2回戻せてしまい、
+    // 同じ ID の行が残っていた削除（shared）では行が増える。
+    const cacheKey = PBI_UNDO_KEY_PREFIX + token;
+    try {
+      CacheService.getScriptCache().remove(cacheKey);
+    } catch (e) {
+      return { ok: false, reason: 'error', message: '取り消しの準備に失敗しました。少し待ってから、もう一度お試しください。' };
+    }
     return {
       ok: true, rows: r.rows, historyAction: 'restore',
-      // 書けてから鍵を捨てる。ロックの中なので、同じ鍵の2回目は必ずこの後に読み、expired になる。
-      afterWrite: function () {
-        try { CacheService.getScriptCache().remove(PBI_UNDO_KEY_PREFIX + token); } catch (e) { /* best-effort */ }
-        return null;
+      // 本体を書けなかったときは鍵を預け直す（取り消しをやり直せるように）。ロックの中で呼ばれる。
+      onWriteFailed: function () {
+        CacheService.getScriptCache().put(cacheKey, JSON.stringify(held), PBI_UNDO_TTL_SECONDS);
       }
     };
   });
