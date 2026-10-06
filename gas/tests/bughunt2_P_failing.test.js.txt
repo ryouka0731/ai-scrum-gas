@@ -1,0 +1,178 @@
+'use strict';
+// バグ探し 2巡目 P: 規模・性能の「現状では落ちる」期待。通常の `npm test` には入らない（拡張子 .txt）。
+// 走らせ方（worktree のルートで）:
+//   cp gas/tests/bughunt2_P_failing.test.js.txt gas/tests/bughunt2_P_failing_run.test.js \
+//     && node --test gas/tests/bughunt2_P_failing_run.test.js; rm gas/tests/bughunt2_P_failing_run.test.js
+// 各テストは「実際に起きる大きさ」で、期待と現状の数字をメッセージに出す。
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const S = require('./bughunt2_P_support.js');
+const { createHarness } = require('./kanban_harness.js');
+const csvPure = require('../pure_csv.js');
+const history = require('../pure_history.js');
+const impView = require('../pure_view_impediment.js');
+
+const NEW_PBI = { title: 'n', description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' };
+
+// ---------------------------------------------------------------------------
+// BUG-P1 (medium/low): 状態変更・編集のたびに、完了バックログ全体を Drive から読んで解釈する
+// ---------------------------------------------------------------------------
+// withBacklogWrite_ は mutate の前に必ず advanceLastPbiIdWatermark_ を呼び、その中で
+// readDoneBacklogRowsBestEffort_（product_backlog_done.csv の全文を読み、CSV 全体を解釈）を行う。
+// 完了バックログは増える一方（完了した PBI がすべて入る）なので、ドラッグ1回が
+// 「生きている本体の数十倍」のファイルの読み取りになる。ID を発番しない操作（状態変更・編集）には要らない。
+// 期待: ID を発番しない・消さない書き込み（apiUpdateStatus / apiUpdatePbi）は完了バックログを読まない。
+test('BUG-P1. 状態変更のたびに product_backlog_done.csv（20,000件・約2MB）を読んで解釈している', () => {
+  const files = S.standardFiles(100, null);
+  files['product_backlog_done.csv'] = S.pbiCsv(20000).replace(/PBI-0/g, 'PBI-1');
+  const doneChars = files['product_backlog_done.csv'].length;
+  const c = S.createCtx(files);
+  c.resetStats();
+  const r = c.ctx.apiUpdateStatus(S.pid(1), 'Done', S.T0);
+  assert.equal(r.ok, true, JSON.stringify(r).slice(0, 200));
+  const read = c.stats.readChars['product_backlog_done.csv'] || 0;
+  assert.ok(read === 0, '完了バックログを ' + read + ' 文字（' + (read / files['product_backlog.csv'].length).toFixed(0) + ' 倍の本体）読み、解釈量は ' + c.stats.parsedChars + ' 文字');
+  assert.ok(c.stats.parsedChars < 4 * files['product_backlog.csv'].length, '解釈量 ' + c.stats.parsedChars + '（完了 ' + doneChars + '）');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-P2 (medium): コメントが「全部」すべてのビュー応答とコメント書き込みの応答に載る
+// ---------------------------------------------------------------------------
+// spec 第6段階は「履歴は増え続けるので、ビューの応答には載せない」とした。コメントも増え続けるのに
+// 盤面・一覧・障害物の応答と、コメントを1件足すたびの応答（apiAddComment / Delete / Restore）に全対象・全件が載る。
+// 6,000件（8人で1年ぶん。本文200文字）で、盤面を開くたび・コメントを送るたびに約 4.5MB（UTF-8）を往復する。
+// 期待: ビュー応答の大きさはコメント数にほぼ依らない（件数だけ、または開いた対象の分だけ）。
+test('BUG-P2a. コメント 6,000 件で、盤面の応答が肥大する（コメント無しの 50 倍以上）', () => {
+  const none = S.createCtx(S.standardFiles(300, null));
+  const many = S.createCtx(S.standardFiles(300, 6000, { bodyChars: 200 }));
+  const base = S.payloadBytes(none.ctx.apiGetView('board'));
+  const big = S.payloadBytes(many.ctx.apiGetView('board'));
+  assert.ok(big < 3 * base, '盤面の応答 ' + base + ' バイト → ' + big + ' バイト（' + (big / base).toFixed(1) + ' 倍）。コメントの本文が全部載っている');
+});
+
+test('BUG-P2b. コメントを1件送るたびの応答に、全コメントが載る（6,000件で約 4.5MB）', () => {
+  const c = S.createCtx(S.standardFiles(300, 6000, { bodyChars: 200 }));
+  const r = c.ctx.apiAddComment(S.pid(1), 'こんにちは');
+  assert.equal(r.ok, true);
+  const bytes = S.payloadBytes(r);
+  assert.ok(bytes < 200000, '書き込みの応答が ' + bytes + ' バイト（送った1件は約 300 バイト）');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-P3 (medium): 変更履歴の before / after に長さの上限が無く、履歴の応答が 10MB 超になりうる
+// ---------------------------------------------------------------------------
+// PBI の説明・受入基準には長さの検査が無い（コメントだけ 2000 字）。編集のたびに、変更前・変更後の「全文」が
+// change_log.csv の1行ずつに入る。約2.7万字（約400行）の説明を200回直すと、apiGetHistory の応答は 200件 × 約5.5万字 = 約 11M 字（UTF-8 で約 31MB）。
+// 画面は 200 件ぶんの差分を描き（BUG-P4）、GAS の応答の大きさの上限（仮定: 数十 MB）にも近づく。
+// 期待: 履歴の応答は、1件の値の長さに上限を持つ（切り詰めて「省略」と示す）か、全体で 2MB 以内。
+test('BUG-P3. 約2.7万字の説明を編集した履歴 200 件の応答が 31MB（UTF-8）になる（前後の全文を持つ）', () => {
+  // まず本物の API で、1回の編集が「前と後の全文」を1行ずつ残すことを確かめる。
+  const desc = (tag) => Array.from({ length: 400 }, (_, i) => '行' + i + ' ' + tag + ' ' + 'あ'.repeat(60)).join('\n');
+  const files = S.standardFiles(5, null);
+  const c = S.createCtx(files);
+  const r1 = c.ctx.apiUpdatePbi(S.pid(1), { title: 'タイトル 1', description: desc('v1') }, csvPure.csvToObjects(files['product_backlog.csv'])[0].updated_at);
+  assert.equal(r1.ok, true, JSON.stringify(r1).slice(0, 200));
+  const r2 = c.ctx.apiUpdatePbi(S.pid(1), { title: 'タイトル 1', description: desc('v2') }, csvPure.csvToObjects(files['product_backlog.csv'])[0].updated_at);
+  assert.equal(r2.ok, true);
+  const h = c.ctx.apiGetHistory(S.pid(1));
+  const upd = h.entries.filter((e) => e.action === 'update' && e.field === 'description' && e.before.length > 20000)[0];
+  assert.ok(upd, '2回目の編集の行が前後とも全文を持つ');
+  assert.ok(upd.before.length > 20000 && upd.after.length > 20000, '前後の全文が入っている（これは現状の仕様）');
+  // 200 件ぶん（実 API を200回呼ぶと遅いので、同じ形の行を直接並べる）。
+  const rows = [S.HISTORY_HEADER];
+  for (let i = 0; i < 200; i++) {
+    const q = (s) => '"' + s.replace(/"/g, '""') + '"';
+    rows.push(['CHG-f' + i.toString(16).padStart(7, '0'), '2026-02-' + String(1 + (i % 28)).padStart(2, '0') + ' 10:' + String(i % 60).padStart(2, '0') + ':00', 'a@example.com', S.pid(1), 'update', 'description', q(desc('v' + i)), q(desc('v' + (i + 1)))].join(','));
+  }
+  const files2 = S.standardFiles(5, null);
+  files2['change_log.csv'] = rows.join('\n') + '\n';
+  const c2 = S.createCtx(files2);
+  const res = c2.ctx.apiGetHistory(S.pid(1));
+  assert.equal(res.ok, true);
+  const bytes = S.payloadBytes(res);
+  assert.ok(bytes < 2e6, '履歴の応答 ' + (bytes / 1e6).toFixed(1) + ' MB（UTF-8、' + res.entries.length + ' 件）');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-P4 (medium): 履歴パネルの DOM が、描く行数の予算なしに 20万ノードになる
+// ---------------------------------------------------------------------------
+// kanban.html の HISTORY_DIFF_BUDGET（LCS の表 200万セル）は CPU だけを縛る。予算を使い切った後は、
+// 前・後を丸ごと del/add の行として出す（1件 = 前の行数 + 後の行数 の <div>）。500行の説明を200回直した履歴は
+// 200 × 1,000 行 = 約20万の <div> になり、実ブラウザでは数秒の固まりとスクロールの重さになる。
+// 期待: 1回の描画で作る DOM は一定の上限（ここでは 50,000 ノード）で頭打ちになる（折りたたむ・省略する）。
+test('BUG-P4. 履歴 200 件 × 500 行の説明で、履歴パネルの DOM ノードが 20 万になる', () => {
+  const cols = [{ status: 'New', cards: [{ id: 'PBI-001', title: 'A', updated_at: 'T1' }] },
+    { status: 'Ready', cards: [] }, { status: 'In Progress', cards: [] }, { status: 'Review', cards: [] }, { status: 'Done', cards: [] }];
+  const h = createHarness(cols);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: { columns: cols }, summary: { byStatus: [], total: { count: 1, points: 0 } }, comments: {}, sprintChoices: [] });
+  h.openCard('PBI-001');
+  h.historyToggle('panel-history');
+  const entries = [];
+  for (let i = 0; i < 200; i++) {
+    const a = []; const b = [];
+    for (let k = 0; k < 500; k++) { a.push('行' + k + ' v' + i); b.push('行' + k + ' v' + (i + 1)); }
+    entries.push({ at: '2026-01-01 00:' + String(Math.floor(i / 60)).padStart(2, '0') + ':' + String(i % 60).padStart(2, '0'),
+      actor: 'a@example.com', action: 'update', field: 'description', before: a.join('\n'), after: b.join('\n') });
+  }
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, entries: entries });
+  let nodes = 0;
+  (function walk(e) { nodes++; (e.children || []).forEach(walk); })(h.sandbox.document.getElementById('panel-history'));
+  assert.ok(nodes <= 50000, '履歴パネルの DOM ノード ' + nodes);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-P5 (low): 本体の CSV を1回の呼び出しで3回（盤面は2回）全文解釈する
+// ---------------------------------------------------------------------------
+// assertHeaderMatches は見出し行だけが要るのに parseCsv(text) で全文を解釈し、さらに
+// findOverlongCsvRow（書き込み）と csvToObjects が同じ文字列をもう一度ずつ解釈する。
+// 履歴の追記は「見出し行だけを検査」と書いてあり同じ工夫が本体では抜けている。
+// 期待: 1回の呼び出しで各ファイルの解釈は 1.1 倍以内（見出しは先頭1行だけ解釈する）。
+test('BUG-P5a. 盤面の読み取りが本体を2回・書き込みが3回 全文解釈する', () => {
+  const files = S.standardFiles(2000, null);
+  const backlog = files['product_backlog.csv'].length;
+  const c = S.createCtx(files);
+  c.resetStats();
+  assert.equal(c.ctx.apiGetView('board').ok, true);
+  const view = c.stats.parsedChars;
+  c.resetStats();
+  assert.equal(c.ctx.apiUpdateStatus(S.pid(1), 'Done', S.T0).ok, true);
+  const write = c.stats.parsedChars;
+  assert.ok(view <= 1.1 * backlog && write <= 1.1 * backlog,
+    '本体 ' + backlog + ' 文字に対し、盤面で ' + view + '（' + (view / backlog).toFixed(1) + ' 倍）、書き込みで ' + write + '（' + (write / backlog).toFixed(1) + ' 倍）解釈した');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-P6 (low, 作為的): diffRows が同じ ID の行の数 k に 2乗
+// ---------------------------------------------------------------------------
+// 同じ ID の行が k 本ある（ローカルで ID が重なった、雛形の複製など）と、1巡目・2巡目が id ごとの候補を毎回先頭から
+// 走り直す。k = 2,000 で全行が変わると約2秒。現実の k は 2〜3 なので影響は小さい。
+test('BUG-P6. diffRows: 同じ ID が 2,000 行あって全行が変わると 2乗（行数2倍で 4倍以上）', () => {
+  const mk = (n, title) => Array.from({ length: n }, () => ({ id: 'PBI-001', title: title, description: '', acceptance_criteria: '', priority: '', size: '', status: 'New', sprint: '' }));
+  const time = (n) => S.bestOf(() => history.diffRows(mk(n, 'a'), mk(n, 'b'), S.BACKLOG_FIELDS, []), 3);
+  const t1 = Math.max(time(500), 1);
+  const t2 = time(1000);
+  const t3 = time(2000);
+  assert.ok(t3 / t2 < 3 && t2 / t1 < 3, '行数 500 → 1000 → 2000 で ' + t1.toFixed(0) + 'ms → ' + t2.toFixed(0) + 'ms → ' + t3.toFixed(0) + 'ms（線形なら比は約2）');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-P7 (low): 障害物のビューが 未解決 × 解決済 に2乗
+// ---------------------------------------------------------------------------
+// openImpedimentsShown は未解決の1行ごとに done.some(...)、impDuplicateOpenRows_ は1行ごとに resolved.filter(...)、
+// build...View は shown.forEach で dups.indexOf(r)。未解決 1,000 × 解決済 1,000 で約 0.1 秒、4,000 × 4,000 で約 2.8 秒、
+// 未解決 200 × 解決済 20,000 で約 0.85 秒（Node。GAS ではデータの読み取りが加わる）。解決済は増える一方。
+// 現実の件数（解決済 数百〜数千）では小さいので low。
+// 期待: ID をキーにした索引で、未解決と解決済の件数に線形。
+test('BUG-P7. buildImpedimentView: 未解決・解決済が同数 n のとき n を2倍にすると 4倍近い', () => {
+  const fields = ['id', 'title', 'description', 'reported_by', 'reported_at', 'status', 'resolved_at', 'resolution', 'sprint'];
+  const mk = (n, tag) => Array.from({ length: n }, (_, i) => {
+    const o = {}; fields.forEach((f) => { o[f] = 'x'; }); o.id = 'IMP-' + (tag === 'o' ? '1' : '5') + String(i).padStart(6, '0'); return o;
+  });
+  const time = (n) => { const a = mk(n, 'o'); const b = mk(n, 'r'); return S.bestOf(() => impView.buildImpedimentView(a, b), 3); };
+  const t1 = Math.max(time(500), 1);
+  const t2 = time(1000);
+  const t3 = time(2000);
+  assert.ok(t3 / t2 < 3 && t2 / t1 < 3, '500 → 1000 → 2000 件で ' + t1.toFixed(0) + 'ms → ' + t2.toFixed(0) + 'ms → ' + t3.toFixed(0) + 'ms（線形なら比は約2）');
+});
