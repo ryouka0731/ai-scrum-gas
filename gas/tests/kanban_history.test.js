@@ -168,7 +168,7 @@ test('8a. PBI の保存の応答の historyWarning が全体メッセージに�
   h.setValue('f-title', 'A2');
   h.click('panel-save');
   latest(h).handlers.success({ ok: true, board: h.boardOf(INITIAL), historyWarning: WARN });
-  assert.equal(h.textOf('message'), WARN);
+  assert.equal(h.textOf('message'), 'PBI-001 を保存しました。 ' + WARN, '保存の文言が消えた');
   assert.ok(h.classOf('message').indexOf('error') !== -1);
 });
 
@@ -176,17 +176,31 @@ test('8b. ドラッグ・削除・削除の取り消しの historyWarning も全
   const h = ready();
   h.drag('PBI-002', 'Ready');
   latest(h).handlers.success({ ok: true, board: h.boardOf(INITIAL), historyWarning: WARN });
-  assert.equal(h.textOf('message'), WARN);
+  assert.equal(h.textOf('message'), 'PBI-002 を Ready に移しました。 ' + WARN, '移した旨の文言が消えた');
 
   h.openCard('PBI-001');
   h.click('panel-delete');
   const removed = { id: 'PBI-001', title: 'A' };
   latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), removed: removed,
     historyWarning: WARN + '（削除）' });
+  // 削除の成功は通知で伝える。前の操作の文言（ドラッグ）に足さない。
   assert.equal(h.textOf('message'), WARN + '（削除）');
+  assert.equal(h.textOf('toast-text'), 'PBI-001「A」を削除しました。', '削除の通知が消えた');
   h.click('toast-undo');
   latest(h).handlers.success({ ok: true, board: h.boardOf(INITIAL), historyWarning: WARN + '（戻す）' });
-  assert.equal(h.textOf('message'), WARN + '（戻す）');
+  assert.equal(h.textOf('message'), 'PBI-001 を戻しました。 ' + WARN + '（戻す）');
+});
+
+test('8g. 成功の文言を出さない応答（削除は通知で伝える）では、前の操作の古い文言に警告を足さない', () => {
+  const h = ready();
+  h.drag('PBI-002', 'Ready');
+  latest(h).handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  assert.equal(h.textOf('message'), 'PBI-002 を Ready に移しました。');
+  h.openCard('PBI-001');
+  h.click('panel-delete');
+  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), removed: { id: 'PBI-001', title: 'A' },
+    historyWarning: WARN });
+  assert.equal(h.textOf('message'), WARN, '前の操作の文言に足した');
 });
 
 // --- 障害物 -----------------------------------------------------------------
@@ -214,7 +228,7 @@ test('8c. 障害物の保存の historyWarning が全体メッセージに出る
   h.setValue('i-title', '新しい題');
   h.click('imp-panel-save');
   latest(h).handlers.success(impResponse([Object.assign({}, ROW, { title: '新しい題' })], { historyWarning: WARN }));
-  assert.equal(h.textOf('message'), WARN);
+  assert.equal(h.textOf('message'), 'IMP-002 を保存しました。 ' + WARN, '保存の文言が消えた');
   assert.ok(h.classOf('message').indexOf('error') !== -1);
 });
 
@@ -227,6 +241,20 @@ test('8d. 解決が途中で止まった応答の historyWarning は、止まっ
   latest(h).handlers.success(impResponse([], { ok: false, reason: 'partial', message: '途中で止まりました。',
     historyWarning: WARN }));
   assert.equal(h.textOf('message'), '途中で止まりました。 ' + WARN);
+});
+
+test('8f. 解決の取り消しの historyWarning も、戻した旨の文言を残して足す', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', '直した');
+  h.click('imp-panel-resolve');
+  const resolvedRow = Object.assign({}, ROW, { status: 'Resolved', resolved_at: '2026-10-06', resolution: '直した' });
+  latest(h).handlers.success(impResponse([], { moved: ROW, resolvedRow: resolvedRow }));
+  h.click('toast-undo');
+  latest(h).handlers.success(impResponse([ROW], { historyWarning: WARN }));
+  assert.equal(h.textOf('message'), 'IMP-002 を未解決に戻しました。 ' + WARN);
+  assert.ok(h.classOf('message').indexOf('error') !== -1);
 });
 
 test('8e. コメント追加の historyWarning が全体メッセージに出る', () => {
