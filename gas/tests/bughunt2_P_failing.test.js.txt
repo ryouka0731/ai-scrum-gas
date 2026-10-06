@@ -9,7 +9,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const S = require('./bughunt2_P_support.js');
 const { createHarness } = require('./kanban_harness.js');
-const csvPure = require('../pure_csv.js');
 const history = require('../pure_history.js');
 const impView = require('../pure_view_impediment.js');
 
@@ -36,41 +35,6 @@ test('BUG-P2b. コメントを1件送るたびの応答に、全コメントが�
   assert.equal(r.ok, true);
   const bytes = S.payloadBytes(r);
   assert.ok(bytes < 200000, '書き込みの応答が ' + bytes + ' バイト（送った1件は約 300 バイト）');
-});
-
-// ---------------------------------------------------------------------------
-// BUG-P3 (medium): 変更履歴の before / after に長さの上限が無く、履歴の応答が 10MB 超になりうる
-// ---------------------------------------------------------------------------
-// PBI の説明・受入基準には長さの検査が無い（コメントだけ 2000 字）。編集のたびに、変更前・変更後の「全文」が
-// change_log.csv の1行ずつに入る。約2.7万字（約400行）の説明を200回直すと、apiGetHistory の応答は 200件 × 約5.5万字 = 約 11M 字（UTF-8 で約 31MB）。
-// 画面は 200 件ぶんの差分を描き（BUG-P4）、GAS の応答の大きさの上限（仮定: 数十 MB）にも近づく。
-// 期待: 履歴の応答は、1件の値の長さに上限を持つ（切り詰めて「省略」と示す）か、全体で 2MB 以内。
-test('BUG-P3. 約2.7万字の説明を編集した履歴 200 件の応答が 31MB（UTF-8）になる（前後の全文を持つ）', () => {
-  // まず本物の API で、1回の編集が「前と後の全文」を1行ずつ残すことを確かめる。
-  const desc = (tag) => Array.from({ length: 400 }, (_, i) => '行' + i + ' ' + tag + ' ' + 'あ'.repeat(60)).join('\n');
-  const files = S.standardFiles(5, null);
-  const c = S.createCtx(files);
-  const r1 = c.ctx.apiUpdatePbi(S.pid(1), { title: 'タイトル 1', description: desc('v1') }, csvPure.csvToObjects(files['product_backlog.csv'])[0].updated_at);
-  assert.equal(r1.ok, true, JSON.stringify(r1).slice(0, 200));
-  const r2 = c.ctx.apiUpdatePbi(S.pid(1), { title: 'タイトル 1', description: desc('v2') }, csvPure.csvToObjects(files['product_backlog.csv'])[0].updated_at);
-  assert.equal(r2.ok, true);
-  const h = c.ctx.apiGetHistory(S.pid(1));
-  const upd = h.entries.filter((e) => e.action === 'update' && e.field === 'description' && e.before.length > 20000)[0];
-  assert.ok(upd, '2回目の編集の行が前後とも全文を持つ');
-  assert.ok(upd.before.length > 20000 && upd.after.length > 20000, '前後の全文が入っている（これは現状の仕様）');
-  // 200 件ぶん（実 API を200回呼ぶと遅いので、同じ形の行を直接並べる）。
-  const rows = [S.HISTORY_HEADER];
-  for (let i = 0; i < 200; i++) {
-    const q = (s) => '"' + s.replace(/"/g, '""') + '"';
-    rows.push(['CHG-f' + i.toString(16).padStart(7, '0'), '2026-02-' + String(1 + (i % 28)).padStart(2, '0') + ' 10:' + String(i % 60).padStart(2, '0') + ':00', 'a@example.com', S.pid(1), 'update', 'description', q(desc('v' + i)), q(desc('v' + (i + 1)))].join(','));
-  }
-  const files2 = S.standardFiles(5, null);
-  files2['change_log.csv'] = rows.join('\n') + '\n';
-  const c2 = S.createCtx(files2);
-  const res = c2.ctx.apiGetHistory(S.pid(1));
-  assert.equal(res.ok, true);
-  const bytes = S.payloadBytes(res);
-  assert.ok(bytes < 2e6, '履歴の応答 ' + (bytes / 1e6).toFixed(1) + ' MB（UTF-8、' + res.entries.length + ' 件）');
 });
 
 // ---------------------------------------------------------------------------

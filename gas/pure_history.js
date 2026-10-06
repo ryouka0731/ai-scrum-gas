@@ -11,8 +11,35 @@ const HISTORY_ACTIONS = ['create', 'update', 'delete', 'restore', 'resolve', 'un
 const HISTORY_TARGET_RE = /^(PBI|IMP)-\d+$/;
 const HISTORY_LIMIT = 200;
 const LINE_DIFF_MAX = 500;
+// 履歴の before / after に持つ値1つの上限（文字数）。PBI の説明・受入基準には長さの上限が無く、
+// 編集のたびに前後の全文を残すと change_log.csv と履歴の応答が際限なく大きくなる。
+const HISTORY_VALUE_MAX = 4000;
+const HISTORY_CAPPED_RE = /…（以下省略・全 \d+ 字）$/;
 
 function histText_(v) { return v === undefined || v === null ? '' : String(v); }
+
+/**
+ * 履歴に持つ値を HISTORY_VALUE_MAX 字（コードポイント）までに切り詰め、「…（以下省略・全 N 字）」を付ける。
+ * 上限以下はそのまま。切り詰め済みの値（読み出しで再び通したとき）は変えない。サロゲートペアは割らない。
+ */
+function capHistoryValue(v) {
+  const t = histText_(v);
+  if (t.length <= HISTORY_VALUE_MAX) return t;
+  if (HISTORY_CAPPED_RE.test(t) && t.length <= HISTORY_VALUE_MAX * 2 + 40) return t;
+  let count = 0;
+  let cut = -1;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < t.length) {
+      const d = t.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+    }
+    count++;
+    if (count === HISTORY_VALUE_MAX) cut = i + 1;
+  }
+  if (count <= HISTORY_VALUE_MAX) return t;
+  return t.slice(0, cut) + '…（以下省略・全 ' + count + ' 字）';
+}
 
 /** 行配列を id（trim）ごとの行の並びにする。id が空の行は無視する。 */
 function histGroup_(rows) {
@@ -94,8 +121,8 @@ function historyRows(events, meta) {
       target_id: histText_(e.target_id),
       action: histText_(e.action),
       field: histText_(e.field),
-      before: histText_(e.before),
-      after: histText_(e.after),
+      before: capHistoryValue(e.before),
+      after: capHistoryValue(e.after),
     };
   });
 }
@@ -116,7 +143,8 @@ function historyFor(rows, targetId, limit) {
   return hits.slice(0, limit === undefined ? HISTORY_LIMIT : limit).map(function (h) {
     return {
       at: histText_(h.row.at), actor: histText_(h.row.actor), action: histText_(h.row.action),
-      field: histText_(h.row.field), before: histText_(h.row.before), after: histText_(h.row.after),
+      // 上限より前に書かれた全文の行も、応答では同じく切り詰める。
+      field: histText_(h.row.field), before: capHistoryValue(h.row.before), after: capHistoryValue(h.row.after),
     };
   });
 }
@@ -174,6 +202,6 @@ function lineDiff(before, after) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { HISTORY_FIELDS, HISTORY_ACTIONS, HISTORY_TARGET_RE, HISTORY_LIMIT, LINE_DIFF_MAX,
-    diffRows, historyRows, historyFor, groupHistory, lineDiff };
+  module.exports = { HISTORY_FIELDS, HISTORY_ACTIONS, HISTORY_TARGET_RE, HISTORY_LIMIT, LINE_DIFF_MAX, HISTORY_VALUE_MAX,
+    capHistoryValue, diffRows, historyRows, historyFor, groupHistory, lineDiff };
 }

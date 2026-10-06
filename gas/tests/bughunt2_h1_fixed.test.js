@@ -522,3 +522,66 @@ test('BUG-P1. 作成と削除の取り消しは、今までどおり完了バッ
   assert.ok((c2.stats.readChars['product_backlog_done.csv'] || 0) > 0, '復元は完了バックログを見る');
   assert.equal(c2.props.LAST_PBI_ID, 'PBI-00050', '復元で読んだ完了バックログの最大まで記録を進める');
 });
+
+// --- P3: 変更履歴の before / after は1つ 4000 字まで。長い値は切り詰めて「…（以下省略・全 N 字）」を付ける ----------
+// 裁定により、上限は「全体の大きさ」ではなく「値1つの長さ」で持つ（元の再現の 2MB 以内は、全角だけの値では
+// 200 件 × 2 × 4000 字 × 3 バイト ≒ 4.8MB になりうるため、値の長さの上限で確かめる）。
+
+const HIST = require('../pure_history.js');
+const capSuffix = (n) => '…（以下省略・全 ' + n + ' 字）';
+const longDesc = (tag) => Array.from({ length: 400 }, (_, i) => '行' + i + ' ' + tag + ' ' + 'あ'.repeat(60)).join('\n');
+
+test('BUG-P3. 編集の履歴は、前後の値を 4000 字で切り詰めて保存する（全文を持たない）', () => {
+  const files = P.standardFiles(5, null);
+  const c = P.createCtx(files);
+  const at = () => csvPure.csvToObjects(files['product_backlog.csv'])[0].updated_at;
+  const v1 = longDesc('v1');
+  const v2 = longDesc('v2');
+  assert.equal(c.ctx.apiUpdatePbi(P.pid(1), { title: 'タイトル 1', description: v1 }, at()).ok, true);
+  assert.equal(c.ctx.apiUpdatePbi(P.pid(1), { title: 'タイトル 1', description: v2 }, at()).ok, true);
+  assert.ok(csvPure.csvToObjects(files['product_backlog.csv'])[0].description === v2, '本体は全文のまま');
+  const stored = csvPure.csvToObjects(files['change_log.csv']).filter((r) => r.field === 'description');
+  assert.equal(stored.length, 2);
+  const last = stored[1];
+  assert.equal(last.before, v1.slice(0, 4000) + capSuffix(v1.length));
+  assert.equal(last.after, v2.slice(0, 4000) + capSuffix(v2.length));
+  assert.equal(stored[0].before, '説明, 1\n2行目', '短い値はそのまま');
+  const h = c.ctx.apiGetHistory(P.pid(1));
+  // 同じ秒の2件の並びは問わない（2回目の編集の行を前の値で探す）。
+  const upd = h.entries.filter((e) => e.field === 'description' && e.before === last.before)[0];
+  assert.ok(upd, '読み出しで二重に切り詰めない（before）');
+  assert.equal(upd.after, last.after, '読み出しで二重に切り詰めない（after）');
+});
+
+test('BUG-P3. 既に全文を持つ古い履歴 200 件も、応答では値1つ 4000 字に切り詰める', () => {
+  const rows = [P.HISTORY_HEADER];
+  const q = (s) => '"' + s.replace(/"/g, '""') + '"';
+  for (let i = 0; i < 200; i++) {
+    rows.push(['CHG-f' + i.toString(16).padStart(7, '0'), '2026-02-' + String(1 + (i % 28)).padStart(2, '0') + ' 10:' + String(i % 60).padStart(2, '0') + ':00', 'a@example.com', P.pid(1), 'update', 'description', q(longDesc('v' + i)), q(longDesc('v' + (i + 1)))].join(','));
+  }
+  const files = P.standardFiles(5, null);
+  files['change_log.csv'] = rows.join('\n') + '\n';
+  const c = P.createCtx(files);
+  const res = c.ctx.apiGetHistory(P.pid(1));
+  assert.equal(res.ok, true);
+  assert.equal(res.entries.length, 200);
+  const max = 4000 + capSuffix(longDesc('v1').length).length;
+  res.entries.forEach((e) => {
+    assert.ok(e.before.length <= max && e.after.length <= max, e.before.length + ' / ' + e.after.length);
+    assert.ok(e.after.endsWith(capSuffix(longDesc('v1').length)) || e.after.endsWith(capSuffix(longDesc('v10').length)) || e.after.endsWith(capSuffix(longDesc('v100').length)));
+  });
+  assert.ok(JSON.stringify(res).length < 200 * 2 * max + 100000, '応答 ' + JSON.stringify(res).length + ' 字');
+});
+
+test('BUG-P3. 切り詰め（pure）: 4000 字ちょうどはそのまま。サロゲートペアを割らない。字数は文字（コードポイント）で数える', () => {
+  assert.equal(HIST.capHistoryValue('a'.repeat(4000)), 'a'.repeat(4000));
+  assert.equal(HIST.capHistoryValue('a'.repeat(4001)), 'a'.repeat(4000) + capSuffix(4001));
+  const emoji = 'a'.repeat(3999) + '😀' + 'b';   // 4001 文字（コードポイント）
+  assert.equal(HIST.capHistoryValue(emoji), 'a'.repeat(3999) + '😀' + capSuffix(4001));
+  const capped = HIST.capHistoryValue('x'.repeat(10000));
+  assert.equal(HIST.capHistoryValue(capped), capped, '切り詰め済みの値は変えない');
+  assert.equal(HIST.capHistoryValue(null), '');
+  const rows = HIST.historyRows([{ target_id: 'PBI-1', action: 'update', field: 'description', before: 'y'.repeat(5000), after: 'z' }], { at: 't', actor: 'a', newId: () => 'CHG-1' });
+  assert.equal(rows[0].before, 'y'.repeat(4000) + capSuffix(5000));
+  assert.equal(rows[0].after, 'z');
+});
