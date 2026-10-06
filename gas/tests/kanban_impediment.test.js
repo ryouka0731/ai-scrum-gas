@@ -509,7 +509,9 @@ test('解決策の入力中だけ「やめる」が出る。押すと欄が戻�
   assert.equal(h.hiddenOf('imp-panel-cancel-resolve'), false);
   assert.equal(h.labelOf('imp-panel-cancel-resolve'), 'やめる');
   h.setValue('i-resolution', '再起動した');
+  const before = h.focusCountOf('imp-panel-resolve');
   h.click('imp-panel-cancel-resolve');
+  assert.equal(h.focusCountOf('imp-panel-resolve'), before + 1, '隠れた「やめる」の代わりに「解決する」へフォーカスが移らない');
   assert.equal(h.hiddenOf('imp-panel-cancel-resolve'), true);
   assert.equal(h.hiddenOf('i-resolution-field'), true);
   assert.equal(h.labelOf('imp-panel-resolve'), '解決する');
@@ -542,4 +544,22 @@ test('選択肢に無いスプリントの行は、PBI パネルと同じ「（�
   assert.equal(h.valueOf('i-sprint'), 'sprint077');
   assert.deepEqual(h.optionsOf('i-sprint').map((o) => o.label),
     ['（未割り当て）', 'sprint001', 'sprint077（選択肢に無い値）']);
+});
+
+test('未解決の行は Enter と Space で開く。解決済の行は開かない', () => {
+  const done = Object.assign({}, ROW, { id: 'IMP-001', title: '片付いた', status: 'Resolved' });
+  ['Enter', ' '].forEach((key) => {
+    const h = onImpediment();
+    h.pressImpRowKey('IMP-002', key);
+    assert.equal(h.hiddenOf('imp-panel'), false, JSON.stringify(key) + ' で開かない');
+    assert.equal(h.textOf('imp-panel-title'), 'IMP-002');
+  });
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL),
+    summary: { byStatus: [], total: { count: 0, points: 0 } }, sprintChoices: CHOICES });
+  h.clickTab('障害物');
+  latest(h).handlers.success(impResponse([], [done]));
+  assert.throws(() => h.pressImpRowKey('IMP-001', 'Enter'), /0 件/, '解決済の行は押せる行ではない');
+  assert.equal(h.hiddenOf('imp-panel'), true);
 });

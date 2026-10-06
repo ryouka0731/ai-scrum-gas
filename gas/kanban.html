@@ -1598,7 +1598,7 @@ function applyImpResponse(res, issued, commentSeen) {
   // commentWriteIssued と違う）なら、この写しはそれを含まないかもしれない。
   var takeComments = !!res.comments && commentSeen === commentWriteIssued;
   if (takeComments) {
-    commentsByTarget = res.comments;
+    commentsByTarget = withoutDeletedComments(res.comments);
     lastAppliedComment = commentWriteIssued;
   }
   if (activeView === 'impediment') {
@@ -1942,10 +1942,24 @@ function refreshOpenComments() {
  * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
  * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
  */
+/**
+ * 受け入れる写しから、この画面で削除に成功したコメントを外す（サーバが削除より先に新しい
+ * 要求を処理していると、発行番号の大きい写しにも消したものが残る）。戻す成功で集合から外れる。
+ */
+function withoutDeletedComments(comments) {
+  if (!comments || Object.keys(commentDeletedIds).length === 0) return comments;
+  var out = {};
+  Object.keys(comments).forEach(function (k) {
+    var list = comments[k];
+    out[k] = Array.isArray(list) ? list.filter(function (c) { return !commentDeletedIds[c.id]; }) : list;
+  });
+  return out;
+}
+
 function applyComments(comments, issued) {
   if (!comments || issued <= lastAppliedComment) return false;
   lastAppliedComment = issued;
-  commentsByTarget = comments;
+  commentsByTarget = withoutDeletedComments(comments);
   redrawComments();
   return true;
 }
@@ -2616,7 +2630,7 @@ function loadView() {
         // ビューは描くが、コメントは今の一覧（書き込みの応答で入れたもの）を使い続ける。
         var takeComments = !!res.comments && commentWritesDone === seenCommentWrites;
         if (takeComments) {
-          commentsByTarget = res.comments;
+          commentsByTarget = withoutDeletedComments(res.comments);
           lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
         }
         if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
@@ -2901,7 +2915,10 @@ fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
 fillButton(document.getElementById('imp-panel-save'), 'save', '保存');
 fillButton(document.getElementById('imp-panel-cancel-resolve'), 'close', 'やめる');
-document.getElementById('imp-panel-cancel-resolve').addEventListener('click', function () { setImpResolving(false); });
+document.getElementById('imp-panel-cancel-resolve').addEventListener('click', function () {
+  setImpResolving(false);
+  document.getElementById('imp-panel-resolve').focus();   // 押したボタンが隠れるので、フォーカスを残す
+});
 document.getElementById('imp-panel-close').appendChild(makeIcon('close'));
 document.getElementById('imp-panel-close').addEventListener('click', closeImpPanel);
 document.getElementById('imp-panel-save').addEventListener('click', saveImpPanel);

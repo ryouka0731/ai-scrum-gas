@@ -569,6 +569,16 @@ function createHarness(initialColumns) {
       (document.listeners.keydown || []).slice().forEach(function (fn) { fn({ key: key }); });
     },
 
+    /** その要素に focus() が呼ばれた回数。 */
+    focusCountOf: function (id) { return el(id).focusCount; },
+
+    /** 障害物の行（data-id）の keydown を起こす。 */
+    pressImpRowKey: function (id, key) {
+      const hit = collect(byId['table-view'], function (e) { return e.tagName === 'tr' && e.dataset.id === id; });
+      if (hit.length !== 1) throw new Error('行 ' + id + ' が ' + hit.length + ' 件見つかりました');
+      fireVisible(hit[0], 'keydown', { key: key }, '行 ' + id);
+    },
+
     setValue: function (fieldId, value) { el(fieldId).value = value; },
     valueOf: function (fieldId) { return el(fieldId).value; },
     hiddenOf: function (id) { return !!el(id).hidden; },

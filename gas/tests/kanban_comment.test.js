@@ -478,3 +478,20 @@ test('追加(#1)の応答が遅れ、その間に新しい写しで現れ、利�
   assert.deepEqual(ids(h, 'panel-comments'), [], '消したコメントが遅れた追加の応答で戻った');
   assert.equal(h.cardCommentCountOf('PBI-002'), null, '件数にも戻っている');
 });
+
+test('削除に成功したコメントは、後から発行した応答の写しに残っていても出ない。戻すと出る', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.clickCommentDelete('panel-comments', 'CMT-00000002');
+  callOf(h, 'apiDeleteComment').handlers.success({ ok: true, removed: C2, comments: { 'PBI-001': [C1] } });
+  // サーバが削除より先に処理した新しい要求の写し（C2 が残っている）。
+  h.setCommentInput('panel-comments', '追加');
+  h.clickCommentSend('panel-comments');
+  const added = cmt('CMT-00000003', 'PBI-001', 'me@example.com', '2026-10-06 11:00:00', '追加', true);
+  callOf(h, 'apiAddComment').handlers.success({ ok: true, comment: added,
+    comments: { 'PBI-001': [C1, C2, added] } });
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000001', 'CMT-00000003'], '消したものが写しで戻った');
+  h.click('toast-undo');
+  callOf(h, 'apiRestoreComment').handlers.success({ ok: true, comments: { 'PBI-001': [C1, C2, added] } });
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000001', 'CMT-00000002', 'CMT-00000003']);
+});
