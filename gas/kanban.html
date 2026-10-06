@@ -765,8 +765,24 @@ function render(b) {
   if (!b) return;
   board = b;
   var root = document.getElementById('board');
+  // カードは毎回作り直す。焦点のあった要素が消えると焦点は body へ落ち、キーボードの人は
+  // 応答のたびに盤面の先頭から辿り直すことになる。焦点がカード（の中）にあれば、同じ ID のカードへ戻す。
+  var focusId = focusedCardId(root);
   clearHost(root);
   b.columns.forEach(function (col) { root.appendChild(renderColumn(col)); });
+  if (focusId === null) return;
+  var cards = root.querySelectorAll('.card');
+  for (var i = 0; i < cards.length; i++) {
+    if (cards[i].dataset.id === focusId) { cards[i].focus(); return; }
+  }
+}
+
+/** 焦点が root の中のカード（またはその中の要素）にあれば、そのカードの ID。無ければ null。 */
+function focusedCardId(root) {
+  for (var n = document.activeElement; n && n !== root; n = n.parentNode) {
+    if (n.classList && n.classList.contains('card') && n.dataset && n.dataset.id) return n.dataset.id;
+  }
+  return null;
 }
 
 function renderColumn(col) {

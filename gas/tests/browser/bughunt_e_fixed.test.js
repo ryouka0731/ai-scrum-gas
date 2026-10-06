@@ -151,6 +151,19 @@ describe('bughunt E: 直した実バグ（G3）', { skip: SKIP }, () => {
     assert.equal(await session.evaluate('return document.activeElement.dataset ? document.activeElement.dataset.id : "";'), id);
   });
 
+  test('M3: カードに焦点がある間に盤面を描き直しても（最新にする）、同じ ID のカードに焦点が残る', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001' }), row({ id: 'PBI-002', status: 'Ready' })], comments: [], impOpen: [imp()], impResolved: [] });
+    await openPage(html, 1024, 'light');
+    await session.evaluate('var c=document.querySelectorAll("#board .card")[1]; c.focus(); return 1;');
+    const before = await session.evaluate('return document.activeElement.dataset.id;');
+    await session.evaluate('var c=document.activeElement; window.__oldCard=c; document.getElementById("reload").click(); return 1;');
+    await sleep(200);
+    const r = await session.evaluate('var a=document.activeElement; return {id: a.dataset ? a.dataset.id || "" : "", rebuilt: a !== window.__oldCard, isBody: a === document.body};');
+    assert.equal(r.rebuilt, true, '盤面が描き直されていない（検査の前提）');
+    assert.equal(r.isBody, false, '描き直しで焦点が body へ落ちた');
+    assert.equal(r.id, before);
+  });
+
   test('BUG-E3: コメントを消すと、次のコメントの削除ボタンへ焦点が移る', async () => {
     const html = buildPage({ rows: [row({ id: 'PBI-001' })], me: 'me', impOpen: [imp()], impResolved: [],
       comments: [{ id: 'CMT-00000001', target_id: 'PBI-001', author: 'me', created_at: '2026-09-10 10:00:00', body: 'a' },

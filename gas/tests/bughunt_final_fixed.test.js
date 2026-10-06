@@ -190,3 +190,37 @@ test('[乱択] 障害物（サーバの処理順も乱す）: 種 6119 で静止
       'toastAction', 'toastAction', 'timers', 'pending', 'pending', 'commentAdd', 'commentDelete', 'reload', 'escape'] });
   assert.deepEqual(r.error ? [r.error.stack] : r.violations, []);
 });
+
+// --- M3: 盤面を描き直しても、カードの焦点を失わない ---
+
+function cardEl(h, id) {
+  const out = [];
+  (function walk(n) { (n.children || []).forEach(function (c) { if (c.classList && c.classList.contains('card') && c.dataset.id === id) out.push(c); walk(c); }); })(h.sandbox.document.getElementById('board'));
+  return out[0] || null;
+}
+const focusedId = (h) => { const a = h.sandbox.document.activeElement; return a && a.dataset ? a.dataset.id || null : null; };
+
+test('M3: カードに焦点がある間に盤面を描き直しても、同じ ID のカードへ焦点を戻す', () => {
+  const h = boot({ New: [A, B] });
+  cardEl(h, 'PBI-002').focus();
+  h.drag('PBI-001', 'Ready');   // 描き直し（楽観的な移動）
+  assert.equal(focusedId(h), 'PBI-002', '描き直しで焦点が落ちた');
+  last(h).handlers.success({ ok: true, board: h.boardOf(cols({ New: [B], Ready: [{ ...A, updated_at: 'T2' }] })) });
+  assert.equal(focusedId(h), 'PBI-002', '応答の描き直しで焦点が落ちた');
+});
+
+test('M3: 焦点のあるカードそのものが動いても、そのカードに焦点を戻す。消えたら戻さない', () => {
+  const h = boot({ New: [A, B] });
+  cardEl(h, 'PBI-001').focus();
+  h.drag('PBI-001', 'Ready');
+  assert.equal(focusedId(h), 'PBI-001');
+  last(h).handlers.success({ ok: true, board: h.boardOf(cols({ New: [B] })) });   // 別の経路で消えていた
+  assert.equal(h.sandbox.document.activeElement, null);
+});
+
+test('M3: 焦点が盤面の外にあれば、描き直しで焦点を奪わない', () => {
+  const h = boot({ New: [A, B] });
+  h.sandbox.document.getElementById('reload').focus();
+  h.drag('PBI-001', 'Ready');
+  assert.equal(h.sandbox.document.activeElement, h.sandbox.document.getElementById('reload'));
+});

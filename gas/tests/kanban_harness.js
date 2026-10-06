@@ -425,7 +425,9 @@ function createHarness(initialColumns) {
       let n = activeElement;
       while (n && n.parentNode) n = n.parentNode;
       if (!n) return null;
-      const inDoc = Object.keys(byId).some(function (id) { return byId[id] === n; });
+      // 静的な要素は <body>（id を持たない）の下に繋がっている。その根に届けば文書の中。
+      const rootOf = function (e) { while (e && e.parentNode) e = e.parentNode; return e; };
+      const inDoc = Object.keys(byId).some(function (id) { return byId[id] === n || rootOf(byId[id]) === n; });
       return inDoc ? activeElement : null;
     },
     querySelectorAll: function (selector) {
