@@ -188,7 +188,9 @@ function pickOp(rnd, w, cfg, counter) {
     case 'openCard': return ['openCard', pick(ids)];
     case 'addCard': return ['addCard', pick(STATUSES)];
     case 'editTitleSave': return ['editTitleSave', 't' + counter.n];
-    case 'commentAdd': return ['commentAdd', pick(['panel-comments', 'imp-panel-comments']), 'c' + counter.n];
+    // 本文に節の状態と同じ文言を混ぜる（状態の判定が本文に惑わされないことも確かめる）
+    case 'commentAdd': return ['commentAdd', pick(['panel-comments', 'imp-panel-comments']),
+      pick(['', '', 'コメントを読み込んでいます… ', 'コメントを読み込めませんでした: ']) + 'c' + counter.n];
     case 'commentDelete': return ['commentDelete', pick(['panel-comments', 'imp-panel-comments']), Math.floor(rnd() * 4)];
     case 'historyToggle': return ['historyToggle', pick(['panel-history', 'imp-panel-history'])];
     case 'tab': return ['tab', pick(['やること', 'スプリント', '障害物'])];
@@ -210,11 +212,14 @@ function isProductError(e) {
   return !!(e && e.stack && /kanban\.html/.test(e.stack.split('\n').slice(0, 4).join('\n')));
 }
 
-/** コメント節の取得の状態: 'loading'（読み込んでいます…）/ 'failed'（読み込めませんでした）/ 'shown'。 */
+/**
+ * コメント節の取得の状態: 'loading'（読み込んでいます…）/ 'failed'（読み込めませんでした）/ 'shown'。
+ * 状態の表示（.comment-empty）だけを見る。本文に同じ文言を書いたコメントを状態と取り違えない（PR #11 cubic）。
+ */
 function commentLoadState(w, hostId) {
-  const t = W.allText(w.el(hostId));
-  if (/コメントを読み込めませんでした/.test(t)) return 'failed';
-  if (/コメントを読み込んでいます…/.test(t)) return 'loading';
+  const statuses = W.collect(w.el(hostId), function (e) { return e.classList.contains('comment-empty'); });
+  if (statuses.some(function (e) { return e.classList.contains('error'); })) return 'failed';
+  if (statuses.some(function (e) { return e.textContent === 'コメントを読み込んでいます…'; })) return 'loading';
   return 'shown';
 }
 
