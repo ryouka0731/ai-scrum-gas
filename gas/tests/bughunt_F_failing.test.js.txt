@@ -1,0 +1,89 @@
+'use strict';
+// bug hunter F: 現状の実装では失敗する（＝バグ）テスト。
+// 実行: cp gas/tests/bughunt_F_failing.test.js.txt gas/tests/bughunt_F_failing.test.js && node --test gas/tests/bughunt_F_failing.test.js; rm gas/tests/bughunt_F_failing.test.js
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const GAS_DIR = path.join(__dirname, '..');
+const md = require('../pure_markdown.js');
+const { buildRoadmapGrid } = require('../pure_grid_board.js');
+const { buildBurndownGrid } = require('../pure_grid_report.js');
+
+test('F1: バーンダウンの「- | - | -」だけの行（データ無しの日）が区切り行と誤判定されて消える', () => {
+  const text = '## バーンダウン\n| 日付 | 残タスク数 | 残ポイント |\n|---|---|---|\n| - | - | - |\n| Day 2 | 3 | 5 |\n';
+  assert.deepEqual(buildBurndownGrid(text), [['日付', '残タスク数', '残ポイント'], ['-', '-', '-'], ['Day 2', '3', '5']]);
+});
+
+test('F2: 同じセクションに表が2つあると、2つ目の表のヘッダー行がデータ行として1つ目に混ざる', () => {
+  const text = '## バーンダウン\n| 日 | 残 |\n|---|---|\n| 1 | 2 |\n\n補足\n\n| 凡例 | 意味 |\n|---|---|\n| a | b |\n';
+  const t = md.extractMarkdownTable(text, 'バーンダウン');
+  assert.deepEqual(t.rows, [['1', '2']]);
+});
+
+test('F3: CRLF のスプリントゴール本文に \\r が残る（複数行ゴールが "A\\r\\nB" になり、LF のファイルと結果が違う）', () => {
+  const lf = md.extractSection('## スプリントゴール\nA\nB\n', 'スプリントゴール');
+  const crlf = md.extractSection('## スプリントゴール\r\nA\r\nB\r\n', 'スプリントゴール');
+  assert.equal(crlf, lf);
+});
+
+test('F4: velocity に表記違いの同一スプリントが2行あると、■ は2列に出るのに帯の塗り位置は1列だけ', () => {
+  const vel = [
+    { sprint: 'Sprint 1', sprint_start: '2026-01-01', sprint_end: '2026-01-07' },
+    { sprint: 'sprint001', sprint_start: '2026-01-08', sprint_end: '2026-01-14' },
+  ];
+  const r = buildRoadmapGrid([{ id: 'PBI-001', title: 'a', sprint: 'Sprint 1' }], vel);
+  const markCells = r.grid[1].filter((c) => c === '■').length;
+  assert.equal(r.marks.length, markCells);
+});
+
+function makeFakeRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-f-'));
+  fs.mkdirSync(path.join(root, 'scripts'));
+  fs.copyFileSync(path.join(GAS_DIR, '..', 'scripts', 'publish.js'), path.join(root, 'scripts', 'publish.js'));
+  fs.mkdirSync(path.join(root, 'scrum'));
+  fs.mkdirSync(path.join(root, '.claude'));
+  return root;
+}
+function runPublish(root, dest) {
+  return spawnSync(process.execPath, [path.join(root, 'scripts', 'publish.js'), dest], { encoding: 'utf8' });
+}
+
+test('F5: .claude/ 配下の個人用ファイル・作業用 worktree（未追跡）も Drive 共有フォルダへ配布される', () => {
+  const root = makeFakeRepo();
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-f-dest-'));
+  try {
+    fs.writeFileSync(path.join(root, '.claude', 'settings.json'), '{}');
+    fs.writeFileSync(path.join(root, '.claude', 'settings.local.json'), '{"permissions":{"allow":["Bash(*)"]}}');
+    fs.mkdirSync(path.join(root, '.claude', 'worktrees', 'agent-x', 'gas'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude', 'worktrees', 'agent-x', 'gas', 'web_app.js'), 'x');
+    fs.writeFileSync(path.join(root, 'scrum', '.DS_Store'), 'junk');
+    assert.equal(runPublish(root, dest).status, 0);
+    assert.equal(fs.existsSync(path.join(dest, '.claude', 'settings.json')), true);
+    assert.equal(fs.existsSync(path.join(dest, '.claude', 'settings.local.json')), false, 'settings.local.json が配布された');
+    assert.equal(fs.existsSync(path.join(dest, '.claude', 'worktrees')), false, '.claude/worktrees が配布された');
+    assert.equal(fs.existsSync(path.join(dest, 'scrum', '.DS_Store')), false, '.DS_Store が配布された');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+});
+
+test('F6: 読み取り専用（0444）のファイルは、1回目の配布で配布先も読み取り専用になり、2回目の配布が EACCES で失敗する', () => {
+  const root = makeFakeRepo();
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-f-dest-'));
+  try {
+    const f = path.join(root, 'scrum', 'ro.md');
+    fs.writeFileSync(f, 'v1');
+    fs.chmodSync(f, 0o444);
+    assert.equal(runPublish(root, dest).status, 0);
+    const r = runPublish(root, dest);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+});
