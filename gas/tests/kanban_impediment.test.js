@@ -336,9 +336,15 @@ const ROW3 = Object.assign({}, ROW, { id: 'IMP-003', title: 'もう1件' });
 const RESOLVED_ROW3 = Object.assign({}, ROW3, { status: 'Resolved', resolution: '直した' });
 
 /** IMP-002 の解決を途中で止め、「完了する」の通知を出した状態にする（未解決には IMP-003 が残る）。 */
+// 解決が途中で止まった IMP-002。実サーバの応答と同じく、ビューの「途中で止まった操作」に載る。
+const PENDING2 = { id: 'IMP-002', open: ROW, resolved: RESOLVED_ROW };
+
 function stickyShown() {
   const h = onImpediment({ rows: [ROW, ROW3] });
-  sendResolve(h).handlers.success(partial([ROW3], [RESOLVED_ROW]));
+  const res = partial([ROW3], [RESOLVED_ROW]);
+  res.view.pending = [PENDING2];
+  res.summary.pending = 1;
+  sendResolve(h).handlers.success(res);
   return h;
 }
 
@@ -356,7 +362,8 @@ test('「完了する」の通知が出ている間に別の通知が来て、�
   h.click('imp-panel-resolve');
   h.setValue('i-resolution', '直した');
   h.click('imp-panel-resolve');
-  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3]), { moved: ROW3, resolvedRow: RESOLVED_ROW3 }));
+  // IMP-002 は途中で止まったまま（応答のビューの「途中で止まった操作」に残っている）。
+  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3], [PENDING2]), { moved: ROW3, resolvedRow: RESOLVED_ROW3 }));
   assert.ok(h.textOf('toast-text').indexOf('IMP-003') !== -1 && h.textOf('toast-text').indexOf('解決しました') !== -1, h.textOf('toast-text'));
   assert.ok(h.textTreeOf('toast-undo').indexOf('取り消す') !== -1);
   assert.ok(h.textOf('message').indexOf('もう取り消せません') === -1, '普通が sticky を上書きしたことにしない: ' + h.textOf('message'));

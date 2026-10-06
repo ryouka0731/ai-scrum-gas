@@ -9,8 +9,7 @@ const F = require('./bughunt_d_fuzzer.js');
  *
  * 呼び出しごとに「サーバで処理する時点」と「画面へ届く時点」を種から決める。サーバは本物
  * （gas/*.js を vm に載せ、Drive をインメモリに差し替えたもの）なので、応答は処理した順に
- * 矛盾の無い写しになる。ここに置くのは**今の実装で成り立つ**不変条件だけ。成り立たないもの
- * （見つけた不具合）は bughunt_d_failing.test.js.txt にある。
+ * 矛盾の無い写しになる。見つけた不具合（D-1〜D-4）は直し、その再現は bughunt_g2_fixed.test.js にある。
  */
 
 const ALL = ['drag', 'openCard', 'addCard', 'editTitleSave', 'deletePbi', 'closePanel', 'escape', 'toastAction', 'timers',
@@ -52,11 +51,18 @@ test('乱択（サーバは発行順に処理し、届く順だけ乱す）: 静
   assert.deepEqual(f, []);
 });
 
-// 通信の失敗（fail）は混ぜない。移動と削除が両方失敗すると盤面がずれる不具合があり、
-// それは bughunt_d_failing.test.js.txt の側で固定している。
-test('乱択（サーバは発行順に処理し、届く順だけ乱す。通信の失敗なし）: 静止した時点で、盤面の列とタイトルがサーバと一致する（列の中の並びは問わない）', () => {
-  const f = campaign('盤面', Object.assign({}, BASE, { fifoServer: true, strictBoard: true, fail: 0,
+test('乱択（サーバは発行順に処理し、届く順だけ乱す）: 静止した時点で、盤面の列とタイトルがサーバと一致する（列の中の並びは問わない）', () => {
+  const f = campaign('盤面', Object.assign({}, BASE, { fifoServer: true, strictBoard: true,
     ops: ['drag', 'drag', 'openCard', 'addCard', 'editTitleSave', 'editTitleSave', 'deletePbi', 'closePanel', 'toastAction', 'timers', 'reload'] }), 1, 200);
+  assert.deepEqual(f, []);
+});
+
+// サーバが後から発行した書き込みを先に処理しても、確定した自分の書き込みは画面から消えない（D-1）。
+test('乱択（サーバの処理順も届く順も乱す）: 静止した時点で、盤面・コメント・障害物の表がサーバと一致し、「完了する」の通知は止まった操作がある間だけ出る', () => {
+  const f = campaign('全操作・厳密', Object.assign({}, BASE, { ops: ALL, strictBoard: true, strictComments: true, strictImp: true, checkSticky: true }), 1, 150)
+    .concat(campaign('障害物・厳密', Object.assign({}, BASE, { startTab: '障害物', strictImp: true, strictComments: true, checkSticky: true,
+      ops: ['impOpen', 'impOpen', 'impAdd', 'impSave', 'impSave', 'impResolve', 'impResolve', 'impCancelResolve', 'impClose',
+        'toastAction', 'toastAction', 'timers', 'pending', 'pending', 'commentAdd', 'commentDelete', 'reload', 'escape'] }), 1, 150));
   assert.deepEqual(f, []);
 });
 

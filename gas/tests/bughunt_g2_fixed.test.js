@@ -228,3 +228,184 @@ test('[D-3] パネルを開いたままカードを移し、続けて削除し�
   assert.equal(statusOf(W.trueBoard(w.server), 'PBI-003'), 'In Progress');
   assert.equal(statusOf(h.screen(), 'PBI-003'), 'In Progress', '両方失敗したのに、移動先の列に出ている');
 });
+
+// --- D-1: 発行順で新しいが、サーバでは先に処理された（古い写しの）応答が、先に出した自分の書き込みを消さない ---
+
+test('[D-1] コメント: 2つの PBI へ続けて追加し、サーバが後の方を先に処理しても、先に追加したコメントは消えない', () => {
+  const w = boot();
+  const h = w.h;
+  h.openCard('PBI-001');
+  h.setCommentInput('panel-comments', 'first');
+  h.clickCommentSend('panel-comments');
+  h.openCard('PBI-002');
+  h.setCommentInput('panel-comments', 'second');
+  h.clickCommentSend('panel-comments');
+  const [a, b] = w.pendingNs();
+  w.process(b);   // サーバは後の追加を先に処理（ロックを先に取った）
+  w.process(a);
+  w.deliver(a);   // 発行順に届く
+  w.deliver(b);   // b の写しは a を含まない
+  assert.equal(W.trueComments(w.server)['PBI-001'].length, 3);
+  assert.equal(h.cardCommentCountOf('PBI-001'), 'コメント 3', '自分が追加して成功したコメントが件数から消えた');
+});
+
+test('[D-1] コメント: 追加の送信中に自分の古いコメントを消し、サーバが削除を先に処理しても、追加したコメントは一覧に残る', () => {
+  const w = boot();
+  const h = w.h;
+  h.openCard('PBI-001');
+  h.setCommentInput('panel-comments', 'new one');
+  h.clickCommentSend('panel-comments');
+  h.clickCommentDelete('panel-comments', 'CMT-0000000b');   // 送信中でも削除ボタンは押せる
+  const [add, del] = w.pendingNs();
+  w.process(del);
+  w.process(add);
+  w.deliver(add);
+  w.deliver(del);
+  const truth = W.trueComments(w.server)['PBI-001'].map((c) => c.id);
+  assert.equal(truth.length, 2);
+  assert.deepEqual(h.commentsIn('panel-comments').map((c) => c.id), truth, '追加したコメントが一覧から消えた');
+});
+
+test('[D-1] 障害物: IMP-002 を解決した直後に IMP-001 を保存し、サーバが保存を先に処理しても、解決した IMP-002 は未解決に戻らない', () => {
+  const w = boot();
+  const h = w.h;
+  h.clickTab('障害物'); w.drain();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', 'fixed');
+  h.click('imp-panel-resolve');            // 解決を確定（送信中）
+  h.click('imp-panel-close');
+  h.clickImpRow('IMP-001');
+  h.setValue('i-title', 'renamed');
+  h.click('imp-panel-save');
+  const [resolve, save] = w.pendingNs();
+  w.process(save);
+  w.process(resolve);
+  w.deliver(resolve);                      // 「解決しました」と通知が出る
+  w.deliver(save);                         // 保存の写しは解決を含まない
+  assert.deepEqual(w.impTable(), W.trueImp(w.server), '解決した障害物が未解決の表に戻った');
+});
+
+test('[D-1] 盤面: 作成の応答が遅れて届いても、その後に移して確定したカードは作成時の列へ戻らない', () => {
+  const w = boot();
+  const h = w.h;
+  h.clickAdd('New');
+  h.setValue('f-title', 'new card');
+  h.click('panel-save');
+  const create = w.pendingNs()[0];
+  w.process(create);                       // サーバでは作成済み（応答は遅れている）
+  h.click('panel-close');
+  h.click('reload');
+  const load = w.pendingNs()[1];
+  w.process(load);
+  w.deliver(load);                         // 新しいカード PBI-005 が盤面に出る
+  h.drag('PBI-005', 'Review');
+  const move = w.pendingNs()[1];
+  w.process(move);
+  w.deliver(move);                         // 「PBI-005 を Review に移しました。」
+  w.deliver(create);                       // 遅れた作成の応答（New の写し）
+  assert.equal(statusOf(W.trueBoard(w.server), 'PBI-005'), 'Review');
+  assert.equal(statusOf(h.screen(), 'PBI-005'), 'Review', '確定した移動が、遅れて届いた作成の応答で巻き戻った');
+});
+
+// --- D-4: 「完了する」の通知は、別の経路で完了したら消える ------------------------------------
+
+function partialResolve(w, id) {
+  const h = w.h;
+  h.clickTab('障害物'); w.drain();
+  h.clickImpRow(id);
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', 'fixed');
+  h.click('imp-panel-resolve');
+  const n = w.pendingNs()[0];
+  w.process(n, 'partial');
+  w.deliver(n);
+}
+
+test('[D-4] 途中で止まった解決を「未解決に戻す」で揃えたら、「完了する」の通知は消える', () => {
+  const w = boot();
+  const h = w.h;
+  partialResolve(w, 'IMP-002');
+  assert.equal(h.labelOf('toast-undo'), '完了する');
+  h.clickPending('IMP-002', 'unresolve');
+  w.drain();
+  h.flushTimers();
+  assert.deepEqual(W.trueImp(w.server).pending, []);
+  assert.ok(W.trueImp(w.server).open.includes('IMP-002:Y'));
+  // 通知は Escape でも時間でも消えない。消す手段は「完了する」を押すことだけ。
+  assert.ok(h.hiddenOf('toast') || h.labelOf('toast-undo') !== '完了する',
+    '未解決に戻したのに「IMP-002 の解決が途中で止まりました。」の通知が残っている');
+});
+
+test('[D-4] 途中で止まった解決を「解決済として完了」で揃えたら、「解決しました」の通知が消えた後に「完了する」の通知が戻ってこない', () => {
+  const w = boot();
+  const h = w.h;
+  partialResolve(w, 'IMP-002');
+  h.clickPending('IMP-002', 'resolve');
+  w.drain();
+  h.flushTimers();                          // 「解決しました」の通知が時間で消える
+  assert.deepEqual(W.trueImp(w.server).pending, []);
+  assert.ok(h.hiddenOf('toast') || h.labelOf('toast-undo') !== '完了する',
+    '完了済みなのに「完了する」の通知が戻ってきた（押すと「既に解決済みです」のエラーになる）');
+});
+
+// --- 乱択で見つけた失敗の再現（種を固定） --------------------------------------------
+
+const CFG = { steps: 60, busy: 0.1, partial: 0.15, fail: 0.1, strictBoard: true, strictComments: true, strictImp: true };
+
+test('[乱択] コメント（サーバの処理順も乱す）: 種 692 で静止時の件数・一覧がサーバと一致する', () => {
+  const r = F.runSeed(692, Object.assign({}, CFG, { ops: ['openCard', 'commentAdd', 'commentAdd', 'commentDelete', 'toastAction', 'historyToggle'] }));
+  assert.deepEqual(r.violations || [String(r.error)], []);
+});
+
+test('[乱択] 障害物（サーバの処理順も乱す）: 種 498 で静止時の表がサーバと一致する', () => {
+  const r = F.runSeed(498, Object.assign({}, CFG, { startTab: '障害物',
+    ops: ['impOpen', 'impOpen', 'impAdd', 'impSave', 'impSave', 'impResolve', 'impResolve', 'impCancelResolve', 'impClose',
+      'toastAction', 'toastAction', 'timers', 'pending', 'pending'] }));
+  assert.deepEqual(r.violations || [String(r.error)], []);
+});
+
+test('[乱択] 「完了する」の通知（発行順に処理）: 種 483 で完了済みの操作に通知が残らない', () => {
+  const r = F.runSeed(483, Object.assign({}, CFG, { fifoServer: true, checkSticky: true, startTab: '障害物',
+    ops: ['impOpen', 'impResolve', 'impResolve', 'impResolve', 'impClose', 'toastAction', 'toastAction', 'timers', 'pending', 'pending', 'pending', 'reload'] }));
+  assert.deepEqual(r.violations || [String(r.error)], []);
+});
+
+// --- 直したあとの乱択（種 1〜12000）で見つけ、あわせて直したもの ---------------------------
+
+test('[D-1] 盤面: 作成の応答が遅れて届いても、その後に削除して確定したカードは戻らない', () => {
+  const w = boot();
+  const h = w.h;
+  h.clickAdd('In Progress');
+  h.setValue('f-title', 'new card');
+  h.click('panel-save');
+  const create = w.pendingNs()[0];
+  w.process(create);                       // サーバでは作成済み（応答は遅れている）
+  h.click('panel-close');
+  h.click('reload');
+  const load = w.pendingNs()[1];
+  w.process(load);
+  w.deliver(load);                         // PBI-005 が盤面に出る
+  h.openCard('PBI-005');
+  h.click('panel-delete');
+  const del = w.pendingNs()[1];
+  w.process(del);
+  w.deliver(del);
+  w.deliver(create);                       // 遅れた作成の応答（PBI-005 がある写し）
+  assert.equal(statusOf(W.trueBoard(w.server), 'PBI-005'), null);
+  assert.equal(statusOf(h.screen(), 'PBI-005'), null, '削除が確定したカードが、遅れて届いた作成の応答で戻った');
+});
+
+test('[D-1] 障害物: 途中で止まった解決を「完了する」と「途中で止まった操作」から重ねて送らない（どちらが後に処理されたか画面では分からない）', () => {
+  const w = boot();
+  const h = w.h;
+  partialResolve(w, 'IMP-002');
+  h.clickPending('IMP-002', 'resolve');    // 送信中
+  const n = w.pendingNs().length;
+  h.click('toast-undo');                   // 「完了する」も押す
+  assert.equal(w.pendingNs().length, n, '同じ障害物の完了を重ねて送った');
+  assert.match(h.textOf('message'), /IMP-002 の操作を送っています/);
+  w.drain();
+  h.flushTimers();
+  assert.deepEqual(w.impTable(), W.trueImp(w.server));
+});

@@ -951,8 +951,18 @@ function mergeOneCard(current, serverBoard, id) {
   var to = columnStatusOf(serverBoard, id);
   var card = findCard(serverBoard, id);
   if (to === null || !card) return boardWithCardRemoved(current, id);
+  // 遅れて届いた応答の写しは、その後に確定した自分の書き込み（移動・保存）より古いことがある。
+  // 今のカードの方が updated_at が新しければ、確定済みの方を残す（同時刻ならサーバの写しを使う）。
+  var now = findCard(current, id);
+  if (now && String(now.updated_at || '') > String(card.updated_at || '')) return current;
+  // 削除が確定したカードは、それより前に出した書き込みの遅れた応答で戻さない。
+  if (deletedPbiIds[id]) return boardWithCardRemoved(current, id);
   return boardWithCardUpserted(current, card, to);
 }
+
+// この画面で削除が確定した PBI の id → true（戻す成功で外す）。ID は使い回されないので、
+// この id への応答はそれより前に出した自分の書き込みのものだけになる。
+var deletedPbiIds = {};
 
 /** board を複製し、id のカードを newStatus の列へ移した新しい board を返す（元の board は変えない）。 */
 function boardWithCardMoved(b, id, newStatus) {
@@ -1345,6 +1355,8 @@ function renderToast(text, onUndo, actionLabel, iconName) {
  * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）、
  * iconName はそのアイコン（既定は undo。「完了する」は check）。
  * sticky が真なら時間では消さず、別の通知が出ても、その通知が消えたあとに出し直す。
+ * sticky に障害物の id（文字列）を渡すと、その id の途中で止まった操作が無くなった時点で
+ * 通知を外す（releaseStickyIfDone。別の経路で完了したのに押せる通知を残さない）。
  */
 function showUndoToast(text, onUndo, actionLabel, iconName, sticky) {
   // 取り消せなくなるのは、時間付きの通知が別の通知に上書きされるときだけ（sticky は戻ってくる）。
@@ -1353,7 +1365,8 @@ function showUndoToast(text, onUndo, actionLabel, iconName, sticky) {
   }
   if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
   if (sticky) {
-    var self = { text: text, onUndo: onUndo, label: actionLabel, icon: iconName };
+    var self = { text: text, onUndo: onUndo, label: actionLabel, icon: iconName,
+      impId: typeof sticky === 'string' ? sticky.trim() : null };
     stickyToast = self;
     shownIsSticky = true;
     activeToastText = null;
@@ -1378,8 +1391,21 @@ function hideToast() {
   shownIsSticky = false;
   if (stickyToast) {
     var st = stickyToast;
-    showUndoToast(st.text, st.onUndo, st.label, st.icon, true);
+    showUndoToast(st.text, st.onUndo, st.label, st.icon, st.impId || true);
   }
+}
+
+/**
+ * 「完了する」の通知の対象が、受け入れた障害物のビューの「途中で止まった操作」に
+ * もう無ければ通知を外す（途中で止まった操作の節から完了した等）。残すと、押した瞬間に
+ * 選んだのと逆の操作を送ったり、「既に解決済みです」になったりする。
+ */
+function releaseStickyIfDone(view) {
+  if (!stickyToast || !stickyToast.impId || !view) return;
+  var id = stickyToast.impId;
+  if ((view.pending || []).some(function (p) { return impKey(p) === id; })) return;
+  stickyToast = null;
+  if (shownIsSticky) hideToast();
 }
 
 /**
@@ -1415,6 +1441,7 @@ function deletePbi() {
       if (mine) setPanelBusy(false);
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
+        deletedPbiIds[id] = true;
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         if (mine) closePanel();
         showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
@@ -1472,6 +1499,7 @@ function restorePbi(row) {
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
+        delete deletedPbiIds[row.id];
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
         setMessage(row.id + ' を戻しました。', 'info');
         afterHistoryWrite(res, row.id, msgMark);
@@ -1599,18 +1627,106 @@ function readImpForm() {
   };
 }
 
+// 障害物: [{ id, issued, open, resolved, pending（確定した応答のビューにあった、その id の行と、その直前の行の id）, mark }]
+var impOverlay = [];
+var impSummary = null;   // 最後に描いた障害物の要約（古い応答で控えだけを当てるときの基準）
+
+function impKey(r) { return String((r || {}).id || '').trim(); }
+
+/** 確定した自分の障害物の操作を控える。その id の行が、確定した応答のビューでどこにあったかを持つ。 */
+function noteOwnImp(id, issued, view) {
+  var key = String(id || '').trim();
+  if (!key || !view) return;
+  var pick = function (list) {
+    var rows = [];
+    var after = null;
+    (list || []).forEach(function (r, i) {
+      if (impKey(r) !== key) return;
+      if (rows.length === 0) after = i > 0 ? impKey(list[i - 1]) : '';
+      rows.push(r);
+    });
+    return { rows: rows, after: after };
+  };
+  impOverlay = noteOwn(impOverlay, key, issued,
+    { open: pick(view.open), resolved: pick(view.resolved), pending: pick(view.pending), mark: impWriteIssued });
+}
+
+function pruneImpOverlay() {
+  var oldest = oldestPending(impPending);
+  impOverlay = impOverlay.filter(function (e) { return oldest <= e.mark; });
+}
+
+/**
+ * list の id の行を placed.rows に差し替える。list に出ていればその位置へ。出ていなければ、
+ * 確定した応答で直前にあった行（placed.after。'' なら先頭）の後ろへ、それも無ければ末尾へ足す。
+ */
+function withImpRows(list, id, placed) {
+  var out = [];
+  var at = -1;
+  (list || []).forEach(function (r) {
+    if (impKey(r) === id) { if (at < 0) at = out.length; } else out.push(r);
+  });
+  if (at < 0 && placed.after === '') at = 0;
+  if (at < 0 && placed.after) {
+    for (var i = 0; i < out.length; i++) if (impKey(out[i]) === placed.after) { at = i + 1; break; }
+  }
+  if (at < 0) at = out.length;
+  return out.slice(0, at).concat(placed.rows, out.slice(at));
+}
+
+/** ビューに控えを当てた写しを返す（控えが無ければ同じもの）。 */
+function overlayImpView(view) {
+  if (!view || impOverlay.length === 0) return view;
+  var next = Object.assign({}, view);
+  impOverlay.forEach(function (e) {
+    next.open = withImpRows(next.open, e.id, e.open);
+    next.resolved = withImpRows(next.resolved, e.id, e.resolved);
+    next.pending = withImpRows(next.pending, e.id, e.pending);
+  });
+  return next;
+}
+
+/** 控えを当てて行数が変わった分だけ、要約の件数を直す。 */
+function impSummaryFor(view, base, baseView) {
+  if (!base || !baseView || view === baseView) return base;
+  var len = function (v, k) { return ((v && v[k]) || []).length; };
+  return Object.assign({}, base, {
+    open: base.open + len(view, 'open') - len(baseView, 'open'),
+    resolved: base.resolved + len(view, 'resolved') - len(baseView, 'resolved'),
+    pending: base.pending + len(view, 'pending') - len(baseView, 'pending'),
+  });
+}
+
 /**
  * 障害物の書き込みの応答を受ける共通部分。表と要約は、今も障害物のビューを見ているときだけ
  * 描き直す（応答待ちの間に別タブへ移っていれば、そのタブの表と要約を上書きしない）。
+ * ownId は、この応答で確定した（成功・途中で停止）自分の書き込みの対象。控えに足す。
  */
-function applyImpResponse(res, issued, commentSeen) {
+function applyImpResponse(res, issued, commentSeen, ownId) {
   if (res.sprintChoices) impSprintChoices = res.sprintChoices;
-  if (!res.view) return;
+  if (!res.view) { pruneImpOverlay(); return; }
+  var own = !!ownId && (res.ok || res.reason === 'partial');
+  if (own) noteOwnImp(ownId, issued, res.view);
   // 後から発行した書き込みの応答を既に反映しているなら、この応答は古い。表と要約を戻さない。
+  // ただし、この書き込み自身の結果だけは今の表に重ねる（反映済みの写しが含まないことがある）。
   // （後の書き込みがビュー無しで返った場合は、この応答が最新の手がかりなので反映する）
-  if (issued <= lastAppliedImp) return;
+  if (issued <= lastAppliedImp) {
+    if (own && impView) {
+      var before = impView;
+      impView = overlayImpView(impView);
+      impSummary = impSummaryFor(impView, impSummary, before);
+      if (impView !== before && activeView === 'impediment' && !tableLoading) {
+        renderTable(impView);
+        renderSummary(impSummary);
+      }
+      releaseStickyIfDone(impView);
+    }
+    pruneImpOverlay();
+    return;
+  }
   lastAppliedImp = issued;
-  impView = res.view;
+  impView = overlayImpView(res.view);
+  impSummary = impSummaryFor(impView, res.summary, res.view);
   // 応答が運ぶコメントは、読み込み（loadView）と同じ「全体の写し」として扱う。ただし
   // コメントの書き込みと競りうるときは使わない: 障害物の書き込みを出した時点で送信中の
   // コメントがあった、または出してから新たにコメントを書いた（commentSeen が今の
@@ -1621,10 +1737,12 @@ function applyImpResponse(res, issued, commentSeen) {
     lastAppliedComment = commentWriteIssued;
   }
   if (activeView === 'impediment') {
-    renderTable(res.view);
-    renderSummary(res.summary);
+    renderTable(impView);
+    renderSummary(impSummary);
   }
   if (takeComments) refreshOpenComments();
+  releaseStickyIfDone(impView);
+  pruneImpOverlay();
 }
 
 /** 障害物の書き込みを出す時点で控える値。送信中のコメントがあれば -1（応答のコメントを使わない）。 */
@@ -1648,10 +1766,10 @@ function sendImpWrite(method, args, label, after, onPartial) {
       delete impPending[issued];
       var mine = (seq === impPanelSeq);
       if (mine) setImpPanelBusy(false);
-      if (res.ok) writeSeq++;
-      applyImpResponse(res, issued, commentSeen);
+      if (res.ok || res.reason === 'partial') writeSeq++;
       // 対象は先頭の引数（更新・解決）か、作成なら応答の id。
       var target = typeof args[0] === 'string' ? args[0] : res.id;
+      applyImpResponse(res, issued, commentSeen, target);
       if (res.ok) { after(res, mine); afterHistoryWrite(res, target, msgMark); return; }
       if (res.reason === 'partial' && onPartial) { onPartial(res, mine); afterHistoryWrite(res, target, msgMark); return; }
       // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
@@ -1664,6 +1782,7 @@ function sendImpWrite(method, args, label, after, onPartial) {
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
+      pruneImpOverlay();
       if (seq === impPanelSeq) {
         setImpPanelBusy(false);
         setImpPanelMessage(label + 'に失敗しました: ' + err.message, 'error');
@@ -1724,11 +1843,26 @@ function showResolveOutcome(id, resolution, expected, res) {
   }
   setMessage(res.message, 'error');
   showUndoToast(id + ' の解決が途中で止まりました。',
-    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check', true);
+    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check', id);
+}
+
+// 解決の完了・取り消しを送信中の障害物の id → true。途中で止まった操作は「完了する」の通知と
+// 「途中で止まった操作」の2つのボタンのどれからでも送れ、両方が成功しうる。同じ id へ重ねて送ると
+// サーバがどちらを後に処理したか画面では分からず、表が最終の状態と食い違うため、応答まで次を送らない。
+var impSettling = {};
+
+/** id の完了・取り消しを送信中なら知らせて true を返す。 */
+function impSettlingNow(id) {
+  if (!impSettling[String(id || '').trim()]) return false;
+  setMessage(id + ' の操作を送っています。応答を待ってから、もう一度お試しください。', 'error');
+  return true;
 }
 
 /** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
 function retryResolveImp(id, resolution, expected) {
+  if (impSettlingNow(id)) return;
+  var key = String(id || '').trim();
+  impSettling[key] = true;
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
@@ -1737,8 +1871,9 @@ function retryResolveImp(id, resolution, expected) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
-      if (res.ok) writeSeq++;
-      applyImpResponse(res, issued, commentSeen);
+      delete impSettling[key];
+      if (res.ok || res.reason === 'partial') writeSeq++;
+      applyImpResponse(res, issued, commentSeen, id);
       if (res.ok || res.reason === 'partial') {
         if (res.ok) setMessage(id + ' を解決しました。', 'info');
         showResolveOutcome(id, resolution, expected, res);
@@ -1750,6 +1885,8 @@ function retryResolveImp(id, resolution, expected) {
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
+      delete impSettling[key];
+      pruneImpOverlay();
       setMessage('解決に失敗しました: ' + err.message, 'error');
     })
     .apiResolveImpediment(id, resolution, expected);
@@ -1757,6 +1894,9 @@ function retryResolveImp(id, resolution, expected) {
 
 function unresolveImp(moved, resolvedRow) {
   if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  if (impSettlingNow(moved.id)) return;
+  var key = String(moved.id || '').trim();
+  impSettling[key] = true;
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
@@ -1765,18 +1905,21 @@ function unresolveImp(moved, resolvedRow) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
-      if (res.ok) writeSeq++;
-      applyImpResponse(res, issued, commentSeen);
+      delete impSettling[key];
+      if (res.ok || res.reason === 'partial') writeSeq++;
+      applyImpResponse(res, issued, commentSeen, moved.id);
       setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
       if (res.reason === 'partial') {
         // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
         showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
-          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', true);
+          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', moved.id);
       }
       afterHistoryWrite(res, res.ok ? moved.id : null, msgMark);
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
+      delete impSettling[key];
+      pruneImpOverlay();
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
     .apiUnresolveImpediment(moved, resolvedRow);
@@ -1971,13 +2114,70 @@ function withoutDeletedComments(comments) {
 /**
  * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
  * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
+ * 取り込む写しには、確定した自分の操作（commentOverlay）を当て直す。
  */
 function applyComments(comments, issued) {
   if (!comments || issued <= lastAppliedComment) return false;
   lastAppliedComment = issued;
-  commentsByTarget = withoutDeletedComments(comments);
+  commentsByTarget = overlayComments(withoutDeletedComments(comments));
   redrawComments();
   return true;
+}
+
+// --- 確定した自分の書き込みの重ね（コメント・障害物） ---
+// サーバは同時に出した書き込みを発行順に処理するとは限らない。後から発行した書き込みが先に
+// 処理されると、その応答は発行番号では新しいのに、先に確定した自分の書き込みを含まない古い写しを
+// 運ぶ。発行番号だけで新旧を決めると、成功した自分の書き込みが画面から消える。
+// そこで確定した自分の操作を控え、受け入れる写しへ毎回当て直す（何度当てても同じ結果になる）。
+// 控えは、確定した時点で送信中だった（それ以前に発行した）書き込みがすべて返ったら捨てる。
+// それより後に発行した書き込みはこの確定より後に処理されるので、その写しは確定を含む。
+// 読み込み（loadView）には当てない。読み込みは応答までに書き込みが確定していたら捨てられるため、
+// 受け入れる読み込みは出した時点までに確定した書き込みを必ず含む。
+
+/** 送信中の書き込みのうち最も古い発行番号（無ければ Infinity）。 */
+function oldestPending(pending) {
+  var keys = Object.keys(pending).map(Number);
+  return keys.length ? Math.min.apply(null, keys) : Infinity;
+}
+
+// コメント: [{ id, row（消したなら null）, issued（その書き込みの発行番号）, mark（確定した時点の commentWriteIssued） }]
+var commentOverlay = [];
+
+/**
+ * 同じ対象への自分の操作は、後から発行した方が後に処理されている（追加 → 削除 → 戻す は、前の操作の
+ * 成功を待たないと成功しない）。後から発行した操作の控えがあれば、遅れて届いた前の操作では上書きしない。
+ */
+function noteOwn(list, id, issued, fields) {
+  var prev = list.filter(function (e) { return e.id === id; })[0];
+  if (prev && prev.issued > issued) return list;
+  return list.filter(function (e) { return e.id !== id; }).concat([Object.assign({ id: id, issued: issued }, fields)]);
+}
+
+/** 確定した自分のコメントの操作を控える。row があれば「この行がある」、null なら「この id は無い」。 */
+function noteOwnComment(id, issued, row) {
+  if (!id) return;
+  commentOverlay = noteOwn(commentOverlay, id, issued,
+    { row: row ? Object.assign({}, row, { mine: true }) : null, mark: commentWriteIssued });
+}
+
+function pruneCommentOverlay() {
+  var oldest = oldestPending(commentPending);
+  commentOverlay = commentOverlay.filter(function (e) { return oldest <= e.mark; });
+}
+
+/** comments に控えを当てた写しを返す。変わらなければ同じものを返す。 */
+function overlayComments(comments) {
+  var out = comments;
+  commentOverlay.forEach(function (e) { out = withOwnComment(out, e.id, e.row); });
+  return out;
+}
+
+/** 今の一覧に控えを当て、変わったら描き直す（写しを取り込まなかった応答で使う）。 */
+function applyCommentOverlay() {
+  var next = overlayComments(commentsByTarget);
+  if (next === commentsByTarget) return;
+  commentsByTarget = next;
+  redrawComments();
 }
 
 /** 件数（盤面・障害物の表）と開いている節を、今の commentsByTarget から描き直す。 */
@@ -1988,39 +2188,37 @@ function redrawComments() {
 }
 
 /**
- * 写しとしては古い（後から発行した書き込みの応答を既に反映した）成功の応答でも、その書き込み
- * 自身の操作だけは一覧へ入れる。サーバは同時に出した書き込みを発行順に処理するとは限らず、
- * 先に反映した写しがこの書き込みを含まないことがあるため。何度当てても同じ結果になるようにする。
- * add: comment を足す（同じ id が無ければ。作成日時の古い順、同じ日時なら既存の後ろ）。
- * remove: id の行を外す（あれば）。
+ * 確定した自分のコメントの操作1件を comments に当てた写しを返す（変わらなければ同じもの）。
+ * 何度当てても同じ結果になる。
+ * row があれば: その行を row.target_id の一覧へ足す（同じ id が無ければ。作成日時の古い順、
+ * 同じ日時なら既存の後ろ）。他の対象の一覧に同じ id があれば外す。
+ * row が null なら: id の行をどの一覧からも外す。
  */
-function applyOwnComment(add, removeId) {
+function withOwnComment(comments, id, row) {
+  var src = comments || {};
   var next = {};
-  Object.keys(commentsByTarget || {}).forEach(function (k) { next[k] = commentsByTarget[k]; });
+  Object.keys(src).forEach(function (k) { next[k] = src[k]; });
   var changed = false;
-  if (removeId) {
-    Object.keys(next).forEach(function (k) {
-      var list = Array.isArray(next[k]) ? next[k] : [];
-      var kept = list.filter(function (c) { return c.id !== removeId; });
-      if (kept.length !== list.length) { next[k] = kept; changed = true; }
-    });
-  }
-  if (add && add.id && add.target_id && !commentDeletedIds[add.id]) {
-    var cur = Array.isArray(next[add.target_id]) ? next[add.target_id] : [];
-    var exists = cur.some(function (c) { return c.id === add.id; });
+  var home = row && row.target_id ? row.target_id : null;
+  Object.keys(next).forEach(function (k) {
+    if (k === home) return;
+    var list = Array.isArray(next[k]) ? next[k] : [];
+    var kept = list.filter(function (c) { return c.id !== id; });
+    if (kept.length !== list.length) { next[k] = kept; changed = true; }
+  });
+  if (home) {
+    var cur = Array.isArray(next[home]) ? next[home] : [];
+    var exists = cur.some(function (c) { return c.id === id; });
     if (!exists) {
-      var row = Object.assign({}, add, { mine: true });   // 自分の追加・取り消しだけがここへ来る
       var at = cur.length;
       for (var i = 0; i < cur.length; i++) {
         if (String(cur[i].created_at || '') > String(row.created_at || '')) { at = i; break; }
       }
-      next[add.target_id] = cur.slice(0, at).concat([row], cur.slice(at));
+      next[home] = cur.slice(0, at).concat([row], cur.slice(at));
       changed = true;
     }
   }
-  if (!changed) return;
-  commentsByTarget = next;
-  redrawComments();
+  return changed ? next : comments;
 }
 
 function sendComment(hostId, targetId) {
@@ -2047,10 +2245,12 @@ function sendComment(hostId, targetId) {
         var cur = commentUiFor(hostId, targetId);
         if (cur) cur.input.value = '';   // 描き直しで引き継がれないよう、先に空にする
       }
+      if (res.ok && res.comment) noteOwnComment(res.comment.id, issued, res.comment);
       if (!applyComments(res.comments, issued)) {
-        if (res.ok) applyOwnComment(res.comment, null);
+        applyCommentOverlay();
         refreshOpenComments();
       }
+      pruneCommentOverlay();
       var now = commentUiFor(hostId, targetId);
       if (res.ok) {
         if (now) setCommentMessage(now, '', 'info');
@@ -2064,6 +2264,7 @@ function sendComment(hostId, targetId) {
     })
     .withFailureHandler(function (err) {
       settle();
+      pruneCommentOverlay();
       refreshOpenComments();
       var now = commentUiFor(hostId, targetId);
       var text = 'コメントを送れませんでした: ' + err.message;
@@ -2094,17 +2295,22 @@ function deleteComment(hostId, targetId, commentId) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       settle();
       if (res.ok) commentWritesDone++;
-      if (res.ok && res.removed && res.removed.id) commentDeletedIds[res.removed.id] = true;
+      if (res.ok && res.removed && res.removed.id) {
+        commentDeletedIds[res.removed.id] = true;
+        noteOwnComment(res.removed.id, issued, null);
+      }
       if (!applyComments(res.comments, issued)) {
-        if (res.ok) applyOwnComment(null, res.removed && res.removed.id);
+        applyCommentOverlay();
         refreshOpenComments();
       }
+      pruneCommentOverlay();
       if (res.ok) showUndoToast('コメントを削除しました。', function () { restoreComment(res.removed); });
       else fail(res.message);
       afterHistoryWrite(res, res.ok ? targetId : null, msgMark);
     })
     .withFailureHandler(function (err) {
       settle();
+      pruneCommentOverlay();
       refreshOpenComments();
       fail('コメントを削除できませんでした: ' + err.message);
     })
@@ -2131,13 +2337,16 @@ function restoreComment(row) {
       if (res.ok) commentWritesDone++;
       if (res.ok && row.id) delete commentDeletedIds[row.id];
       // 戻す応答は戻した行を運ばない。送った行（row）を使う。
-      if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
+      if (res.ok) noteOwnComment(row.id, issued, row);
+      if (!applyComments(res.comments, issued)) applyCommentOverlay();
+      pruneCommentOverlay();
       if (res.ok) setMessage('コメントを戻しました。', 'info');
       else failRestore(res.message);
       afterHistoryWrite(res, res.ok ? row.target_id : null, msgMark);
     })
     .withFailureHandler(function (err) {
       delete commentPending[issued];
+      pruneCommentOverlay();
       failRestore('取り消せませんでした: ' + err.message);
     })
     .apiRestoreComment(row);
@@ -2653,7 +2862,11 @@ function loadView() {
         renderSummary(res.summary);
         if (takeComments) refreshOpenComments();
         // 障害物の読み直しは、出した時点で確定していた書き込みより新しい状態。それより古い応答で表を戻さない。
-        if (requestedView === 'impediment') lastAppliedImp = Math.max(lastAppliedImp, impFloor);
+        if (requestedView === 'impediment') {
+          lastAppliedImp = Math.max(lastAppliedImp, impFloor);
+          impSummary = res.summary;
+          releaseStickyIfDone(res.view);
+        }
         setMessage('', 'info');
       } else {
         // 失敗が確定した（＝捨てるべき応答ではない）。placeholder が出ていれば畳む。
