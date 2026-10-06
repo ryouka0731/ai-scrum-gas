@@ -224,7 +224,7 @@ const VOID_TAGS = { input: true, img: true, br: true, hr: true, meta: true, link
  * 追跡する。id が無い要素をスタックから丸ごと飛ばしていた頃は、
  * `<div hidden><span><button id="x">` のような構造で `#x` の祖先探索が
  * `<div hidden>` を素通りしていた（今の kanban.html では hidden が付くのは
- * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field`/`#panel-comments`/`#imp-panel-comments`/`#panel-history`/`#imp-panel-history` だけなので実害は無いが、id を持たない
+ * `#table-view`/`#panel`/`#imp-panel`/`#toast`/`#i-resolution-field`/`#imp-panel-cancel-resolve`/`#panel-comments`/`#imp-panel-comments`/`#panel-history`/`#imp-panel-history` だけなので実害は無いが、id を持たない
  * 祖先に hidden が増えた瞬間にシムだけが実ブラウザとずれる）。
  * 親子は parentNode だけで結び、children には積まない — 積むと `clearHost()` の
  * innerHTML = '' が静的な子まで消してしまう。

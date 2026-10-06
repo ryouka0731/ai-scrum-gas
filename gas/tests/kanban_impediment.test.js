@@ -500,3 +500,38 @@ test('未解決の押せる行には role="button" と aria-label が付き、�
   assert.ok(rest.length >= 1);
   rest.forEach((r) => { assert.equal(r.role, null); assert.equal(r.label, null); });
 });
+
+test('解決策の入力中だけ「やめる」が出る。押すと欄が戻り、打った解決策は残る', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  assert.equal(h.hiddenOf('imp-panel-cancel-resolve'), true, '入力中でなければ出さない');
+  h.click('imp-panel-resolve');
+  assert.equal(h.hiddenOf('imp-panel-cancel-resolve'), false);
+  assert.equal(h.labelOf('imp-panel-cancel-resolve'), 'やめる');
+  h.setValue('i-resolution', '再起動した');
+  h.click('imp-panel-cancel-resolve');
+  assert.equal(h.hiddenOf('imp-panel-cancel-resolve'), true);
+  assert.equal(h.hiddenOf('i-resolution-field'), true);
+  assert.equal(h.labelOf('imp-panel-resolve'), '解決する');
+  ['i-title', 'i-description', 'i-reported-by', 'i-sprint', 'imp-panel-save'].forEach((id) => {
+    assert.equal(h.disabledOf(id), false, id + ' が塞がったまま');
+  });
+  assert.equal(h.hiddenOf('imp-panel'), false, 'パネルは閉じない');
+  h.click('imp-panel-resolve');
+  assert.equal(h.valueOf('i-resolution'), '再起動した', '打った解決策を黙って捨てた');
+  assert.equal(h.hiddenOf('i-resolution-field'), false);
+});
+
+test('送信中は「やめる」を押せない', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-resolve');
+  h.click('imp-panel-resolve');   // 解決を送信（応答待ち）
+  assert.equal(h.disabledOf('imp-panel-cancel-resolve'), true);
+});
+
+test('新規作成のパネルでは「やめる」は出ない', () => {
+  const h = onImpediment();
+  h.clickImpAdd();
+  assert.equal(h.hiddenOf('imp-panel-cancel-resolve'), true);
+});

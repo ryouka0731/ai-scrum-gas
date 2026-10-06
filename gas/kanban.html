@@ -437,6 +437,7 @@
     <div class="panel-foot">
       <button id="imp-panel-save" class="primary" type="button"></button>
       <span class="spacer"></span>
+      <button id="imp-panel-cancel-resolve" type="button" hidden></button>
       <button id="imp-panel-resolve" type="button"></button>
     </div>
     <div id="imp-panel-history" class="history" hidden></div>
@@ -1503,6 +1504,7 @@ function applyImpLocks() {
   // 解決策の入力中は保存を押せない（保存して閉じると、打った解決策を黙って捨てるため）。
   document.getElementById('imp-panel-save').disabled = impPanelBusy || impPanelState.resolving;
   document.getElementById('imp-panel-resolve').disabled = impPanelBusy;
+  document.getElementById('imp-panel-cancel-resolve').disabled = impPanelBusy;
   IMP_FORM_FIELD_IDS.forEach(function (id) {
     document.getElementById(id).disabled = impPanelBusy || (impPanelState.resolving && id !== 'i-resolution');
   });
@@ -1537,6 +1539,8 @@ function fillImpSprintSelect(value) {
 function setImpResolving(on) {
   impPanelState.resolving = on;
   document.getElementById('i-resolution-field').hidden = !on;
+  // 打った解決策は消さない（やめても、次に「解決する」を押せば残っている）。
+  document.getElementById('imp-panel-cancel-resolve').hidden = !on;
   applyImpLocks();
   var btn = document.getElementById('imp-panel-resolve');
   btn.innerHTML = '';   // fillButton は追記するだけ。空にしないと文言が積み重なる
@@ -2903,6 +2907,8 @@ document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
 fillButton(document.getElementById('imp-panel-save'), 'save', '保存');
+fillButton(document.getElementById('imp-panel-cancel-resolve'), 'close', 'やめる');
+document.getElementById('imp-panel-cancel-resolve').addEventListener('click', function () { setImpResolving(false); });
 document.getElementById('imp-panel-close').appendChild(makeIcon('close'));
 document.getElementById('imp-panel-close').addEventListener('click', closeImpPanel);
 document.getElementById('imp-panel-save').addEventListener('click', saveImpPanel);
