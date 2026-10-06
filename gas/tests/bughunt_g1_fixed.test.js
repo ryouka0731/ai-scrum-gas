@@ -230,3 +230,94 @@ test('BUG C-4: 作成の書き込みが失敗しても高水位だけ進み、�
   const ok = plain(h.ctx.apiCreatePbi(full('B')));
   assert.equal(ok.id, 'PBI-001', '失敗した作成が PBI-001 を消費した（高水位: ' + h.props.LAST_PBI_ID + '）');
 });
+
+test('BUG C-2: 雛形の PBI-001 と同じ ID の本物の行は、盤面に出るのに状態変更・削除が永久に conflict になる', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-001,（PBIタイトル）,（説明）,（受入基準）,Critical/High/Medium/Low,0,New,,YYYY-MM-DD,YYYY-MM-DD\n' +
+    'PBI-001,本物,,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const card = plain(h.ctx.apiGetView('board')).view.columns[0].cards[0];
+  assert.equal(card.title, '本物', '前提: 盤面には本物の行だけが出る');
+  const moved = plain(h.ctx.apiUpdateStatus('PBI-001', 'Ready', card.updated_at));
+  assert.equal(moved.ok, true, '画面が見た updated_at で動かせない: ' + moved.reason);
+});
+
+test('BUG C-3: 同じ ID の行が2つあると、削除は1つ目を消すのに removed は2つ目を返し、取り消しで消した行を戻せない', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,first,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  const h = createCtx(f);
+  const del = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:00'));
+  assert.equal(del.ok, true);
+  const left = rowsOf(f['product_backlog.csv'], PBI_FIELDS).map((r) => r.title);
+  assert.deepEqual(left, ['second'], '前提: 1つ目（first）が消えた');
+  assert.equal(del.removed.title, 'first', 'removed（取り消し用）が実際に消した行と違う: ' + del.removed.title);
+});
+
+test('BUG C-3b: 同じ ID の行が2つあると、削除の履歴が delete ではなく存在しない update（title first→second）になる', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,first,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  const h = createCtx(f);
+  assert.equal(plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:00')).ok, true);
+  const hist = rowsOf(f['change_log.csv'], CHG_FIELDS);
+  assert.ok(hist.every((r) => r.action !== 'update'), '削除で update の履歴が出た: ' + JSON.stringify(hist));
+});
+
+test('BUG C-6: 未解決に雛形 IMP-001 と本物の IMP-001 があると、本物の編集が履歴に残らず警告も出ない', () => {
+  const f = baseFiles();
+  f['impediment_log.csv'] += 'IMP-001,（障害物タイトル）,（詳細説明）,（報告者）,YYYY-MM-DD,Open,,（解決策）,sprint001\n' +
+    'IMP-001,本物,,マヤ,2026-10-01,Open,,,\n';
+  const h = createCtx(f);
+  const exp = { id: 'IMP-001', title: '本物', description: '', reported_by: 'マヤ', reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: '' };
+  const res = plain(h.ctx.apiUpdateImpediment('IMP-001', { title: '本物2', description: '', reported_by: 'マヤ', sprint: '' }, exp));
+  assert.equal(res.ok, true);
+  assert.ok(f['impediment_log.csv'].indexOf('本物2') !== -1, '前提: 書けている');
+  const hist = rowsOf(f['change_log.csv'], CHG_FIELDS);
+  assert.ok(res.historyWarning || hist.some((r) => r.target_id === 'IMP-001' && r.field === 'title'),
+    '編集が記録されず、historyWarning も無い');
+});
+
+const PH_PBI1 = 'PBI-001,（PBIタイトル）,（説明）,（受入基準）,Critical/High/Medium/Low,0,New,,YYYY-MM-DD,YYYY-MM-DD\n';
+
+test('C-2: 雛形と同じ ID の本物の PBI は、状態変更・編集・削除・取り消しができ、履歴にも正しく残る。雛形は残る', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += PH_PBI1 + 'PBI-001,本物,,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const card = () => plain(h.ctx.apiGetView('board')).view.columns.flatMap((c) => c.cards).find((c) => c.id === 'PBI-001');
+  assert.equal(plain(h.ctx.apiUpdateStatus('PBI-001', 'Ready', card().updated_at)).ok, true);
+  const edited = Object.assign(full('本物2'), { status: 'Ready', priority: 'High', size: '3' });
+  assert.equal(plain(h.ctx.apiUpdatePbi('PBI-001', edited, card().updated_at)).ok, true);
+  const del = plain(h.ctx.apiDeletePbi('PBI-001', card().updated_at));
+  assert.equal(del.ok, true);
+  assert.equal(del.removed.title, '本物2');
+  assert.ok(f['product_backlog.csv'].indexOf('（PBIタイトル）') !== -1, '雛形は消えない');
+  assert.equal(plain(h.ctx.apiRestorePbi(del.removed)).ok, true, '雛形があっても本物の行を戻せる');
+  assert.equal(card().title, '本物2');
+  const hist = rowsOf(f['change_log.csv'], CHG_FIELDS).filter((r) => r.target_id === 'PBI-001');
+  assert.deepEqual(hist.map((r) => r.action + ':' + r.field), ['update:status', 'update:title', 'delete:', 'restore:']);
+});
+
+test('C-3: 同じ ID の行が2つあると、最初の行を消して返し、履歴は delete、取り消しで元に戻る', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,first,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  const h = createCtx(f);
+  const del = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:00'));
+  assert.equal(del.ok, true);
+  assert.equal(del.removed.title, 'first');
+  assert.deepEqual(rowsOf(f['change_log.csv'], CHG_FIELDS).map((r) => r.action), ['delete']);
+  // 取り消しで消した行（first）が戻る。二重に押しても増えない。
+  assert.equal(plain(h.ctx.apiRestorePbi(del.removed)).ok, true, '消した行を戻せない');
+  assert.equal(plain(h.ctx.apiRestorePbi(del.removed)).reason, 'duplicate_id');
+  assert.deepEqual(rowsOf(f['product_backlog.csv'], PBI_FIELDS).map((r) => r.title), ['second', 'first']);
+  assert.deepEqual(rowsOf(f['change_log.csv'], CHG_FIELDS).map((r) => r.action), ['delete', 'restore']);
+});
+
+test('C-3: sharedId の無い取り消しは、同じ ID の別の行があれば従来どおり重複として拒む', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  const h = createCtx(f);
+  const row = { id: 'PBI-002', title: 'first', status: 'New', created_at: '2026-10-01 00:00:00', updated_at: 't' };
+  assert.equal(plain(h.ctx.apiRestorePbi(row)).reason, 'duplicate_id');
+});

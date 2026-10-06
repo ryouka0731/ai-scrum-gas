@@ -268,7 +268,8 @@ test('restoreRow は全ての列を埋め、未知のキーを捨てる', () => 
 
 test('restoreRow は既に同じ id があれば拒否する', () => {
   // 通知を2回押した、他の人が同じ ID を起票した、などで二重に増やさない。
-  const list = [{ id: 'PBI-007', updated_at: 'T1' }];
+  // 既存の行にはタイトルを付ける（タイトルの無い行は雛形扱いで、本物の行の復元を妨げない。バグ探し C-2）
+  const list = [{ id: 'PBI-007', title: '既存', updated_at: 'T1' }];
   const r = restoreRow(list, { id: 'PBI-007', title: 'a' }, FIELDS, '2026-09-08 12:00:00');
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'duplicate_id');

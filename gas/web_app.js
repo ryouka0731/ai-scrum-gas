@@ -377,12 +377,13 @@ function apiDeletePbi(id, expectedUpdatedAt) {
         message: conflictMessage_(r.reason, '内容を確認し、もう一度削除すると更新後の内容ごと消します。')
       };
     }
-    // 取り消しに使うため、消した行そのものを返す。
-    let removed = null;
-    rows.forEach(function (row) {
-      if (String(row.id || '').trim() === String(id || '').trim()) removed = row;
-    });
-    return { ok: true, rows: r.rows, removed: removed };
+    // 取り消しに使うため、消した行そのものを返す（deleteRow が実際に消した行。
+    // 同じ ID の行が複数あっても、消した行と返す行が食い違わない）。
+    // 同じ ID の本物の行がまだ残るときは sharedId を付ける。取り消し（apiRestorePbi）は
+    // それを見て、残った行を重複とみなさずに戻す（削除前の状態に戻すだけ）。
+    const key = String(id || '').trim();
+    const shared = r.rows.some(function (x) { return String(x.id || '').trim() === key && !isPlaceholderRow(x); });
+    return { ok: true, rows: r.rows, removed: shared ? Object.assign({}, r.removed, { sharedId: true }) : r.removed };
   });
 }
 
@@ -422,7 +423,8 @@ function apiRestorePbi(row) {
       return { ok: false, reason: 'invalid', message: 'タイトルを入力してください。' };
     }
 
-    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_());
+    // sharedId は apiDeletePbi が「同じ ID の行が残った」ときに付ける印（その場合だけ同じ ID でも戻す）。
+    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_(), { allowSameId: (row || {}).sharedId === true });
     if (!r.ok) {
       const message = r.reason === 'invalid'
         ? 'PBI ID が指定されていません。'
