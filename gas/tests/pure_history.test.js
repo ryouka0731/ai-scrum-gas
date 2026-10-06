@@ -64,6 +64,12 @@ test('lineDiff: 同じ・足した・消した・入れ替え', () => {
   assert.deepEqual(h.lineDiff('a', ''), [{ op: 'del', text: 'a' }]);
 });
 
+test('lineDiff: CRLF でも LF と同じ行に分ける（\\r を行に残さない）', () => {
+  assert.deepEqual(h.lineDiff('a\r\nb', 'a\nb'), [{ op: 'same', text: 'a' }, { op: 'same', text: 'b' }]);
+  assert.deepEqual(h.lineDiff('a\r\nx', 'a\r\ny'),
+    [{ op: 'same', text: 'a' }, { op: 'del', text: 'x' }, { op: 'add', text: 'y' }]);
+});
+
 test('lineDiff: 上限を超えたら丸ごと del / add', () => {
   const big = Array.from({ length: 501 }, (_, i) => 'l' + i).join('\n');
   const d = h.lineDiff(big, 'x');

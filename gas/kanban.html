@@ -2145,7 +2145,7 @@ function historyText(v) { return v === undefined || v === null ? '' : String(v);
 
 function historyLines(s) {
   var t = historyText(s);
-  return t === '' ? [] : t.split('\n');
+  return t === '' ? [] : t.split(/\r?\n/);
 }
 
 /** 行単位の差分（LCS。lineDiff の写し）。どちらかが上限を超えたら丸ごと del / add。 */

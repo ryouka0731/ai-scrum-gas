@@ -322,6 +322,7 @@ test('11a. 画面の行差分は pure_history.js の lineDiff と同じ結果に
     ['', ''], ['', 'a'], ['a', ''], ['a', 'a'], ['a\nb\nc', 'a\nc'], ['a\nc', 'a\nb\nc'],
     ['a\nb', 'b\na'], ['x', 'y'], ['a\nb\nc', 'c\nb\na'], ['a\n', 'a'], ['\n\n', '\n'],
     [many, 'l0'], ['l0', many], [atMax, atMax.replace('l3', 'L3')], [null, undefined], [3, '3\n4'],
+    ['a\r\nb', 'a\nb'], ['a\r\nb\r\n', 'a\r\nc'],
   ];
   fixtures.forEach(function (f) {
     assert.deepEqual(plain(page.historyLineDiff(f[0], f[1])), plain(lineDiff(f[0], f[1])),

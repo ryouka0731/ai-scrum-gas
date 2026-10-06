@@ -104,7 +104,7 @@ function groupHistory(entries) {
 
 function histLines_(s) {
   const t = histText_(s);
-  return t === '' ? [] : t.split('\n');
+  return t === '' ? [] : t.split(/\r?\n/);
 }
 
 /** 行単位の差分（LCS）。どちらかが LINE_DIFF_MAX 行を超えたら丸ごと del / add。 */
