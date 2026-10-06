@@ -587,3 +587,24 @@ test('未解決の行は Enter と Space で開く。解決済の行は開かな
   assert.throws(() => h.pressImpRowKey('IMP-001', 'Enter'), /0 件/, '解決済の行は押せる行ではない');
   assert.equal(h.hiddenOf('imp-panel'), true);
 });
+
+test('同じ障害物への送信中に塞がれた書き込みは、送信中の会計（impPending・発行番号）に跡を残さず、控えの掃除を止めない', () => {
+  const vm = require('node:vm');
+  const h = onImpediment();
+  const run = (code) => vm.runInContext(code, h.sandbox);
+  h.clickImpRow('IMP-002');
+  h.setValue('i-title', '新しい題');
+  h.click('imp-panel-save');
+  const save = latest(h);
+  assert.equal(save.method, 'apiUpdateImpediment');
+  const callsBefore = h.calls.length;
+  const issuedBefore = run('impWriteIssued');
+  // 送信中の IMP-002 への書き込み（画面のボタンは塞がっているが、送る関数そのものの守りを見る）。
+  run('sendImpWrite("apiResolveImpediment", ["IMP-002", "直した", null], "解決", function () {})');
+  assert.equal(h.calls.length, callsBefore, '塞いだのに送った');
+  assert.equal(run('impWriteIssued'), issuedBefore, '塞いだ書き込みが発行番号を進めた');
+  assert.equal(run('Object.keys(impPending).length'), 1, '塞いだ書き込みが送信中として残った');
+  save.handlers.success(impResponse([Object.assign({}, ROW, { title: '新しい題' })]));
+  assert.equal(run('Object.keys(impPending).length'), 0, '応答の後も送信中が残った');
+  assert.equal(run('impOverlay.length'), 0, '送信中が残り、確定した操作の控えを捨てられない');
+});

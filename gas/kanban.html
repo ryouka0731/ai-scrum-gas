@@ -1936,12 +1936,14 @@ function commentSeenNow() {
  */
 function sendImpWrite(method, args, label, after, onPartial) {
   var seq = impPanelSeq;
+  // 既存の障害物（更新・解決）は id を先頭の引数に持つ。応答まで、その id への他の書き込みを塞ぐ。
+  // 塞ぐ判定は会計より先に行う。後だと、送らなかった書き込みが impPending に残り続け、
+  // oldestPending が動かず、以後の確定した操作の控え（impOverlay）を捨てられなくなる。
+  var busyId = typeof args[0] === 'string' ? args[0] : null;
+  if (busyId && impSettlingNow(busyId)) return;
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
-  // 既存の障害物（更新・解決）は id を先頭の引数に持つ。応答まで、その id への他の書き込みを塞ぐ。
-  var busyId = typeof args[0] === 'string' ? args[0] : null;
-  if (busyId && impSettlingNow(busyId)) return;
   setImpPanelBusy(true);
   if (busyId) markImpBusy(busyId, true);
   var runner = google.script.run
