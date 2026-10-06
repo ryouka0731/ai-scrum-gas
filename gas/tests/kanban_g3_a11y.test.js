@@ -52,7 +52,11 @@ test('E1: role=button の中に操作部品（? の補足ボタン等）を置�
   (function walk(n, inButton) {
     (n.children || []).forEach(function (c) {
       const isBtn = c.getAttribute && c.getAttribute('role') === 'button';
-      const interactive = c.tagName === 'button' || (c.getAttribute && c.getAttribute('tabindex') !== null);
+      // 操作部品: 焦点を取る要素（tabindex 付き）、既定で焦点を取る要素（tabindex が無くても）、入れ子の role=button。
+      const attr = (n) => (c.getAttribute ? c.getAttribute(n) : null);
+      const interactive = ['button', 'input', 'select', 'textarea'].indexOf(c.tagName) !== -1
+        || (c.tagName === 'a' && attr('href') !== null)
+        || attr('tabindex') !== null || isBtn;
       if (inButton && interactive) bad.push(c.tagName + '.' + c.className);
       walk(c, inButton || isBtn);
     });

@@ -96,7 +96,10 @@ function createTestContext(files, opts) {
 
   const props = { SCRUM_FOLDER_ID: 'fake-folder-id' };
   // CacheService（取り消しの鍵の預け先）。opts.failCachePut: put を常に失敗させる。
+  // 値は { value, expiresAt }。期限（expirationInSeconds、省略は GAS と同じ 600 秒）は clock.now（秒）で見る。
+  // テストは返り値の clock.now を進めて期限切れを再現する。
   const cache = {};
+  const clock = { now: 0 };
   const context = {
     console: console,
     DriveApp: {
@@ -121,10 +124,15 @@ function createTestContext(files, opts) {
     CacheService: {
       getScriptCache: function () {
         return {
-          get: function (k) { return Object.prototype.hasOwnProperty.call(cache, k) ? cache[k] : null; },
-          put: function (k, v) {
+          get: function (k) {
+            if (!Object.prototype.hasOwnProperty.call(cache, k)) return null;
+            if (clock.now >= cache[k].expiresAt) { delete cache[k]; return null; }
+            return cache[k].value;
+          },
+          put: function (k, v, expirationInSeconds) {
             if (opts.failCachePut) throw new Error('put はテストで意図的に失敗させています');
-            cache[k] = String(v);
+            const ttl = expirationInSeconds === undefined ? 600 : Number(expirationInSeconds);
+            cache[k] = { value: String(v), expiresAt: clock.now + ttl };
           },
           remove: function (k) { delete cache[k]; },
         };
@@ -151,7 +159,7 @@ function createTestContext(files, opts) {
   gasFileNames().forEach(function (name) {
     vm.runInContext(fs.readFileSync(path.join(GAS_DIR, name), 'utf8'), context, { filename: name });
   });
-  return { ctx: context, files: files, props: props, cache: cache };
+  return { ctx: context, files: files, props: props, cache: cache, clock: clock };
 }
 
 /**
@@ -160,7 +168,7 @@ function createTestContext(files, opts) {
  */
 function holdRow(cache, row, shared) {
   const token = 'held-' + Object.keys(cache).length;
-  cache['undo:' + token] = JSON.stringify({ row: row, shared: !!shared });
+  cache['undo:' + token] = { value: JSON.stringify({ row: row, shared: !!shared }), expiresAt: Infinity };
   return token;
 }
 
@@ -409,6 +417,23 @@ test('同じ ID・同じ中身の行が2つあり1つを消しても、取り消
   assert.equal(count(), 2, '削除前の2行に戻っていない');
   assert.equal(ctx.apiRestorePbi(del.undoToken).reason, 'expired', '二重押しで増える');
   assert.equal(count(), 2);
+});
+
+test('取り消しの鍵は 600 秒で切れる（期限の前は戻せ、後は expired）', () => {
+  const csv = headerOnlyCsv() + csvRow({ id: 'PBI-001', title: 'A', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n' +
+    csvRow({ id: 'PBI-002', title: 'B', status: 'New',
+      created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n';
+  const { ctx, clock } = createTestContext({ 'product_backlog.csv': csv });
+  const d1 = ctx.apiDeletePbi('PBI-001', '2026-09-01 00:00:00');
+  const d2 = ctx.apiDeletePbi('PBI-002', '2026-09-01 00:00:00');
+  clock.now = 599;
+  assert.equal(ctx.apiRestorePbi(d1.undoToken).ok, true, '期限の前なのに戻せない');
+  clock.now = 600;
+  const late = ctx.apiRestorePbi(d2.undoToken);
+  assert.equal(late.ok, false, '期限の後に戻せた');
+  assert.equal(late.reason, 'expired');
+  assert.equal(late.message, '取り消しの期限が切れました。');
 });
 
 test('預け入れ（CacheService）が失敗しても削除は成功し、undoToken は null になる', () => {
@@ -1319,4 +1344,16 @@ test('apiGetHistory: ちょうど上限件なら truncated を付け、それ未
   const under = plain(createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': log(limit - 1) }).ctx.apiGetHistory('PBI-001'));
   assert.equal(under.entries.length, limit - 1);
   assert.equal(Object.prototype.hasOwnProperty.call(under, 'truncated'), false);
+});
+
+test('履歴: 障害物も、同じ文面を CRLF で送っても変更とみなさない（改行は LF に揃えて書く）', () => {
+  const row = 'IMP-002,止まっている,"一\n二",マヤ,2026-10-01,Open,,,sprint001\n';
+  const { ctx, files } = createTestContext(histImpFiles(row));
+  const expected = Object.assign({}, IMP2_ROW, { description: '一\n二' });
+  const res = ctx.apiUpdateImpediment('IMP-002',
+    { title: '止まっている', description: '一\r\n二', reported_by: 'マヤ', sprint: 'sprint001' }, expected);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const actions = Array.from(ctx.csvToObjects(files['change_log.csv']), function (r) { return r.action + ':' + r.field; });
+  assert.deepEqual(actions, [], '見た目の同じ変更が履歴に残った: ' + actions.join(','));
+  assert.equal(files['impediment_log.csv'].indexOf('\r'), -1, 'CRLF がセルに残った');
 });

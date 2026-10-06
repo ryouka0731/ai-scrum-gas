@@ -102,7 +102,7 @@ UI の判断は、社内の登壇資料「SCM 店舗在庫管理領域 UI 改善
 | `apiCreatePbi(fields)` | 新しい行を追加する。ID はサーバ側で採番する |
 | `apiUpdatePbi(id, fields, expectedUpdatedAt)` | 既存の行を書き換える |
 | `apiDeletePbi(id, expectedUpdatedAt)` | 行を削除する。取り消しに使う行の内容を返す（2026-10-06 から鍵 `undoToken`。下の追記） |
-| `apiRestorePbi(row)` | 削除した行を元の id / created_at のまま戻す（2026-10-06 から引数は `undoToken`） |
+| `apiRestorePbi(undoToken)` | 削除した行を元の id / created_at のまま戻す（2026-10-06 より前は `apiRestorePbi(row)`。下の追記） |
 
 `google.script.run` から呼ばれるため、この3つは公開のままにする（`_` を付けない）。
 **新しく足す内部関数には `_` を付ける。** 付け忘れるとブラウザから直接呼べてしまい、

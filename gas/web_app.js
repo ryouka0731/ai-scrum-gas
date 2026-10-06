@@ -641,8 +641,11 @@ function impedimentMessage_(reason, retryHint, id) {
 function pickImpedimentFields_(fields) {
   const src = fields || {};
   const out = {};
+  // 改行は LF に揃える（pickEditableFields_ と同じ理由。同じ文面の CRLF で見た目の同じ変更を履歴に残さない）。
   IMPEDIMENT_EDITABLE_FIELDS.forEach(function (f) {
-    if (Object.prototype.hasOwnProperty.call(src, f)) out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]);
+    if (Object.prototype.hasOwnProperty.call(src, f)) {
+      out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]).replace(/\r\n?/g, '\n');
+    }
   });
   return out;
 }

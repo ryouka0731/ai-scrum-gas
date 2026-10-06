@@ -7,6 +7,6 @@
     "test": "node --test \"gas/tests/*.test.js\"",
     "test:browser": "node --test \"gas/tests/browser/*.test.js\"",
     "test:all": "npm test && npm run test:browser",
-    "test:stress": "BUGHUNT_STRESS=1 node --test gas/tests/bughunt_c_model.test.js"
+    "test:stress": "node scripts/test-stress.js"
   }
 }

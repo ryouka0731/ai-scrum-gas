@@ -107,6 +107,8 @@ test('F5: 配布物の中の未追跡ファイル（無視されていないも�
     assert.doesNotMatch(out, /ignored\.tmp/, '無視されたファイルまで警告している');
     assert.match(out, /完了しました（[^）]*2 件の未追跡ファイルを配布せず/, '要約に未追跡の件数が無い: ' + out);
     assert.equal(fs.existsSync(path.join(dest, 'scrum', 'forgot.md')), false, '未追跡のファイルを配った');
+    assert.equal(fs.existsSync(path.join(dest, 'scrum', 'sprint009', 'sprint_backlog.md')), false, '未追跡のフォルダの中のファイルを配った');
+    assert.equal(fs.existsSync(path.join(dest, 'scrum', 'ignored.tmp')), false, '無視されたファイルを配った');
   } finally { cleanup(root, dest); }
 });
 
