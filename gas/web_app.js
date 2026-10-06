@@ -195,12 +195,13 @@ function appendHistory_(eventsOrThunk) {
     if (!events || events.length === 0) return null;
     const text = readTextFile_(getScrumFolder_(), HISTORY_CSV_NAME);
     if (text === null) return '変更履歴を記録できませんでした（scrum/' + HISTORY_CSV_NAME + ' が見つかりません。配布し直してください）';
+    // 空・空白だけのファイル（Drive 上で中身が消えた等）は、見出し行から書き直して自己修復する。
+    const blank = text.trim() === '';
     // 既存の行は解釈し直さない。ファイルが大きくなってもロック中の処理が増えないよう、
     // 見出し行だけを検査し、新しい行を文字列のまま末尾へ足す。
-    assertHeaderMatches(text.split(/\r?\n/, 1)[0], HISTORY_FIELDS);
+    if (!blank) assertHeaderMatches(text.split(/\r?\n/, 1)[0], HISTORY_FIELDS);
     const added = toCsv(historyRows(events, { at: nowText_(), actor: currentUserEmail_(), newId: newHistoryId_ }), HISTORY_FIELDS);
-    const base = text === '' || /\n$/.test(text) ? text : text + '\n';
-    const next = base + added.slice(added.indexOf('\n') + 1);
+    const next = blank ? added : (/\n$/.test(text) ? text : text + '\n') + added.slice(added.indexOf('\n') + 1);
     writeScrumFile_(HISTORY_CSV_NAME, next);
     if (next.length > HISTORY_SIZE_WARN_CHARS) {
       return '変更履歴のファイルが大きくなっています（約 ' + Math.round(next.length / 1000) + ' KB）。docs/setup.md の手順で切り替えてください';
@@ -711,7 +712,8 @@ function apiGetHistory(targetId) {
   if (!HISTORY_TARGET_RE.test(id)) {
     return { ok: false, reason: 'invalid', message: '履歴の対象が不正です: ' + id };
   }
-  const entries = historyFor(readCsvRowsBestEffort_(HISTORY_CSV_NAME), id, HISTORY_LIMIT);
-  // ちょうど上限件なら、それより前が切り捨てられている可能性がある。
-  return entries.length === HISTORY_LIMIT ? { ok: true, entries: entries, truncated: true } : { ok: true, entries: entries };
+  // 上限より1件多く取り、超えたときだけ「切り捨てがある」とする（ちょうど上限件なら省略は無い）。
+  const found = historyFor(readCsvRowsBestEffort_(HISTORY_CSV_NAME), id, HISTORY_LIMIT + 1);
+  const entries = found.slice(0, HISTORY_LIMIT);
+  return found.length > HISTORY_LIMIT ? { ok: true, entries: entries, truncated: true } : { ok: true, entries: entries };
 }

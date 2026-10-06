@@ -136,7 +136,7 @@ test('Web アプリが書き戻す5ファイルも、配布先に無ければ作
     const destRoot = path.join(dest.dir, 'scrum');
     fs.mkdirSync(srcRoot, { recursive: true });
     fs.mkdirSync(destRoot, { recursive: true });
-    fs.writeFileSync(path.join(srcRoot, 'comments.csv'), 'id,target_id\n', 'utf8');
+    LIVE_FILES.forEach(function (n) { fs.writeFileSync(path.join(srcRoot, n), n + ' の雛形\n', 'utf8'); });
     fs.writeFileSync(path.join(srcRoot, 'product_goal.md'), '新しいゴール', 'utf8');
     fs.writeFileSync(path.join(destRoot, 'product_goal.md'), '古いゴール', 'utf8');
     // 同じ名前でも scrum/ 直下でなければ対象外（上書きする）。
@@ -146,10 +146,12 @@ test('Web アプリが書き戻す5ファイルも、配布先に無ければ作
     fs.writeFileSync(path.join(destRoot, 'sprint001', 'comments.csv'), '旧', 'utf8');
 
     const result = copyRecursive(srcRoot, destRoot, 'scrum');
-    assert.equal(fs.readFileSync(path.join(destRoot, 'comments.csv'), 'utf8'), 'id,target_id\n');
+    LIVE_FILES.forEach(function (n) {
+      assert.equal(fs.readFileSync(path.join(destRoot, n), 'utf8'), n + ' の雛形\n', n + ' が作られていない');
+    });
     assert.equal(fs.readFileSync(path.join(destRoot, 'product_goal.md'), 'utf8'), '新しいゴール');
     assert.equal(fs.readFileSync(path.join(destRoot, 'sprint001', 'comments.csv'), 'utf8'), '新');
-    assert.deepEqual(result, { copiedCount: 3, skippedLinkCount: 0 });
+    assert.deepEqual(result, { copiedCount: LIVE_FILES.length + 2, skippedLinkCount: 0 });
   } finally {
     src.cleanup();
     dest.cleanup();

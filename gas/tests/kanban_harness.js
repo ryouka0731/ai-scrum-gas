@@ -931,7 +931,6 @@ function createHarness(initialColumns) {
         });
     },
 
-    /** 行差分の行（.history-line）を DOM 順に { op: del|add|same, text } で読む。text は行頭の記号を含む。 */
     /** 履歴の節の中身（.history-body の中の一覧）の最後の要素の文字。 */
     historyTailOf: function (hostId) {
       const body = historyPart(hostId, 'history-body');
@@ -940,6 +939,7 @@ function createHarness(initialColumns) {
       return last ? last.textContent : null;
     },
 
+    /** 行差分の行（.history-line）を DOM 順に { op: del|add|same, text } で読む。text は行頭の記号を含む。 */
     historyLinesIn: function (hostId) {
       return collect(el(hostId), function (e) { return e.classList.contains('history-line'); })
         .map(function (l) {

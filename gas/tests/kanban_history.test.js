@@ -243,6 +243,24 @@ test('8d. 解決が途中で止まった応答の historyWarning は、止まっ
   assert.equal(h.textOf('message'), '途中で止まりました。 ' + WARN);
 });
 
+test('8h. 解決が途中で止まった応答の間に同じ障害物のパネルを開き直して履歴を開いていれば、その対象で取り直す', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', '直した');
+  h.click('imp-panel-resolve');
+  const resolveCall = latest(h);
+  // 応答が届く前にパネルを閉じて同じ障害物を開き直し、履歴を開く。
+  h.click('imp-panel-close');
+  h.clickImpRow('IMP-002');
+  h.historyToggle('imp-panel-history');
+  latest(h).handlers.success({ ok: true, entries: [] });
+  resolveCall.handlers.success(impResponse([], { ok: false, reason: 'partial', message: '途中で止まりました。' }));
+  const again = callsOf(h, 'apiGetHistory');
+  assert.equal(again.length, 1, '途中で止まった後に取り直していない');
+  assert.deepEqual(again[0].args, ['IMP-002']);
+});
+
 test('8f. 解決の取り消しの historyWarning も、戻した旨の文言を残して足す', () => {
   const h = onImpediment();
   h.clickImpRow('IMP-002');
@@ -372,6 +390,33 @@ test('11a. 画面の行差分は pure_history.js の lineDiff と同じ結果に
     assert.deepEqual(plain(page.historyLineDiff(f[0], f[1])), plain(lineDiff(f[0], f[1])),
       'lineDiff(' + JSON.stringify(f).slice(0, 60) + ') が食い違う');
   });
+});
+
+test('11d. 行差分の総量に上限がある。使い切った後の更新は LCS を使わず、丸ごと del → add で出す', () => {
+  const page = pageFns();
+  assert.equal(typeof page.HISTORY_DIFF_BUDGET, 'number');
+  const lines = Array.from({ length: 400 }, function (_, i) { return 'l' + i; });
+  const before = lines.join('\n');
+  const after = lines.concat(['末尾']).join('\n');
+  const entries = [];
+  for (let i = 0; i < 20; i++) entries.push(e('2026-10-06 10:' + String(i).padStart(2, '0') + ':00', 'me@example.com', 'update', 'description', before, after));
+  const h = ready();
+  h.openCard('PBI-001');
+  openHistory(h, 'panel-history', entries);
+  const lns = h.historyLinesIn('panel-history');
+  const perDiff = 401;   // 差分: same 400 + add 1
+  const perWhole = 400 + 401;   // 丸ごと: del 400 + add 401
+  const sames = lns.filter(function (l) { return l.op === 'same'; }).length;
+  assert.ok(sames > 0, '先頭の更新が差分になっていない');
+  assert.ok(sames < 20 * 400, '総量の上限が効いていない');
+  assert.equal(sames % 400, 0);
+  const diffed = sames / 400;
+  assert.ok(diffed < 20);
+  assert.equal(lns.length, diffed * perDiff + (20 - diffed) * perWhole);
+  // 上限の後ろは、del を全部出してから add を全部出す。
+  const tail = lns.slice(diffed * perDiff).slice(0, perWhole);
+  assert.deepEqual(tail.map(function (l) { return l.op; }),
+    Array(400).fill('del').concat(Array(401).fill('add')));
 });
 
 test('11b. 画面のまとまりは pure_history.js の groupHistory と同じ結果になる', () => {

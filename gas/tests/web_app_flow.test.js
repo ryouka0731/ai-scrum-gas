@@ -1012,6 +1012,19 @@ test('履歴: change_log.csv が無くても本体は成功し、historyWarning 
   assert.equal(Object.prototype.hasOwnProperty.call(files, 'change_log.csv'), false);
 });
 
+test('履歴: change_log.csv が 0 バイト（空・空白のみ）でも、見出し行を書き直して記録し、警告は出さない', () => {
+  ['', ' \n\t\n'].forEach(function (empty) {
+    const { ctx, files } = createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': empty });
+    const res = ctx.apiCreatePbi(fullFields('A'));
+    assert.equal(res.ok, true, res.message);
+    assert.equal(res.historyWarning, undefined);
+    assert.equal(files['change_log.csv'].split('\n')[0], CHG_HEADER.trim());
+    const rows = histRows(ctx, files);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].action, 'create');
+  });
+});
+
 test('履歴: ヘッダーが違うと本体は成功し、historyWarning を返して change_log.csv は変えない', () => {
   const bad = 'id,at,who\n';
   const f = { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': bad };
@@ -1055,6 +1068,21 @@ test('apiGetHistory: 新しい順の entries。不正な対象は invalid。フ�
   assert.equal(plain(ctx.apiGetHistory(undefined)).reason, 'invalid');
   const none = createTestContext({ 'product_backlog.csv': headerOnlyCsv() }).ctx;
   assert.deepEqual(plain(none.apiGetHistory('PBI-001')), { ok: true, entries: [] });
+});
+
+test('apiGetHistory: ちょうど上限件なら truncated を付けず、上限を超えたときだけ付けて上限件を返す', () => {
+  const mk = (n) => CHG_HEADER + Array.from({ length: n }, function (_, i) {
+    const s = String(100 + i);
+    return 'CHG-' + s.padStart(8, '0') + ',2026-10-07 09:00:' + String(i % 60).padStart(2, '0') + ',a@x.jp,PBI-001,update,title,A' + i + ',B' + i + '\n';
+  }).join('');
+  const exact = createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': mk(200) }).ctx;
+  const r1 = plain(exact.apiGetHistory('PBI-001'));
+  assert.equal(r1.entries.length, 200);
+  assert.equal(Object.prototype.hasOwnProperty.call(r1, 'truncated'), false);
+  const over = createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': mk(201) }).ctx;
+  const r2 = plain(over.apiGetHistory('PBI-001'));
+  assert.equal(r2.entries.length, 200);
+  assert.equal(r2.truncated, true);
 });
 
 test('履歴: 差分の組み立てが例外でも本体は成功し、historyWarning を返す', () => {

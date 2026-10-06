@@ -1640,7 +1640,7 @@ function sendImpWrite(method, args, label, after, onPartial) {
       // 対象は先頭の引数（更新・解決）か、作成なら応答の id。
       var target = typeof args[0] === 'string' ? args[0] : res.id;
       if (res.ok) { after(res, mine); afterHistoryWrite(res, target, msgMark); return; }
-      if (res.reason === 'partial' && onPartial) { onPartial(res, mine); afterHistoryWrite(res, null, msgMark); return; }
+      if (res.reason === 'partial' && onPartial) { onPartial(res, mine); afterHistoryWrite(res, target, msgMark); return; }
       // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
       if (mine && impPanelState.id) {
         var latest = findImpRow(impPanelState.id);   // 古い応答なら表は戻していないので、最新のまま
@@ -2121,6 +2121,9 @@ function restoreComment(row) {
 // groupHistory / lineDiff / LINE_DIFF_MAX の写し（サーバ側の .js はブラウザから呼べない）。
 // gas/tests/kanban_history.test.js が同じ見本で結果の一致を固定している。直すときは両方を直すこと。
 var HISTORY_LINE_DIFF_MAX = 500;
+// 1回の描画で行差分に使ってよい LCS の表の大きさの合計（(n+1)*(m+1) を更新ごとに足す）。
+// 使い切った後の複数行の更新は、LCS を使わず丸ごと del → add で出す（画面の固まりを防ぐ）。
+var HISTORY_DIFF_BUDGET = 2000000;
 
 // 項目名は一覧・障害物の表の列見出しと同じ言葉（kanban_history.test.js が LIST_COLUMNS /
 // IMPEDIMENT_COLUMNS との一致を固定している）。
@@ -2329,6 +2332,7 @@ function fillHistory(content, entries, truncated) {
     setHistoryStatus(content, 'まだ履歴がありません', 'info');
     return;
   }
+  var budget = HISTORY_DIFF_BUDGET;
   historyGroups(entries).forEach(function (g) {
     var box = document.createElement('div');
     box.className = 'history-group';
@@ -2355,7 +2359,19 @@ function fillHistory(content, entries, truncated) {
         text.textContent = label + ':';
         var diff = document.createElement('div');
         diff.className = 'history-diff';
-        historyLineDiff(e.before, e.after).forEach(function (d) {
+        var beforeLines = historyLines(e.before);
+        var afterLines = historyLines(e.after);
+        var lcsCost = (beforeLines.length + 1) * (afterLines.length + 1);
+        var lcsUsed = beforeLines.length <= HISTORY_LINE_DIFF_MAX && afterLines.length <= HISTORY_LINE_DIFF_MAX;
+        var lines;
+        if (lcsUsed && lcsCost > budget) {
+          lines = beforeLines.map(function (t) { return { op: 'del', text: t }; })
+            .concat(afterLines.map(function (t) { return { op: 'add', text: t }; }));
+        } else {
+          if (lcsUsed) budget -= lcsCost;
+          lines = historyLineDiff(e.before, e.after);
+        }
+        lines.forEach(function (d) {
           var line = document.createElement('div');
           line.className = 'history-line ' + d.op;
           line.textContent = (d.op === 'del' ? '−' : d.op === 'add' ? '＋' : '　') + d.text;
