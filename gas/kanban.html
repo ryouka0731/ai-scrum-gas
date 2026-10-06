@@ -2935,14 +2935,17 @@ function fillHistory(content, entries, truncated) {
   appendHistoryPage(state);
 }
 
-/** 次の HISTORY_PAGE 件を足し、末尾（「さらに表示」か省略の注記）を描き直す。最初に足したまとまりを返す。 */
+/**
+ * 次の HISTORY_PAGE 件を足し、末尾（「さらに表示」か省略の注記）を描き直す。最初に足したまとまりを返す
+ * （先頭が前のまとまりへ続けて足しただけなら、そのまとまり）。
+ */
 function appendHistoryPage(state) {
   var end = Math.min(state.entries.length, state.shown + HISTORY_PAGE);
   var first = null;
   state.budget = HISTORY_DIFF_BUDGET;   // 予算は1回の描画（1ページ）ごと
   historyGroups(state.entries.slice(state.shown, end)).forEach(function (g) {
     var box = appendHistoryGroup(state, g);
-    if (!first) first = box;
+    if (!first) first = box || state.last.box;
   });
   state.shown = end;
   var footer = state.footer;

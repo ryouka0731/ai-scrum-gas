@@ -286,6 +286,26 @@ test('P4: 50 件の境目で同じ時刻・同じ人の更新が分かれても�
   assert.equal(items(h), 52);
 });
 
+test('P4b: 最後のページが前のまとまりへ続けて足すだけでも、焦点はそのまとまりへ移す（PR #11 cubic）', () => {
+  const h = bootBoard();
+  h.openCard('PBI-001');
+  h.historyToggle('panel-history');
+  const entries = [];
+  for (let i = 0; i < 52; i++) {
+    entries.push({ at: i < 49 ? '2026-01-01 00:00:' + String(i).padStart(2, '0') : '2026-01-02 00:00:00',
+      actor: 'a@example.com', action: 'update', field: i < 49 ? 'title' : ['title', 'priority', 'size'][i - 49], before: 'a', after: 'b' });
+  }
+  pendingOf(h, 'apiGetHistory')[0].handlers.success({ ok: true, entries: entries });
+  const more = moreButton(h)[0];
+  more.focus();   // 焦点を押したボタンに置く
+  more.listeners.click.forEach(function (fn) { fn({}); });
+  assert.equal(moreButton(h).length, 0);
+  const active = h.sandbox.document.activeElement;
+  assert.ok(active && active !== more && active.classList.contains('history-group'), '焦点が失われた: ' + (active && active.className));
+  const head = active.children.filter(function (c) { return c.classList.contains('history-head'); })[0];
+  assert.equal(head.textContent.indexOf('2026-01-02'), 0, '続けて足したまとまりではない');
+});
+
 // ---------------------------------------------------------------------------
 // S1（画面側）: 解決の取り消しは行を送らない。通知 → { undoToken }、途中で止まった操作 → { pendingId }、
 // 途中で止まった取り消しの「完了する」は同じ引数で送り直す
