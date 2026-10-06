@@ -1,0 +1,275 @@
+'use strict';
+// バグ探し C: 確認済みのバグの再現（失敗するテスト）。npm test に拾われないよう .txt にしてある。
+const test = require('node:test');
+const assert = require('node:assert/strict');
+// ---------------------------------------------------------------------------
+// テスト用の GAS フェイク（web_app_flow.test.js の createTestContext を写し、障害注入を足したもの）
+// fault は可変オブジェクトで、呼び出しの合間に書き換えられる:
+//   setContentFailAt: [n, ...]   n 回目（通算、1始まり）の setContent を失敗させる
+//   setContentFailNames: [name]  その名前の setContent を失敗させる
+//   readThrowNames: [name]       その名前の getFilesByName を例外にする
+//   lockBusy: true               tryLock が false を返す
+//   user: 'x'                    getActiveUser().getEmail() の値（既定 me@example.com、'' でログイン無し）
+//   freezeClock: true            時刻を進めない（同じ秒の書き込み）
+// ---------------------------------------------------------------------------
+const H = (function () {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const GAS_DIR = path.join(__dirname, '..');
+  const PBI_FIELDS = ['id', 'title', 'description', 'acceptance_criteria', 'priority', 'size', 'status', 'sprint', 'created_at', 'updated_at'];
+  const IMP_FIELDS = ['id', 'title', 'description', 'reported_by', 'reported_at', 'status', 'resolved_at', 'resolution', 'sprint'];
+  const CMT_FIELDS = ['id', 'target_id', 'author', 'created_at', 'body'];
+  const CHG_FIELDS = ['id', 'at', 'actor', 'target_id', 'action', 'field', 'before', 'after'];
+  const PBI_H = PBI_FIELDS.join(',');
+  const IMP_H = IMP_FIELDS.join(',');
+  const CMT_H = CMT_FIELDS.join(',');
+  const CHG_H = CHG_FIELDS.join(',');
+
+  function createCtx(files, fault) {
+    fault = fault || {};
+    let setCalls = 0;
+    let uuidN = 0;
+    let clock = Date.UTC(2026, 9, 6, 9, 0, 0);
+    function it(arr) { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; }
+    function makeFile(name) {
+      return {
+        getBlob: () => ({ getDataAsString: () => files[name] }),
+        setContent: function (content) {
+          setCalls++;
+          if ((fault.setContentFailAt || []).indexOf(setCalls) !== -1 || (fault.setContentFailNames || []).indexOf(name) !== -1) {
+            throw new Error('injected setContent failure #' + setCalls + ' ' + name);
+          }
+          files[name] = content;
+        },
+      };
+    }
+    const scrum = {
+      getFilesByName: function (name) {
+        if ((fault.readThrowNames || []).indexOf(name) !== -1) throw new Error('injected read failure ' + name);
+        return Object.prototype.hasOwnProperty.call(files, name) ? it([makeFile(name)]) : it([]);
+      },
+      getFolders: () => it([]),
+    };
+    const root = { getFoldersByName: (n) => (n === 'scrum' ? it([scrum]) : it([])) };
+    const props = { SCRUM_FOLDER_ID: 'fake' };
+    const ctx = {
+      console,
+      DriveApp: { getFolderById: () => root },
+      LockService: { getScriptLock: () => ({ tryLock: () => !fault.lockBusy, releaseLock: () => {} }) },
+      PropertiesService: { getScriptProperties: () => ({
+        getProperty: (k) => (Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null),
+        setProperty: (k, v) => { if (fault.setPropFail) throw new Error('injected setProperty failure'); props[k] = v; },
+      }) },
+      Session: {
+        getScriptTimeZone: () => 'UTC',
+        getActiveUser: () => ({ getEmail: () => (fault.user === undefined ? 'me@example.com' : fault.user) }),
+      },
+      Utilities: {
+        getUuid: () => { uuidN++; return ('0000000' + uuidN.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; },
+        formatDate: (d) => {
+          const p = (n) => (n < 10 ? '0' + n : String(n));
+          return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+        },
+      },
+    };
+    vm.createContext(ctx);
+    // new Date() は呼ぶたびに1秒進む決定的な時計にする（引数付きはそのまま）。
+    const RealDate = Date;
+    ctx.Date = function (...a) { if (a.length) return new RealDate(...a); if (!fault.freezeClock) clock += 1000; return new RealDate(clock); };
+    ctx.Date.UTC = RealDate.UTC;
+    ctx.Date.now = () => clock;
+    ctx.Date.prototype = RealDate.prototype;
+    fs.readdirSync(GAS_DIR).filter((n) => n.slice(-3) === '.js').sort().forEach((n) => {
+      vm.runInContext(fs.readFileSync(path.join(GAS_DIR, n), 'utf8'), ctx, { filename: n });
+    });
+    return { ctx, files, props, fault, setCalls: () => setCalls };
+  }
+
+  function baseFiles() {
+    return {
+      'product_backlog.csv': PBI_H + '\n', 'product_backlog_done.csv': PBI_H + '\n',
+      'impediment_log.csv': IMP_H + '\n', 'impediment_log_resolved.csv': IMP_H + '\n',
+      'comments.csv': CMT_H + '\n', 'change_log.csv': CHG_H + '\n',
+    };
+  }
+
+  /** vm の値を native に直す（別レルムの配列・オブジェクトを deepEqual で比べるため）。 */
+  function plain(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
+
+  /** テスト側の独立した RFC4180 パーサ（製品の parseCsv は使わない）。 */
+  function parse(text) {
+    const src = String(text || '').replace(/^\uFEFF/, '');
+    const rows = [];
+    let row = [];
+    let field = '';
+    let q = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (q) {
+        if (ch === '"') { if (src[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += ch;
+        continue;
+      }
+      if (ch === '"') q = true;
+      else if (ch === ',') { row.push(field); field = ''; }
+      else if (ch === '\r' && src[i + 1] === '\n') { /* CRLF は次の \n で区切る */ }
+      else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else field += ch;
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.map((r) => r.map((c) => c.replace(/\r\n/g, '\n')));
+  }
+  function rowsOf(text, fields) {
+    return parse(text).slice(1).map((r) => { const o = {}; fields.forEach((f, i) => { o[f] = i < r.length ? r[i] : ''; }); return o; });
+  }
+  function cell(v) {
+    const s = v == null ? '' : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function toCsvText(rows, fields) {
+    return [fields.join(',')].concat(rows.map((r) => fields.map((f) => cell(r[f])).join(','))).join('\n') + '\n';
+  }
+
+  /** mulberry32 */
+  function rng(seed) {
+    let a = seed >>> 0;
+    const next = () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    return { next, int: (n) => Math.floor(next() * n), pick: (arr) => arr[Math.floor(next() * arr.length)], chance: (p) => next() < p };
+  }
+
+  return { createCtx, baseFiles, plain, parse, rowsOf, toCsvText, rng, PBI_FIELDS, IMP_FIELDS, CMT_FIELDS, CHG_FIELDS, PBI_H, IMP_H, CMT_H, CHG_H };
+})();
+
+// 実行: cp gas/tests/bughunt_c_failing.test.js.txt /tmp/x.test.js では __dirname がずれるため、
+//       同じディレクトリに .test.js として複製して実行する:
+//   cp gas/tests/bughunt_c_failing.test.js.txt gas/tests/bughunt_c_failing_run.test.js && node --test gas/tests/bughunt_c_failing_run.test.js; rm gas/tests/bughunt_c_failing_run.test.js
+// ここにあるテストは、いずれも現在の製品コードで失敗する（＝バグの再現）。
+
+const { createCtx, baseFiles, plain, rowsOf, PBI_FIELDS, IMP_FIELDS, CMT_FIELDS, CHG_FIELDS } = H;
+const IMP2 = 'IMP-002,止まっている,,マヤ,2026-10-01,Open,,,sprint001\n';
+const IMP2_ROW = { id: 'IMP-002', title: '止まっている', description: '', reported_by: 'マヤ', reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: 'sprint001' };
+const full = (t) => ({ title: t, description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' });
+
+test('BUG C-1a: 解決が途中で止まり「未解決に戻す」で揃えると、履歴の最後が resolve のまま（実際は未解決）', () => {
+  const f = baseFiles();
+  f['impediment_log.csv'] += IMP2;
+  const h = createCtx(f, { setContentFailNames: ['impediment_log.csv'] });
+  assert.equal(plain(h.ctx.apiResolveImpediment('IMP-002', '直した', IMP2_ROW)).reason, 'partial');
+  h.fault.setContentFailNames = [];
+  const p = plain(h.ctx.apiGetView('impediment')).view.pending[0];
+  const res = plain(h.ctx.apiUnresolveImpediment(p.open, p.resolved));
+  assert.equal(res.ok, true);
+  assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '前提: 未解決に戻った');
+  assert.equal(f['impediment_log_resolved.csv'].indexOf('IMP-002'), -1, '前提: 解決済から消えた');
+  const last = plain(h.ctx.apiGetHistory('IMP-002')).entries[0];
+  assert.equal(last.action, 'unresolve', '最新の履歴が今の状態（未解決）と食い違う: ' + JSON.stringify(last));
+});
+
+test('BUG C-1b: 取り消しが途中で止まり「解決済として完了」で揃えると、履歴の最後が unresolve のまま（実際は解決済）', () => {
+  const f = baseFiles();
+  f['impediment_log.csv'] += IMP2;
+  const h = createCtx(f);
+  const r = plain(h.ctx.apiResolveImpediment('IMP-002', '直した', IMP2_ROW));
+  h.fault.setContentFailNames = ['impediment_log_resolved.csv'];
+  assert.equal(plain(h.ctx.apiUnresolveImpediment(r.moved, r.resolvedRow)).reason, 'partial');
+  h.fault.setContentFailNames = [];
+  const p = plain(h.ctx.apiGetView('impediment')).view.pending[0];
+  assert.equal(plain(h.ctx.apiResolveImpediment(p.id, p.resolved.resolution, p.open)).ok, true);
+  assert.equal(f['impediment_log.csv'].indexOf('IMP-002'), -1, '前提: 未解決から消えた');
+  const last = plain(h.ctx.apiGetHistory('IMP-002')).entries[0];
+  assert.equal(last.action, 'resolve', '最新の履歴が今の状態（解決済）と食い違う: ' + JSON.stringify(last));
+});
+
+test('BUG C-2: 雛形の PBI-001 と同じ ID の本物の行は、盤面に出るのに状態変更・削除が永久に conflict になる', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-001,（PBIタイトル）,（説明）,（受入基準）,Critical/High/Medium/Low,0,New,,YYYY-MM-DD,YYYY-MM-DD\n' +
+    'PBI-001,本物,,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const card = plain(h.ctx.apiGetView('board')).view.columns[0].cards[0];
+  assert.equal(card.title, '本物', '前提: 盤面には本物の行だけが出る');
+  const moved = plain(h.ctx.apiUpdateStatus('PBI-001', 'Ready', card.updated_at));
+  assert.equal(moved.ok, true, '画面が見た updated_at で動かせない: ' + moved.reason);
+});
+
+test('BUG C-3: 同じ ID の行が2つあると、削除は1つ目を消すのに removed は2つ目を返し、取り消しで消した行を戻せない', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,first,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  const h = createCtx(f);
+  const del = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:00'));
+  assert.equal(del.ok, true);
+  const left = rowsOf(f['product_backlog.csv'], PBI_FIELDS).map((r) => r.title);
+  assert.deepEqual(left, ['second'], '前提: 1つ目（first）が消えた');
+  assert.equal(del.removed.title, 'first', 'removed（取り消し用）が実際に消した行と違う: ' + del.removed.title);
+});
+
+test('BUG C-3b: 同じ ID の行が2つあると、削除の履歴が delete ではなく存在しない update（title first→second）になる', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,first,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-002,second,,,,,New,,2026-10-01 00:00:00,2026-10-02 00:00:00\n';
+  const h = createCtx(f);
+  assert.equal(plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:00')).ok, true);
+  const hist = rowsOf(f['change_log.csv'], CHG_FIELDS);
+  assert.ok(hist.every((r) => r.action !== 'update'), '削除で update の履歴が出た: ' + JSON.stringify(hist));
+});
+
+test('BUG C-4: 作成の書き込みが失敗しても高水位だけ進み、次の作成で ID が欠番になる', () => {
+  const f = baseFiles();
+  const h = createCtx(f, { setContentFailNames: ['product_backlog.csv'] });
+  assert.equal(plain(h.ctx.apiCreatePbi(full('A'))).reason, 'error');
+  h.fault.setContentFailNames = [];
+  const ok = plain(h.ctx.apiCreatePbi(full('B')));
+  assert.equal(ok.id, 'PBI-001', '失敗した作成が PBI-001 を消費した（高水位: ' + h.props.LAST_PBI_ID + '）');
+});
+
+test('BUG C-5: 自分のコメントでも ID・日時が正規形でない行（ローカルで書いたもの）は、削除できるのに取り消せず失われる', () => {
+  const f = baseFiles();
+  f['comments.csv'] += 'CMT-ABCDEF12,PBI-002,me@example.com,2026-10-06 10:00:00,ローカルで書いた\n';
+  const h = createCtx(f);
+  const d = plain(h.ctx.apiDeleteComment('CMT-ABCDEF12'));
+  assert.equal(d.ok, true, '前提: 削除はできる');
+  const u = plain(h.ctx.apiRestoreComment(d.removed));
+  assert.equal(u.ok, true, '削除の取り消しが拒否され、コメントが失われた: ' + u.message);
+});
+
+test('BUG C-6: 未解決に雛形 IMP-001 と本物の IMP-001 があると、本物の編集が履歴に残らず警告も出ない', () => {
+  const f = baseFiles();
+  f['impediment_log.csv'] += 'IMP-001,（障害物タイトル）,（詳細説明）,（報告者）,YYYY-MM-DD,Open,,（解決策）,sprint001\n' +
+    'IMP-001,本物,,マヤ,2026-10-01,Open,,,\n';
+  const h = createCtx(f);
+  const exp = { id: 'IMP-001', title: '本物', description: '', reported_by: 'マヤ', reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: '' };
+  const res = plain(h.ctx.apiUpdateImpediment('IMP-001', { title: '本物2', description: '', reported_by: 'マヤ', sprint: '' }, exp));
+  assert.equal(res.ok, true);
+  assert.ok(f['impediment_log.csv'].indexOf('本物2') !== -1, '前提: 書けている');
+  const hist = rowsOf(f['change_log.csv'], CHG_FIELDS);
+  assert.ok(res.historyWarning || hist.some((r) => r.target_id === 'IMP-001' && r.field === 'title'),
+    '編集が記録されず、historyWarning も無い');
+});
+
+test('BUG C-7: change_log.csv の末尾が閉じていない引用符で終わると、以後の履歴が黙って既存セルに飲み込まれる', () => {
+  const f = baseFiles();
+  f['change_log.csv'] += 'CHG-0000000a,2026-10-01 00:00:00,a,PBI-002,update,title,"途中で切れた\n';
+  f['product_backlog.csv'] += 'PBI-002,t,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const res = plain(h.ctx.apiUpdateStatus('PBI-002', 'Ready', '2026-10-01 00:00:00'));
+  assert.equal(res.ok, true);
+  const entries = plain(h.ctx.apiGetHistory('PBI-002')).entries;
+  assert.ok(res.historyWarning || entries.some((e) => e.field === 'status' && e.after === 'Ready'),
+    '記録が読めないのに historyWarning も無い: ' + JSON.stringify(entries).slice(0, 200));
+});
+
+test('BUG C-8: 見出しより列が多い行（引用されていないカンマ）は、別の行の書き込みで黙って末尾のセルが消える', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,題,説明, カンマ入り,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-003,別,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const res = plain(h.ctx.apiUpdateStatus('PBI-003', 'Ready', '2026-10-01 00:00:00'));
+  const line = f['product_backlog.csv'].split('\n').find((l) => l.indexOf('PBI-002') === 0);
+  assert.ok(!res.ok || line.split(',').length === 11, '書き戻しで PBI-002 の行の11個目のセルが消えた: ' + line);
+});
