@@ -104,13 +104,14 @@ test('解決したら通知が出て、取り消すと apiUnresolveImpediment �
   h.setValue('i-resolution', '再起動した');
   h.click('imp-panel-resolve');
   const resolvedRow = Object.assign({}, ROW, { status: 'Resolved', resolution: '再起動した' });
-  latest(h).handlers.success(Object.assign(impResponse([], [resolvedRow]), { moved: ROW, resolvedRow: resolvedRow }));
+  latest(h).handlers.success(Object.assign(impResponse([], [resolvedRow]), { moved: ROW, resolvedRow: resolvedRow, undoToken: 'tok-ROW' }));
   assert.equal(h.hiddenOf('imp-panel'), true);
   assert.equal(h.hiddenOf('toast'), false);
   h.click('toast-undo');
   const c = latest(h);
   assert.equal(c.method, 'apiUnresolveImpediment');
-  assert.deepEqual(c.args, [ROW, resolvedRow]);
+  // 2巡目 H1（S1）: 行の中身は送らず、サーバが預けた鍵だけを送る。
+  assert.deepEqual(JSON.parse(JSON.stringify(c.args)), [{ undoToken: 'tok-ROW' }]);
 });
 
 test('解決済の行は押せない（data-id を持たない）', () => {
@@ -157,7 +158,7 @@ test('解決策の入力中は他の4欄を塞ぎ、通知の題は編集欄で�
   h.setValue('i-resolution', '再起動した');
   h.click('imp-panel-resolve');
   const resolvedRow = Object.assign({}, ROW, { status: 'Resolved', resolution: '再起動した' });
-  latest(h).handlers.success(Object.assign(impResponse([], [resolvedRow]), { moved: ROW, resolvedRow: resolvedRow }));
+  latest(h).handlers.success(Object.assign(impResponse([], [resolvedRow]), { moved: ROW, resolvedRow: resolvedRow, undoToken: 'tok-ROW' }));
   assert.ok(h.textOf('toast-text').indexOf('止まっている') !== -1);
   assert.ok(h.textOf('toast-text').indexOf('書きかけの題') === -1);
 });
@@ -226,7 +227,7 @@ function sendResolve(h) {
 
 test('取り消しが途中で止まったら、「完了する」の通知を出し、押すと同じ引数で取り消しを送り直す', () => {
   const h = onImpediment();
-  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW, undoToken: 'tok-ROW' }));
   h.click('toast-undo');
   const undo = latest(h);
   assert.equal(undo.method, 'apiUnresolveImpediment');
@@ -238,7 +239,7 @@ test('取り消しが途中で止まったら、「完了する」の通知を�
   const retry = latest(h);
   assert.notEqual(retry, undo);
   assert.equal(retry.method, 'apiUnresolveImpediment');
-  assert.deepEqual(retry.args, [ROW, RESOLVED_ROW]);
+  assert.deepEqual(JSON.parse(JSON.stringify(retry.args)), [{ undoToken: 'tok-ROW' }]);   // 2巡目 H1（S1）: 同じ鍵で送り直す
 });
 
 test('解決が途中で止まったら、パネルを閉じても「完了する」の通知から同じ引数で解決を送り直せる', () => {
@@ -268,7 +269,7 @@ test('解決が途中で止まったとき、まだ同じパネルなら閉じ�
 
 test('通常の通知のボタンは「取り消す」のまま', () => {
   const h = onImpediment();
-  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW, undoToken: 'tok-ROW' }));
   assert.ok(h.textTreeOf('toast-undo').indexOf('取り消す') !== -1);
   assert.ok(h.textTreeOf('toast-undo').indexOf('完了する') === -1);
 });
@@ -340,7 +341,7 @@ test('保存の送信中に出した読み直しが先に届いても、あと�
 
 test('「完了する」の通知はチェックのアイコン、「取り消す」は元のアイコン', () => {
   const h = onImpediment();
-  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW, undoToken: 'tok-ROW' }));
   const undoIcon = h.iconPathOf('toast-undo');
   h.click('toast-undo');
   latest(h).handlers.success(partial([ROW], [RESOLVED_ROW]));
@@ -380,7 +381,7 @@ test('「完了する」の通知が出ている間に別の通知が来て、�
   h.setValue('i-resolution', '直した');
   h.click('imp-panel-resolve');
   // IMP-002 は途中で止まったまま（応答のビューの「途中で止まった操作」に残っている）。
-  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3], [PENDING2]), { moved: ROW3, resolvedRow: RESOLVED_ROW3 }));
+  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3], [PENDING2]), { moved: ROW3, resolvedRow: RESOLVED_ROW3, undoToken: 'tok-ROW3' }));
   assert.ok(h.textOf('toast-text').indexOf('IMP-003') !== -1 && h.textOf('toast-text').indexOf('解決しました') !== -1, h.textOf('toast-text'));
   assert.ok(h.textTreeOf('toast-undo').indexOf('取り消す') !== -1);
   assert.ok(h.textOf('message').indexOf('もう取り消せません') === -1, '普通が sticky を上書きしたことにしない: ' + h.textOf('message'));
@@ -416,7 +417,7 @@ test('Escape では「完了する」の通知を閉じない', () => {
 
 test('取り消しが途中で止まったときの「完了する」も消えない', () => {
   const h = onImpediment();
-  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  sendResolve(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW, undoToken: 'tok-ROW' }));
   h.click('toast-undo');
   latest(h).handlers.success(partial([ROW], [RESOLVED_ROW]));
   h.flushTimers();
@@ -426,12 +427,12 @@ test('取り消しが途中で止まったときの「完了する」も消え�
 
 test('普通の通知が普通の通知を上書きするときは、従来どおり「もう取り消せません」を出す', () => {
   const h = onImpediment({ rows: [ROW, ROW3] });
-  sendResolve(h).handlers.success(Object.assign(impResponse([ROW3], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  sendResolve(h).handlers.success(Object.assign(impResponse([ROW3], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW, undoToken: 'tok-ROW' }));
   h.clickImpRow('IMP-003');
   h.click('imp-panel-resolve');
   h.setValue('i-resolution', '直した');
   h.click('imp-panel-resolve');
-  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3]), { moved: ROW3, resolvedRow: RESOLVED_ROW3 }));
+  latest(h).handlers.success(Object.assign(impResponse([], [RESOLVED_ROW, RESOLVED_ROW3]), { moved: ROW3, resolvedRow: RESOLVED_ROW3, undoToken: 'tok-ROW3' }));
   assert.ok(h.textOf('message').indexOf('もう取り消せません') !== -1, h.textOf('message'));
 });
 
@@ -472,16 +473,17 @@ test('「解決済として完了」は、解決策と未解決の行を引数�
   const c = latest(h);
   assert.equal(c.method, 'apiResolveImpediment');
   assert.deepEqual(c.args, ['IMP-002', '再起動した', ROW]);
-  c.handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW }));
+  c.handlers.success(Object.assign(impResponse([], [RESOLVED_ROW]), { moved: ROW, resolvedRow: RESOLVED_ROW, undoToken: 'tok-ROW' }));
   assert.ok(h.textTreeOf('table-view').indexOf('途中で止まった操作') === -1, '欄が残っている');
 });
 
-test('「未解決に戻す」は、未解決の行と解決済の行を引数に apiUnresolveImpediment を呼ぶ。成功すれば欄は消える', () => {
+// 2巡目 H1（S1）: 行の中身は送らず、途中で止まった障害物の id だけを送る（サーバがファイルの行から戻す）。
+test('「未解決に戻す」は、{ pendingId } を引数に apiUnresolveImpediment を呼ぶ。成功すれば欄は消える', () => {
   const h = reloaded();
   h.clickPending('IMP-002', 'unresolve');
   const c = latest(h);
   assert.equal(c.method, 'apiUnresolveImpediment');
-  assert.deepEqual(c.args, [ROW, RESOLVED_ROW]);
+  assert.deepEqual(JSON.parse(JSON.stringify(c.args)), [{ pendingId: 'IMP-002' }]);
   c.handlers.success(impResponse([ROW], [], []));
   assert.ok(h.textTreeOf('table-view').indexOf('途中で止まった操作') === -1, '欄が残っている');
 });

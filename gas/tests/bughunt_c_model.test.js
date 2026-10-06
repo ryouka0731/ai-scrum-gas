@@ -684,12 +684,14 @@ function runImpedimentSeed(seed, steps) {
       const row = r.pick(view.view.open);
       label = 'resolve ' + row.id;
       res = plain(h.ctx.apiResolveImpediment(row.id, r.chance(0.9) ? '直した,\n2行' : '  ', row));
-      if (res.ok || res.reason === 'partial') { if (res.moved) undo.push([res.moved, res.resolvedRow]); }
+      // 2巡目 H1（S1）: 取り消しは鍵（成功）か、途中で止まった障害物の id（partial）で送る。行の中身は送らない。
+      if (res.ok && res.undoToken) undo.push({ undoToken: res.undoToken });
+      if (res.reason === 'partial') undo.push({ pendingId: row.id });
     } else if (op === 3 && undo.length) {
       const u = r.pick(undo);
       usedUndo = u;
-      label = 'unresolve ' + u[0].id;
-      res = plain(h.ctx.apiUnresolveImpediment(u[0], u[1]));
+      label = 'unresolve ' + JSON.stringify(u);
+      res = plain(h.ctx.apiUnresolveImpediment(u));
     } else {
       label = 'bad ' + step;
       res = plain(h.ctx.apiUpdateImpediment(r.pick(['IMP-001', 'PBI-002', null, 'IMP-999']), { title: 't', reported_by: 'r' }, {}));
@@ -716,7 +718,7 @@ function runImpedimentSeed(seed, steps) {
       Object.keys(fault).forEach((k) => delete fault[k]);
       const again = label.indexOf('resolve ') === 0
         ? plain(h.ctx.apiResolveImpediment(label.slice(8), '直した,\n2行', rowsOf(files['impediment_log.csv'], IMP_FIELDS).find((x) => x.id === label.slice(8))))
-        : plain(h.ctx.apiUnresolveImpediment(usedUndo[0], usedUndo[1]));   // 同じ ID の古い組ではなく、送った組
+        : plain(h.ctx.apiUnresolveImpediment(usedUndo));   // 同じ ID の古い鍵ではなく、送った鍵（partial なら預け直されている）
       assert.equal(again.ok, true, ctxLabel + ': 「完了する」で揃わない ' + JSON.stringify(again).slice(0, 200));
       assert.deepEqual(plain(h.ctx.apiGetView('impediment')).view.pending, [], ctxLabel + ': pending が残った');
     }

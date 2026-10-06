@@ -601,11 +601,17 @@ function withImpedimentWrite_(first, mutate) {
       if (result.historyKind === 'unresolve') return moveEvent('unresolve', written.open);
       return [];
     };
+    // 書き込みを終えられなかったとき（1つ目の失敗・途中で停止）に、書く前に済ませた後始末（取り消しの鍵の破棄）を戻す。
+    const undoBeforeWrite = function () {
+      if (typeof result.onWriteFailed !== 'function') return;
+      try { result.onWriteFailed(); } catch (e2) { /* best-effort */ }
+    };
     for (let i = 0; i < writes.length; i++) {
       try {
         writeScrumFile_(writes[i].name, toCsv(writes[i].rows, IMPEDIMENT_FIELDS));
         written[writes[i].key] = true;
       } catch (e) {
+        undoBeforeWrite();
         if (i === 0) throw e;
         // 1つ目は書けている。画面には書けた側を反映して返す。
         if (writes[0].key === 'open') open = writes[0].rows; else resolved = writes[0].rows;
@@ -619,8 +625,10 @@ function withImpedimentWrite_(first, mutate) {
     completed = true;
     if (result.open) open = result.open;
     if (result.resolved) resolved = result.resolved;
+    // 書けた直後（まだロックの中）の後始末（取り消しの鍵の預け入れ）。返した項目は応答に足す。
+    const after = typeof result.afterWrite === 'function' ? result.afterWrite() : null;
     const warning = appendHistory_(historyEvents);
-    return Object.assign({ ok: true }, impedimentPayload_(open, resolved), result.extra || {}, warning ? { historyWarning: warning } : {});
+    return Object.assign({ ok: true }, impedimentPayload_(open, resolved), result.extra || {}, after || {}, warning ? { historyWarning: warning } : {});
   } catch (e) {
     const out = { ok: false, reason: 'error', message: e.message };
     if (open && resolved) Object.assign(out, impedimentPayload_(open, resolved));
@@ -713,22 +721,101 @@ function apiResolveImpediment(id, resolution, expected) {
           : impedimentMessage_(r.reason, '', id);
       return { ok: false, reason: r.reason, message: message };
     }
+    const held = JSON.stringify({ moved: r.moved, resolvedRow: r.resolvedRow });
     return { ok: true, open: r.open, resolved: r.resolved, extra: { moved: r.moved, resolvedRow: r.resolvedRow },
-      historyKind: 'resolve', historyId: String(id || '').trim() };
+      historyKind: 'resolve', historyId: String(id || '').trim(),
+      // 両方のファイルを書けてから預ける（途中で止まった解決は「途中で止まった操作」の欄から揃える）。
+      afterWrite: function () {
+        try {
+          const token = String(Utilities.getUuid());
+          CacheService.getScriptCache().put(IMP_UNDO_KEY_PREFIX + token, held, IMP_UNDO_TTL_SECONDS);
+          return { undoToken: token };
+        } catch (e) {
+          return { undoToken: null };
+        }
+      } };
   });
 }
 
-/** 解決を取り消す。未解決へ戻してから、解決済から消す。通知の「取り消す」から呼ばれる。 */
-function apiUnresolveImpediment(moved, resolvedRow) {
+/** 解決の取り消し用に解決前の行を預ける時間（秒）と鍵の接頭辞。PBI の削除の取り消しと同じ作り。 */
+const IMP_UNDO_TTL_SECONDS = 600;
+const IMP_UNDO_KEY_PREFIX = 'impundo:';
+
+/** 預けた解決前の行を鍵で引く。無い・期限切れ・壊れているときは null。 */
+function takeHeldImpediment_(token) {
+  try {
+    const text = CacheService.getScriptCache().get(IMP_UNDO_KEY_PREFIX + token);
+    if (!text) return null;
+    const held = JSON.parse(text);
+    return held && held.moved && held.resolvedRow ? held : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** apiUnresolveImpediment の引数の形。{ undoToken } か { pendingId } の1つだけ（値は空でない文字列）。それ以外は null。 */
+function unresolveArgKind_(arg) {
+  if (Object.prototype.toString.call(arg) !== '[object Object]') return null;
+  const keys = Object.keys(arg);
+  if (keys.length !== 1 || (keys[0] !== 'undoToken' && keys[0] !== 'pendingId')) return null;
+  const value = arg[keys[0]];
+  if (typeof value !== 'string' || value === '') return null;
+  return keys[0];
+}
+
+/**
+ * 解決を取り消す。未解決へ戻してから、解決済から消す。
+ *
+ * 引数は次のどちらか1つだけ。ブラウザが送る行の中身は受け取らない（google.script.run はブラウザから
+ * 任意の値で呼べるため、行を受け取ると検証も履歴も通さずに任意の内容へ書き換えられる）。
+ * - { undoToken }: 通知の「取り消す」。apiResolveImpediment が預けた解決前の行を戻す。鍵は書く前に捨て
+ *   （捨てられなければ reason 'error' で断る）、書き終えられなければ（失敗・途中で停止）預け直す。
+ *   無い・期限切れは reason 'expired'。
+ * - { pendingId }: 「途中で止まった操作」の「未解決に戻す」。同じ障害物が両方のファイルにあるときだけ、
+ *   未解決側の行を正として解決済から消す（planUnresolvePending）。
+ * それ以外の形は reason 'invalid'。
+ */
+function apiUnresolveImpediment(arg) {
+  const kind = unresolveArgKind_(arg);
   return withImpedimentWrite_('open', function (open, resolved) {
-    const r = planUnresolve(open, resolved, moved, resolvedRow);
+    if (!kind) return { ok: false, reason: 'invalid', message: '取り消す内容が不正です。' };
+    let r;
+    let id;
+    let consume = null;
+    if (kind === 'undoToken') {
+      const token = arg.undoToken;
+      const held = takeHeldImpediment_(token);
+      if (!held) return { ok: false, reason: 'expired', message: '取り消しの期限が切れました。' };
+      id = String(held.moved.id || '').trim();
+      r = planUnresolve(open, resolved, held.moved, held.resolvedRow);
+      consume = { key: IMP_UNDO_KEY_PREFIX + token, text: JSON.stringify(held) };
+    } else {
+      id = String(arg.pendingId).trim();
+      r = planUnresolvePending(open, resolved, id);
+    }
     if (!r.ok) {
+      // 途中で止まった状態でない（not_pending）は、画面が見た後に状態が変わった競合として返す（reason の語彙を増やさない）。
+      if (r.reason === 'not_pending') {
+        return { ok: false, reason: 'conflict', message: '途中で止まった操作ではありません。最新の内容に更新しました。' };
+      }
       const message = r.reason === 'invalid' ? '取り消す内容が不正です。'
         : r.reason === 'conflict' ? '解決したあとに他の変更が入っています。取り消しはしません。'
-        : impedimentMessage_(r.reason, '', (moved || {}).id);
+        : impedimentMessage_(r.reason, '', id);
       return { ok: false, reason: r.reason, message: message };
     }
-    return { ok: true, open: r.open, resolved: r.resolved, historyKind: 'unresolve', historyId: String((moved || {}).id || '').trim() };
+    const out = { ok: true, open: r.open, resolved: r.resolved, historyKind: 'unresolve', historyId: id };
+    if (consume) {
+      // 鍵は書く前に捨てる（一度しか使えない保証を、捨てられたことで確かめる）。
+      try {
+        CacheService.getScriptCache().remove(consume.key);
+      } catch (e) {
+        return { ok: false, reason: 'error', message: '取り消しの準備に失敗しました。少し待ってから、もう一度お試しください。' };
+      }
+      out.onWriteFailed = function () {
+        CacheService.getScriptCache().put(consume.key, consume.text, IMP_UNDO_TTL_SECONDS);
+      };
+    }
+    return out;
   });
 }
 

@@ -374,18 +374,23 @@ test('apiResolveImpediment: 同じ ID で中身が違う行が両方にあれば
   assert.match(e.scrumSpec.files['impediment_log.csv'], /IMP-001,詰まり/);
 });
 
+// 2巡目 H1（S1）で引数を { undoToken } / { pendingId } に変えた（行を受け取らない）。
+// 競合は解決済の行をファイル側で書き換えて作り、不在は { pendingId } で確かめる。
 test('apiUnresolveImpediment: 解決→取り消しで元に戻る。不正な入力・競合・不在はそれぞれの案内', () => {
-  const e = makeEnv(scrum());
+  const s = scrum();
+  const e = makeEnv(s);
   const res = e.ctx.apiResolveImpediment('IMP-001', '直した', impRow('IMP-001', '詰まり'));
   assert.equal(res.ok, true, JSON.stringify(res));
-  const moved = J(res.moved), resolvedRow = J(res.resolvedRow);
   let r = e.ctx.apiUnresolveImpediment(null, null);
   assert.equal(r.reason, 'invalid'); assert.match(r.message, /取り消す内容が不正/);
-  r = e.ctx.apiUnresolveImpediment(moved, Object.assign({}, resolvedRow, { resolution: '書き換えられた' }));
+  const original = s.files['impediment_log_resolved.csv'];
+  s.files['impediment_log_resolved.csv'] = original.replace('直した', '書き換えられた');
+  r = e.ctx.apiUnresolveImpediment({ undoToken: res.undoToken });
   assert.equal(r.reason, 'conflict'); assert.match(r.message, /取り消しはしません/);
-  r = e.ctx.apiUnresolveImpediment(Object.assign({}, moved, { id: 'IMP-050' }), Object.assign({}, resolvedRow, { id: 'IMP-050' }));
+  s.files['impediment_log_resolved.csv'] = original;
+  r = e.ctx.apiUnresolveImpediment({ pendingId: 'IMP-050' });
   assert.equal(r.reason, 'not_found'); assert.match(r.message, /見つかりません/);
-  r = e.ctx.apiUnresolveImpediment(moved, resolvedRow);
+  r = e.ctx.apiUnresolveImpediment({ undoToken: res.undoToken });
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.match(e.scrumSpec.files['impediment_log.csv'], /IMP-001,詰まり/);
   assert.ok(!/IMP-001/.test(e.scrumSpec.files['impediment_log_resolved.csv']));
@@ -445,7 +450,7 @@ test('途中で止まった解決を「未解決に戻す」で揃えたら、�
   e.ctx.apiResolveImpediment('IMP-001', '直した', impRow('IMP-001', '詰まり'));
   delete s.failWrite;
   const pending = J(e.ctx.apiGetView('impediment').view.pending)[0];
-  const r = e.ctx.apiUnresolveImpediment(pending.open, pending.resolved);
+  const r = e.ctx.apiUnresolveImpediment({ pendingId: pending.id });   // 2巡目 H1（S1）: 行ではなく id を送る
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.ok(!/IMP-001/.test(s.files['impediment_log_resolved.csv']));
   assert.match(s.files['impediment_log.csv'], /IMP-001/);

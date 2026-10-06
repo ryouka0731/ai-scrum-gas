@@ -165,7 +165,7 @@ test('C-1a: 解決が途中で止まり「未解決に戻す」で揃えると�
   assert.equal(plain(h.ctx.apiResolveImpediment('IMP-002', '直した', IMP2_ROW)).reason, 'partial');
   h.fault.setContentFailNames = [];
   const p = plain(h.ctx.apiGetView('impediment')).view.pending[0];
-  const res = plain(h.ctx.apiUnresolveImpediment(p.open, p.resolved));
+  const res = plain(h.ctx.apiUnresolveImpediment({ pendingId: p.id }));   // 2巡目 H1（S1）: 行ではなく id
   assert.equal(res.ok, true);
   assert.ok(f['impediment_log.csv'].indexOf('IMP-002') !== -1, '前提: 未解決に戻った');
   assert.equal(f['impediment_log_resolved.csv'].indexOf('IMP-002'), -1, '前提: 解決済から消えた');
@@ -179,7 +179,7 @@ test('C-1b: 取り消しが途中で止まり「解決済として完了」で�
   const h = createCtx(f);
   const r = plain(h.ctx.apiResolveImpediment('IMP-002', '直した', IMP2_ROW));
   h.fault.setContentFailNames = ['impediment_log_resolved.csv'];
-  assert.equal(plain(h.ctx.apiUnresolveImpediment(r.moved, r.resolvedRow)).reason, 'partial');
+  assert.equal(plain(h.ctx.apiUnresolveImpediment({ undoToken: r.undoToken })).reason, 'partial');   // 2巡目 H1（S1）: 鍵
   h.fault.setContentFailNames = [];
   const p = plain(h.ctx.apiGetView('impediment')).view.pending[0];
   assert.equal(plain(h.ctx.apiResolveImpediment(p.id, p.resolved.resolution, p.open)).ok, true);

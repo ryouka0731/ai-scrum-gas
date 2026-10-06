@@ -2026,7 +2026,13 @@ function showResolveOutcome(id, resolution, expected, res) {
   if (res.ok) {
     // 通知の題は送った側の行から取る（編集欄の値ではない）。
     var title = (res.moved && res.moved.title) || (expected && expected.title) || '';
-    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); },
+    // 取り消しはサーバが預かった解決前の行を鍵（undoToken）で戻す。預けられなかったときは取り消しを出さない。
+    if (!res.undoToken) {
+      setMessage(id + '「' + title + '」を解決しました。', 'info');
+      return;
+    }
+    var undoArg = { undoToken: res.undoToken };
+    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(id, undoArg); },
       undefined, undefined, false, id);
     return;
   }
@@ -2116,29 +2122,33 @@ function retryResolveImp(id, resolution, expected) {
     .apiResolveImpediment(id, resolution, expected);
 }
 
-function unresolveImp(moved, resolvedRow) {
-  if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
-  if (impSettlingNow(moved.id)) return;
-  var key = String(moved.id || '').trim();
+/**
+ * 解決を取り消す（未解決に戻す）。arg はサーバへそのまま送る { undoToken } か { pendingId }。
+ * 行の中身は送らない（サーバが預かった行・ファイルの行から戻す）。途中で止まったら同じ arg で送り直す。
+ */
+function unresolveImp(id, arg) {
+  if (!id || !arg) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  if (impSettlingNow(id)) return;
+  var key = String(id || '').trim();
   markImpBusy(key, true);
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
-  setMessage(moved.id + ' を戻しています…', 'info');
+  setMessage(id + ' を戻しています…', 'info');
   google.script.run
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
       markImpBusy(key, false);
       if (res.ok || res.reason === 'partial') writeSeq++;
-      applyImpResponse(res, issued, commentSeen, moved.id);
-      setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
+      applyImpResponse(res, issued, commentSeen, id);
+      setMessage(res.ok ? id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
       if (res.reason === 'partial') {
         // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
-        showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
-          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', moved.id);
+        showUndoToast(id + ' の取り消しが途中で止まりました。',
+          function () { unresolveImp(id, arg); }, '完了する', 'check', id);
       }
-      afterHistoryWrite(res, res.ok ? moved.id : null, msgMark);
+      afterHistoryWrite(res, res.ok ? id : null, msgMark);
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
@@ -2146,7 +2156,7 @@ function unresolveImp(moved, resolvedRow) {
       pruneImpOverlay();
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
-    .apiUnresolveImpediment(moved, resolvedRow);
+    .apiUnresolveImpediment(arg);
 }
 
 // --- コメント ---------------------------------------------------------------
@@ -3287,7 +3297,7 @@ function pendingSection(pending) {
     back.type = 'button';
     fillButton(back, 'undo', '未解決に戻す');
     back.disabled = impBusyId(p.id);
-    back.addEventListener('click', function () { unresolveImp(p.open, p.resolved); });
+    back.addEventListener('click', function () { unresolveImp(p.id, { pendingId: p.id }); });
     actionTd.appendChild(done);
     actionTd.appendChild(back);
     tr.appendChild(actionTd);

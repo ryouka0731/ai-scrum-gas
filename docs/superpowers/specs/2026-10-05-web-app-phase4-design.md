@@ -111,6 +111,16 @@ Drive に複数ファイルのトランザクションは無い。**「足して
 - `moved.id` が `IMP-\d+` でない、`moved.title` が空、`moved.id` と `resolvedRow.id` が違う、のいずれかなら `invalid`
 - open に戻すのは `moved` のうち `IMPEDIMENT_FIELDS` の列だけ
 
+> **追記（2026-10-07）**: 取り消しはブラウザが送る行を受け取らない形に変えた（PBI の削除の取り消しと同じ理由。
+> 送られた `moved` をそのまま書くと、検証も履歴も通さずに任意の内容へ書き換えられた）。
+> - 解決の応答は `moved` / `resolvedRow`（表示用）に加えて `undoToken` を返す。サーバは解決前の行を
+>   `CacheService`（`impundo:` + 鍵、600 秒）に預ける。預けられなければ `undoToken: null`（取り消しの通知を出さない）
+> - `apiUnresolveImpediment(arg)` の `arg` は `{ undoToken }` か `{ pendingId }` のどちらか1つだけ。それ以外の形は `invalid`
+>   - `{ undoToken }`: 預かった行を戻す。鍵は書く前に捨て（捨てられなければ `error`）、書き終えられなければ
+>     （失敗・`partial`）預け直す。`partial` の「完了する」は同じ鍵で送り直す。無い・期限切れは `expired`
+>   - `{ pendingId }`: 「途中で止まった操作」の「未解決に戻す」。同じ障害物が両方のファイルにあるときだけ、
+>     未解決側の行を正として解決済から消す。既に揃っていれば何も書かずに成功、それ以外は `conflict`
+
 ### 追記（2026-10-06）
 未解決から隠すのは、解決済に ID と中身（id・タイトル・説明・報告者・報告日・スプリント）が同じ行があるときだけ。
 その状態は「途中で止まった操作」として画面に出し、「解決済として完了」「未解決に戻す」で完了できる
@@ -123,8 +133,8 @@ Drive に複数ファイルのトランザクションは無い。**「足して
 ```
 apiCreateImpediment(fields)                     → { ok, view, summary, id }
 apiUpdateImpediment(id, fields, expected)       → { ok, view, summary }
-apiResolveImpediment(id, resolution, expected)  → { ok, view, summary, moved, resolvedRow }
-apiUnresolveImpediment(moved, resolvedRow)      → { ok, view, summary }
+apiResolveImpediment(id, resolution, expected)  → { ok, view, summary, moved, resolvedRow, undoToken }
+apiUnresolveImpediment({ undoToken } | { pendingId }) → { ok, view, summary }   （2026-10-07 から。上の追記）
 ```
 
 失敗時は `{ ok:false, reason, message, view?, summary? }`。`reason` は

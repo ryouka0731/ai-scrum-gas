@@ -211,15 +211,17 @@ test('障害物の更新: タイトルが空なら invalid で断り、ファイ
 });
 
 // web_app.js apiUnresolveImpediment の文面（709・710行）
+// 2巡目 H1（S1）で引数を { undoToken } / { pendingId } に変えた。解決後に変わった行はファイル側で作る。
 test('解決の取り消し: 不正な内容と、解決後に変わった行で、それぞれの文面を返す', () => {
-  const { ctx } = createCtx(impFiles());
+  const files = impFiles();
+  const { ctx } = createCtx(files);
   const res = ctx.apiResolveImpediment('IMP-001', '直した', impExpected());
   assert.equal(res.ok, true, JSON.stringify(res));
   const inv = ctx.apiUnresolveImpediment({ id: 'bad', title: 'x' }, { id: 'bad' });
   assert.equal(inv.reason, 'invalid');
   assert.equal(inv.message, '取り消す内容が不正です。');
-  const changed = Object.assign({}, res.resolvedRow, { resolution: '別の解決策' });
-  const con = ctx.apiUnresolveImpediment(res.moved, changed);
+  files['impediment_log_resolved.csv'] = files['impediment_log_resolved.csv'].replace('直した', '別の解決策');
+  const con = ctx.apiUnresolveImpediment({ undoToken: res.undoToken });
   assert.equal(con.reason, 'conflict');
   assert.equal(con.message, '解決したあとに他の変更が入っています。取り消しはしません。');
 });

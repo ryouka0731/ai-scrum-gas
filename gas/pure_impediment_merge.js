@@ -146,6 +146,10 @@ function planResolve(openRows, resolvedRows, id, resolution, expected, todayText
   };
 }
 
+/**
+ * 解決の取り消しの計画。moved（解決前の行）と resolvedRow（解決で書いた行）は、サーバが預かった値か
+ * ファイルから作った値を渡すこと（apiUnresolveImpediment はブラウザが送る行を受け取らない）。
+ */
 function planUnresolve(openRows, resolvedRows, moved, resolvedRow) {
   const open = openRows || [];
   const resolved = resolvedRows || [];
@@ -173,6 +177,29 @@ function planUnresolve(openRows, resolvedRows, moved, resolvedRow) {
   };
 }
 
+/**
+ * 途中で止まった操作を「未解決に戻す」で揃える計画。id だけを受け取り、戻す行はファイルの中身から作る
+ * （ブラウザが送る行は使わない。送られた行をそのまま書くと、検証も履歴も通さずに任意の内容へ書き換えられる）。
+ *
+ * 戻すのは、同じ障害物（impedimentSameIdentity）が未解決と解決済の両方にあるときだけ。未解決側の行を正とし、
+ * 解決済から消す。未解決にだけある（既に揃っている）なら何も書かずに成功する（送り直しの冪等）。
+ * 解決済にだけある・未解決に同じ ID が複数ある・中身が違うときは 'not_pending'（途中で止まった状態ではない）。
+ */
+function planUnresolvePending(openRows, resolvedRows, id) {
+  const open = openRows || [];
+  const resolved = resolvedRows || [];
+  const key = String(id === undefined || id === null ? '' : id).trim();
+  if (!IMPEDIMENT_ID_NUM_RE.test(key)) return { ok: false, reason: 'invalid' };
+  let openCount = 0;
+  open.forEach(function (r) { if (!isImpedimentPlaceholder(r) && String(r.id || '').trim() === key) openCount++; });
+  const oi = impRealIndex_(open, key);
+  const ri = impRealIndex_(resolved, key);
+  if (oi === -1 && ri === -1) return { ok: false, reason: 'not_found' };
+  if (oi !== -1 && ri === -1 && openCount === 1) return { ok: true, open: null, resolved: null };
+  if (openCount !== 1 || ri === -1 || !impedimentSameIdentity(open[oi], resolved[ri])) return { ok: false, reason: 'not_pending' };
+  return planUnresolve(open, resolved, impPick_(open[oi]), impPick_(resolved[ri]));
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { impedimentRowsEqual, impedimentSameIdentity, impedimentHalfResolved, appendImpediment, updateImpediment, planResolve, planUnresolve };
+  module.exports = { impedimentRowsEqual, impedimentSameIdentity, impedimentHalfResolved, appendImpediment, updateImpediment, planResolve, planUnresolve, planUnresolvePending };
 }
