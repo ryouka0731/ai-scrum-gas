@@ -137,8 +137,15 @@ function createCtx(files, opts) {
           clearContents() { log.push('Sheet.clear'); return sheet; },
           clear() { log.push('Sheet.clear'); return sheet; },
           getLastRow: () => 0, getLastColumn: () => 0, getMaxRows: () => 1, getMaxColumns: () => 1,
-          getRange() { return { setValues() { log.push('Sheet.setValues'); }, getValues: () => [[]], setBackground() {}, setBackgrounds() {}, setFontWeight() {}, setWrap() {}, setNumberFormat() {}, clearContent() {}, clearFormat() {}, setWrapStrategy() {} }; },
+          getRange() {
+            // 設定系は本物と同じく自分を返す（連鎖して呼ばれるため）
+            const range = { setValues() { log.push('Sheet.setValues'); return range; }, getValues: () => [[]] };
+            ['setBackground', 'setBackgrounds', 'setFontWeight', 'setFontColor', 'setWrap', 'setNumberFormat', 'clearContent', 'clearFormat', 'setWrapStrategy']
+              .forEach((m) => { range[m] = () => range; });
+            return range;
+          },
           setFrozenRows() {}, autoResizeColumns() {}, getName: () => 's', clearFormats() {}, getDataRange() { return this.getRange(); },
+          insertRowsAfter() {}, insertColumnsAfter() {},   // 書き込みが途中で例外にならないように（失敗した同期と見分けるため）
         };
         return { getSheetByName: () => sheet, insertSheet: () => sheet, toast() { log.push('toast'); } };
       },

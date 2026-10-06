@@ -51,7 +51,8 @@ function syncAll_(guard) {
     // guard（任意）: ロックの中で同期してよいかを判定し、成功をロックを放す前に記録する（判定と記録を原子的にする）
     if (guard && !guard.shouldSync()) return { syncedAt: '', warnings: [], skipped: true };
     const result = rebuildAllSheets_();
-    if (guard) guard.onSynced();
+    // シートに書けなかった同期は成功として記録しない（ファイルが無いだけの警告は記録する。常に無い状態でも連打を止めるため）
+    if (guard && result.writeFailures === 0) guard.onSynced();
     return result;
   } finally {
     lock.releaseLock();
@@ -67,6 +68,8 @@ function rebuildAllSheets_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const warnings = [];
   const readFiles = [];
+  let writeFailures = 0;   // シートの書き込みの失敗の数（警告とは別に数える。ファイルが無いだけの警告は含めない）
+  const writeFailed = function (text) { writeFailures++; warnings.push(text); };
   const scrum = getScrumFolder_();   // 設定不備はここで例外を投げて中断する
   const syncedAt = nowText_();
 
@@ -81,7 +84,7 @@ function rebuildAllSheets_() {
       writeGrid_(ss, SHEET_NAMES.backlog, buildBacklogGrid(backlogRows, notes));
       writeGrid_(ss, SHEET_NAMES.kanban, buildKanbanGrid(backlogRows));
     } catch (e) {
-      warnings.push(SHEET_NAMES.backlog + ' / ' + SHEET_NAMES.kanban + ' の書き込みに失敗: ' + e.message);
+      writeFailed(SHEET_NAMES.backlog + ' / ' + SHEET_NAMES.kanban + ' の書き込みに失敗: ' + e.message);
     }
   }
 
@@ -92,7 +95,7 @@ function rebuildAllSheets_() {
     try {
       writeGrid_(ss, SHEET_NAMES.done, buildDoneBacklogGrid(done));
     } catch (e) {
-      warnings.push(SHEET_NAMES.done + ' の書き込みに失敗: ' + e.message);
+      writeFailed(SHEET_NAMES.done + ' の書き込みに失敗: ' + e.message);
     }
   }
 
@@ -105,7 +108,7 @@ function rebuildAllSheets_() {
     try {
       writeGrid_(ss, SHEET_NAMES.velocity, buildVelocityGrid(velocityRows));
     } catch (e) {
-      warnings.push(SHEET_NAMES.velocity + ' の書き込みに失敗: ' + e.message);
+      writeFailed(SHEET_NAMES.velocity + ' の書き込みに失敗: ' + e.message);
     }
   }
 
@@ -117,7 +120,7 @@ function rebuildAllSheets_() {
       const roadmapSheet = writeGrid_(ss, SHEET_NAMES.roadmap, roadmap.grid);
       paintMarks_(roadmapSheet, roadmap.marks, ROADMAP_BAND_COLOR);
     } catch (e) {
-      warnings.push(SHEET_NAMES.roadmap + ' の書き込みに失敗: ' + e.message);
+      writeFailed(SHEET_NAMES.roadmap + ' の書き込みに失敗: ' + e.message);
     }
   } else {
     warnings.push('ロードマップは更新できませんでした。前回の内容が残っています。');
@@ -134,7 +137,7 @@ function rebuildAllSheets_() {
       const notes = readNotes_(ss, SHEET_NAMES.impediment, IMPEDIMENT_KEY_COL, IMPEDIMENT_NOTE_COL);
       writeGrid_(ss, SHEET_NAMES.impediment, buildImpedimentGrid(impOpen, impDone, notes));
     } catch (e) {
-      warnings.push(SHEET_NAMES.impediment + ' の書き込みに失敗: ' + e.message);
+      writeFailed(SHEET_NAMES.impediment + ' の書き込みに失敗: ' + e.message);
     }
   } else {
     warnings.push(SHEET_NAMES.impediment + ' は更新できませんでした。前回の内容が残っています。');
@@ -162,7 +165,7 @@ function rebuildAllSheets_() {
       }
     }
   } catch (e) {
-    warnings.push(SHEET_NAMES.burndown + ' の書き込みに失敗: ' + e.message);
+    writeFailed(SHEET_NAMES.burndown + ' の書き込みに失敗: ' + e.message);
   }
 
   // --- 配布情報（.published.json） ---
@@ -184,15 +187,15 @@ function rebuildAllSheets_() {
       backlogRows: backlogRows || [], warnings: warnings, published: published,
     }));
   } catch (e) {
-    warnings.push(SHEET_NAMES.dashboard + ' の書き込みに失敗: ' + e.message);
+    writeFailed(SHEET_NAMES.dashboard + ' の書き込みに失敗: ' + e.message);
   }
 
   try {
     writeGrid_(ss, SHEET_NAMES.log, buildSyncLogGrid(syncedAt, readFiles, warnings));
   } catch (e) {
     // 同期ログにも書けないときは記録先が無いため、呼び出し元へ返す警告に積むだけにする
-    warnings.push(SHEET_NAMES.log + ' の書き込みに失敗: ' + e.message);
+    writeFailed(SHEET_NAMES.log + ' の書き込みに失敗: ' + e.message);
   }
 
-  return { syncedAt: syncedAt, warnings: warnings, skipped: false };
+  return { syncedAt: syncedAt, warnings: warnings, skipped: false, writeFailures: writeFailures };
 }

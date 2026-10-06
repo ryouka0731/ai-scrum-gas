@@ -406,3 +406,15 @@ test('writeGrid_: 空グリッド・幅0はシートをクリアして返すだ�
   sh = e.ctx.writeGrid_(e.ss, 'G', [['z']]);
   assert.deepEqual(J(sh.grid()), [['z']]);
 });
+
+test('scheduledSync: シートの書き込みに失敗した同期は成功として記録しない。ファイルが無いだけの警告なら記録する（PR #11 cubic）', () => {
+  ['バックログ', 'ダッシュボード', '同期ログ'].forEach((name) => {
+    const e = makeEnv(baseScrum(), { uiThrows: true, sheetOpts: { [name]: { failSetValues: true } } });
+    e.ctx.scheduledSync();
+    assert.equal(e.props.LAST_SCHEDULED_SYNC_MS, undefined, name + ' に書けなかったのに成功を記録した');
+  });
+  const s = baseScrum(); delete s.files['velocity.csv'];
+  const ok = makeEnv(s, { uiThrows: true });
+  ok.ctx.scheduledSync();
+  assert.match(String(ok.props.LAST_SCHEDULED_SYNC_MS), /^\d+$/, 'ファイルが無いだけで記録しないと、連打の上限が効かなくなる');
+});
