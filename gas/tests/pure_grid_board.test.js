@@ -69,3 +69,12 @@ test('ひな形のスプリント行を列にしない', () => {
   const v = VELOCITY.concat([{ sprint: 'sprint003', sprint_start: 'YYYY-MM-DD', sprint_end: 'YYYY-MM-DD' }]);
   assert.equal(buildRoadmapGrid([], v).grid[0].length, 4);
 });
+
+test('ロードマップは constructor / __proto__ という名前のスプリントも列にする（既に見たとみなさない）', () => {
+  ['constructor', '__proto__', 'toString', 'hasOwnProperty'].forEach(function (name) {
+    const g = buildRoadmapGrid([pbi('PBI-001', 'A', 'Ready', name)],
+      [{ sprint: name, sprint_start: '2026-09-08', sprint_end: '2026-09-19' }]);
+    assert.equal(g.grid[0].length, 3, name + ' の列が落ちた');
+    assert.equal(g.marks.length, 1, name + ' の帯が無い');
+  });
+});

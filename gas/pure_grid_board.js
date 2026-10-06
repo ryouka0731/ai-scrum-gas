@@ -45,7 +45,7 @@ function realSprints(velocityRows) {
 /** ロードマップシート用の2次元配列と、帯を塗るセル位置を返す。 */
 function buildRoadmapGrid(rows, velocityRows) {
   // 表記違いの同一スプリントは最初の1行だけ残す（■ と帯の塗り位置を一致させる）。
-  const seen = {};
+  const seen = Object.create(null);   // 'constructor' 等のスプリント名を既に見たと取り違えない
   const sprints = realSprints(velocityRows).filter(function (v) {
     const k = normalizeSprint(v.sprint);
     if (k === '') return true;
