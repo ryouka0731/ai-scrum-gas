@@ -18,6 +18,7 @@ const { summarizeBacklog, summarizeSprint, summarizeImpediment } = require('../.
 const { KANBAN_STATUSES } = require('../../pure_grid_board.js');
 const { sprintChoices } = require('../../pure_sprint_options.js');
 const { groupComments } = require('../../pure_comment.js');
+const { historyFor, HISTORY_LIMIT } = require('../../pure_history.js');
 
 const ROWS = [
   { id: 'PBI-001', title: '同期の失敗を画面に出す', status: 'New', priority: 'High', size: '3',
@@ -117,6 +118,36 @@ function commentRows() {
   return rows;
 }
 
+// 長い履歴を持たせる PBI（コメント20件と同じ PBI-004）。パネルが縦にも横にも伸びる状況を作る。
+// **消さない・件数を減らさないこと。** 説明の差分は .history-line（長い URL を含む）を作り、
+// 「節の幅を超えない」「保存へ届く」の検査の空振りを防ぐ。
+const HISTORY_PBI = COMMENT_PBI;
+const HISTORY_COUNT = 40;
+const HISTORY_URL = LONG_URL + '&' + 'x'.repeat(120);
+
+/** historyFor が食う行（change_log.csv と同じ列）。 */
+function historyLogRows() {
+  const rows = [];
+  for (let i = 1; i <= HISTORY_COUNT; i++) {
+    const n = ('0' + i).slice(-2);
+    const at = '2026-09-' + ('0' + (1 + (i % 28))).slice(-2) + ' 09:' + n + ':00';
+    const base = { id: 'LOG-' + n, at: at, actor: i % 3 === 0 ? COMMENT_ME : 'ダイチ', target_id: HISTORY_PBI };
+    if (i % 5 === 0) {
+      rows.push(Object.assign({}, base, { action: 'update', field: 'status', before: 'New', after: 'Ready' }));
+    } else {
+      // 説明の大きな書き換え。行ごとに長い URL を含め、同じ行も混ぜる。
+      const before = ['概要' + n, '参考: ' + HISTORY_URL, '共通の行', '旧メモ ' + n].join('\n');
+      const after = ['概要' + n + '（改）', '参考: ' + HISTORY_URL + '#v' + n, '共通の行',
+        '新メモ ' + n + ' ' + HISTORY_URL].join('\n');
+      rows.push(Object.assign({}, base, { action: 'update', field: 'description', before: before, after: after }));
+    }
+  }
+  // 別の対象の履歴も混ぜる（historyFor が絞れていること）。
+  rows.push({ id: 'LOG-99', at: '2026-09-30 09:00:00', actor: 'ダイチ', target_id: 'PBI-001',
+    action: 'update', field: 'title', before: 'a', after: 'b' });
+  return rows;
+}
+
 function viewFor(name) {
   switch (name) {
     case 'board': return { view: buildBoardData(ROWS), summary: summarizeBacklog(ROWS, KANBAN_STATUSES) };
@@ -154,4 +185,9 @@ function responses() {
   return out;
 }
 
-module.exports = { responses: responses, COMMENT_PBI: COMMENT_PBI, COMMENT_COUNT: COMMENT_COUNT, VIEW_NAMES: VIEW_NAMES, ROWS: ROWS, VELOCITY: VELOCITY };
+/** apiGetHistory の応答。サーバ（apiGetHistory）と同じく historyFor で絞る。 */
+function historyResponse(targetId) {
+  return { ok: true, entries: historyFor(historyLogRows(), targetId, HISTORY_LIMIT) };
+}
+
+module.exports = { responses: responses, historyResponse: historyResponse, HISTORY_PBI: HISTORY_PBI, HISTORY_COUNT: HISTORY_COUNT, COMMENT_PBI: COMMENT_PBI, COMMENT_COUNT: COMMENT_COUNT, VIEW_NAMES: VIEW_NAMES, ROWS: ROWS, VELOCITY: VELOCITY };

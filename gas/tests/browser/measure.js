@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { launch, chromePath } = require('./chrome_session.js');
 const { buildStandalonePage } = require('./standalone_page.js');
-const { COMMENT_PBI } = require('./fixtures.js');
+const { COMMENT_PBI, HISTORY_PBI } = require('./fixtures.js');
 
 const PROBE_SOURCE = fs.readFileSync(path.join(__dirname, 'probe_source.js'), 'utf8');
 
@@ -71,6 +71,11 @@ async function measureOne(session, html, spec) {
   await session.evaluate('window.scrollTo(0, 0); return 1;');
   board.commentPanel = await session.evaluate(
     'return window.__probe.commentPanel(' + JSON.stringify(COMMENT_PBI) + ');');
+
+  // 長い履歴のパネル。コメントのパネルと同じく開いて Escape で閉じる。
+  await session.evaluate('window.scrollTo(0, 0); return 1;');
+  board.historyPanel = await session.evaluate(
+    'return window.__probe.historyPanel(' + JSON.stringify(HISTORY_PBI) + ');');
 
   await session.evaluate('window.scrollTo(0, 0); return 1;');
   await session.evaluate('return window.__probe.clickIn("views", ' + JSON.stringify(TABLE_VIEW_LABEL) + ');');

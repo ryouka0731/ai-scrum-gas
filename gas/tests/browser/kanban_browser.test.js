@@ -32,7 +32,7 @@ const assert = require('node:assert/strict');
 
 const { chromePath, launch, chromeArgs } = require('./chrome_session.js');
 const { buildStandalonePage, viewportContentFromDoGet } = require('./standalone_page.js');
-const { responses, VIEW_NAMES, COMMENT_COUNT } = require('./fixtures.js');
+const { responses, VIEW_NAMES, COMMENT_COUNT, HISTORY_COUNT } = require('./fixtures.js');
 const {
   measureOne, installProbe, WIDTHS, SCHEMES, HEIGHT, TABLE_VIEW_LABEL, HELP_PRESS_SPOTS,
 } = require('./measure.js');
@@ -197,6 +197,32 @@ describe('実ブラウザでの検査', { skip: SKIP }, () => {
           assert.equal(c.overflowing, 0, where + ': 節の幅を超えるコメント本文が ' + c.overflowing + ' 件ある');
           assert.ok(c.docScrollWidth <= c.docClientWidth,
             where + ': ページが横に伸びている（scrollWidth ' + c.docScrollWidth + ' > clientWidth ' + c.docClientWidth + '）');
+        });
+
+        test('履歴が長いパネルでも、保存まで届く', () => {
+          const h = measured[where].board.historyPanel;
+          // 空振り防止: 履歴の差分の行が描かれ、そのうち長い URL を持つ行もあること。
+          assert.equal(h.groupCount, HISTORY_COUNT, where + ': 履歴が ' + h.groupCount + ' 件しか描かれていない');
+          assert.ok(h.lineCount >= HISTORY_COUNT, where + ': 差分の行（.history-line）が ' + h.lineCount + ' 行しか描かれていない');
+          assert.ok(h.urlLines >= 1, where + ': 長い URL を持つ行が測れていない');
+          if (width > 900) {
+            assert.equal(h.panelOverflowY, 'auto', where + ': .side-panel の overflow-y が auto でない（' + h.panelOverflowY + '）');
+            assert.ok(h.panelScrollHeight > h.panelClientHeight,
+              where + ': パネルが内側でスクロールしていない（scrollHeight ' + h.panelScrollHeight
+              + ' <= clientHeight ' + h.panelClientHeight + '）');
+          }
+          assert.equal(h.saveInViewport, true,
+            where + ': scrollIntoView しても「保存」が画面の外にある: ' + JSON.stringify(h.save) + ' viewport ' + JSON.stringify(h.viewport));
+          assert.equal(h.saveInPanel, true,
+            where + ': scrollIntoView しても「保存」がパネルの見える範囲の外にある: ' + JSON.stringify(h.save) + ' panel ' + JSON.stringify(h.panelBox));
+        });
+
+        test('履歴の長い行は節の幅を超えず、ページも横に伸びない', () => {
+          const h = measured[where].board.historyPanel;
+          assert.ok(h.lineCount >= 1 && h.urlLines >= 1, where + ': 履歴の行が測れていない');
+          assert.equal(h.overflowing, 0, where + ': 節の幅を超える履歴の行が ' + h.overflowing + ' 件ある');
+          assert.ok(h.docScrollWidth <= h.docClientWidth,
+            where + ': ページが横に伸びている（scrollWidth ' + h.docScrollWidth + ' > clientWidth ' + h.docClientWidth + '）');
         });
 
         test('表は枠の中で横スクロールし、ページを横に伸ばさない', () => {
