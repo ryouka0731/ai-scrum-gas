@@ -482,14 +482,16 @@ test('追加(#1)の応答が遅れ、その間に新しい写しで現れ、利�
 test('削除に成功したコメントは、後から発行した応答の写しに残っていても出ない。戻すと出る', () => {
   const h = ready();
   h.openCard('PBI-001');
-  h.clickCommentDelete('panel-comments', 'CMT-00000002');
-  callOf(h, 'apiDeleteComment').handlers.success({ ok: true, removed: C2, comments: { 'PBI-001': [C1] } });
-  // サーバが削除より先に処理した新しい要求の写し（C2 が残っている）。
+  h.clickCommentDelete('panel-comments', 'CMT-00000002');   // 発行 #1
+  const del = callOf(h, 'apiDeleteComment');
+  // 削除の応答を待たずに追加を出す（発行 #2）。
   h.setCommentInput('panel-comments', '追加');
   h.clickCommentSend('panel-comments');
+  const add = callOf(h, 'apiAddComment');
   const added = cmt('CMT-00000003', 'PBI-001', 'me@example.com', '2026-10-06 11:00:00', '追加', true);
-  callOf(h, 'apiAddComment').handlers.success({ ok: true, comment: added,
-    comments: { 'PBI-001': [C1, C2, added] } });
+  del.handlers.success({ ok: true, removed: C2, comments: { 'PBI-001': [C1] } });
+  // サーバは追加を削除より先に処理した。発行番号の大きい追加の応答の写しに、消した C2 が残っている。
+  add.handlers.success({ ok: true, comment: added, comments: { 'PBI-001': [C1, C2, added] } });
   assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000001', 'CMT-00000003'], '消したものが写しで戻った');
   h.click('toast-undo');
   callOf(h, 'apiRestoreComment').handlers.success({ ok: true, comments: { 'PBI-001': [C1, C2, added] } });

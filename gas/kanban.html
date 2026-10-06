@@ -1938,14 +1938,7 @@ function refreshOpenComments() {
   if (open) renderComments(open.hostId, open.targetId, false);
 }
 
-/**
- * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
- * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
- */
-/**
- * 受け入れる写しから、この画面で削除に成功したコメントを外す（サーバが削除より先に新しい
- * 要求を処理していると、発行番号の大きい写しにも消したものが残る）。戻す成功で集合から外れる。
- */
+/** 受け入れる写しから、この画面で削除に成功したコメントを外す。戻す成功で集合から外れる。 */
 function withoutDeletedComments(comments) {
   if (!comments || Object.keys(commentDeletedIds).length === 0) return comments;
   var out = {};
@@ -1956,6 +1949,10 @@ function withoutDeletedComments(comments) {
   return out;
 }
 
+/**
+ * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
+ * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
+ */
 function applyComments(comments, issued) {
   if (!comments || issued <= lastAppliedComment) return false;
   lastAppliedComment = issued;
