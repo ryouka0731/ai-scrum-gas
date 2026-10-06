@@ -16,10 +16,9 @@ function mulberry32(a) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-function deepFreeze(o) {
-  if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); Object.values(o).forEach(deepFreeze); }
-  return o;
-}
+// 入力を書き換えないことは、呼ぶ前の写しと比べて確かめる。Object.freeze は使わない
+// （pure_*.js は strict mode ではないので、凍った値への代入は例外にならず黙って捨てられる）。
+function snapshot(o) { return JSON.parse(JSON.stringify(o)); }
 const clone = (o) => JSON.parse(JSON.stringify(o));
 function pick(r, arr) { return arr[Math.floor(r() * arr.length)]; }
 function forSeeds(n, fn) {
@@ -45,13 +44,21 @@ function randComments(r, n) {
 }
 
 test('comments: no input mutation', () => {
+  // freeze だけに頼らない。pure_comment.js は strict mode ではないので、凍った値への代入は
+  // 例外にならず黙って捨てられ、書き換える実装でも通ってしまう。書き換えられる入力を渡し、
+  // 呼んだ後に写しと比べる（id の前後に空白を入れ、trim で書き換えたくなる入力にする）。
   forSeeds(100, (r) => {
-    const rows = deepFreeze(randComments(r, 6));
+    const rows = randComments(r, 6).map((x) => Object.assign({}, x, { id: ' ' + x.id + ' ', target_id: ' ' + x.target_id }));
+    const row = { id: ' CMT-abcdef01 ', target_id: ' PBI-1 ', author: 'a', created_at: '2026-10-01 00:00:00', body: 'x' };
+    const before = JSON.parse(JSON.stringify(rows));
+    const rowBefore = JSON.parse(JSON.stringify(row));
     const me = pick(r, AUTHORS);
     C.groupComments(rows, me);
     C.appendComment(rows, 'CMT-00000001', 'PBI-1', me, 'b', '2026-10-01 00:00:00');
     C.deleteComment(rows, rows[0].id, me);
-    C.restoreComment(rows, deepFreeze({ id: 'CMT-abcdef01', target_id: 'PBI-1', author: 'a', created_at: '2026-10-01 00:00:00', body: 'x' }));
+    C.restoreComment(rows, row);
+    assert.deepEqual(rows, before, '入力の行を書き換えた');
+    assert.deepEqual(row, rowBefore, '戻す行を書き換えた');
   });
 });
 
@@ -183,9 +190,13 @@ function randRows(r, ids) {
 test('diffRows: events applied to before yield after on non-ignored fields; ignore honored; no mutation', () => {
   const ids = ['PBI-1', 'PBI-2', 'PBI-3', 'PBI-4'];
   forSeeds(500, (r) => {
-    const before = deepFreeze(randRows(r, ids));
-    const after = deepFreeze(randRows(r, ids));
+    const before = randRows(r, ids);
+    const after = randRows(r, ids);
+    const before0 = snapshot(before);
+    const after0 = snapshot(after);
     const ev = H.diffRows(before, after, FIELDS, ['updated_at']);
+    assert.deepEqual(before, before0, '入力（before）を書き換えた');
+    assert.deepEqual(after, after0, '入力（after）を書き換えた');
     ev.forEach((e) => assert.notEqual(e.field, 'updated_at'));
     const state = {};
     before.forEach((x) => { const k = x.id.trim(); if (!(k in state)) state[k] = { title: x.title, status: x.status }; });
@@ -215,8 +226,9 @@ test('historyFor: newest-first, stable ties, exact target, limit, no mutation', 
     const rows = [];
     const n = Math.floor(r() * 25);
     for (let i = 0; i < n; i++) rows.push({ id: 'H' + i, at: '2026-10-0' + (1 + Math.floor(r() * 3)), actor: 'a', target_id: pick(r, ['PBI-1', 'PBI-10', ' PBI-1 ', 'IMP-1']), action: 'update', field: 'f' + i, before: '', after: '' });
-    deepFreeze(rows);
+    const rows0 = snapshot(rows);
     const all = H.historyFor(rows, 'PBI-1');
+    assert.deepEqual(rows, rows0, '入力を書き換えた');
     const want = rows.map((x, i) => ({ x, i })).filter((p) => p.x.target_id.trim() === 'PBI-1')
       .sort((p, q) => (p.x.at < q.x.at ? 1 : p.x.at > q.x.at ? -1 : p.i - q.i)).map((p) => p.x.field);
     assert.deepEqual(all.map((e) => e.field), want);
@@ -232,8 +244,9 @@ test('historyFor: newest-first, stable ties, exact target, limit, no mutation', 
 test('groupHistory: groups only consecutive same at+actor, preserves order', () => {
   forSeeds(300, (r) => {
     const es = Array.from({ length: Math.floor(r() * 15) }, (_, i) => ({ at: pick(r, ['t1', 't2']), actor: pick(r, ['a', 'b']), field: 'f' + i }));
-    deepFreeze(es);
+    const es0 = snapshot(es);
     const g = H.groupHistory(es);
+    assert.deepEqual(es, es0, '入力を書き換えた');
     assert.deepEqual(g.flatMap((x) => x.items), es);
     for (let i = 1; i < g.length; i++) assert.ok(g[i - 1].at !== g[i].at || g[i - 1].actor !== g[i].actor);
     g.forEach((x) => x.items.forEach((it) => { assert.equal(it.at, x.at); assert.equal(it.actor, x.actor); }));
@@ -249,11 +262,14 @@ test('impediment view: every real open row is exactly one of shown/pending; dup 
     const open = Array.from({ length: Math.floor(r() * 6) }, () => randImp(r, false));
     const res = Array.from({ length: Math.floor(r() * 5) }, () => randImp(r, true));
     res.forEach((x, i) => { if (open[i] && r() < 0.6) Object.assign(x, open[i], { status: 'Resolved', resolved_at: '2026-10-02', resolution: 'ok' }); });
-    deepFreeze(open); deepFreeze(res);
+    const open0 = snapshot(open);
+    const res0 = snapshot(res);
     const v = V.buildImpedimentView(open, res);
     const real = open.filter((o) => !isImpedimentPlaceholder(o));
     const shown = V.openImpedimentsShown(open, res);
     const pend = V.impedimentPendingEntries(open, res);
+    assert.deepEqual(open, open0, 'seed ' + seed + ': 入力（open）を書き換えた');
+    assert.deepEqual(res, res0, 'seed ' + seed + ': 入力（resolved）を書き換えた');
     assert.equal(shown.length + pend.length, real.length, 'seed ' + seed);
     assert.equal(v.open.length, shown.length);
     assert.equal(v.pending.length, pend.length);
