@@ -813,3 +813,25 @@ test('BUG-P7. buildImpedimentView: 結果は直す前の版と同じ（乱択 30
     assert.deepEqual(impView.openImpedimentsShown(open, resolved).length, buildImpedimentViewReference(open, resolved).open.length);
   }
 });
+
+// --- 重複した ID の障害物は、サーバでも編集を断る（画面が押せない行にするのと同じ条件。PR #11 cubic） ---
+
+test('apiUpdateImpediment: 未解決か解決済に同じ ID が複数ある行は、古い画面・直接の呼び出しからでも書き換えない', () => {
+  const row = { id: 'IMP-002', title: '回線が遅い', description: 'd', reported_by: 'alice', reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: '' };
+  const done = Object.assign({}, row, { status: 'Resolved', resolved_at: '2026-10-02', resolution: 'r' });
+  const cases = {
+    '未解決に2行': [[row, Object.assign({}, row, { title: '別' })], []],
+    '解決済に2行（片方は途中で止まった対）': [[row], [done, done]],
+  };
+  Object.keys(cases).forEach((name) => {
+    const f = H.baseFiles();
+    f['impediment_log.csv'] = H.IMP_FIELDS.join(',') + '\n' + cases[name][0].map((r) => H.csvLine(H.IMP_FIELDS, r)).join('\n') + '\n';
+    f['impediment_log_resolved.csv'] = H.IMP_FIELDS.join(',') + '\n' + cases[name][1].map((r) => H.csvLine(H.IMP_FIELDS, r)).join('\n') + (cases[name][1].length ? '\n' : '');
+    const h = H.createCtx(f);
+    const before = JSON.stringify(h.files);
+    const r = plain(h.ctx.apiUpdateImpediment('IMP-002', { title: '書き換えた', description: 'd', reported_by: 'alice', sprint: '' }, row));
+    assert.equal(r.ok, false, name);
+    assert.equal(r.reason, 'duplicate_id', name);
+    assert.equal(JSON.stringify(h.files), before, name + ': 書いた');
+  });
+});

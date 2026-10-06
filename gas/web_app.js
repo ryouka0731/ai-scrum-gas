@@ -701,6 +701,11 @@ function apiCreateImpediment(fields) {
 /** 未解決の障害物を書き換える。expected は画面が描いた時点の行（全列）。 */
 function apiUpdateImpediment(id, fields, expected) {
   return withImpedimentWrite_('open', function (open, resolved) {
+    // 同じ ID が重なっていれば、どの行を書き換えるか決められない（画面では押せない行）。CSV を直させる。
+    if (impedimentDuplicateId(open, resolved, id)) {
+      return { ok: false, reason: 'duplicate_id',
+        message: '同じ ID の障害物が複数あります（' + String(id === undefined || id === null ? '' : id).trim() + '）。CSV の ID を直してから操作してください。' };
+    }
     // 解決が途中で止まった行を片側だけ直すと、揃えるときにどちらの内容を残すか決まらない。先に揃えさせる。
     if (impedimentHalfResolved(open, resolved, id)) {
       return { ok: false, reason: 'conflict', message: '解決が途中で止まっています。先に「完了する」か「未解決に戻す」で揃えてください' };

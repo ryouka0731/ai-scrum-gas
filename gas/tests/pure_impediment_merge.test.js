@@ -177,3 +177,14 @@ test('解決済に同じ ID が複数あれば、途中で止まった状態と�
     assert.equal(m.impedimentHalfResolved([imp()], resolved, 'IMP-002'), false);
   });
 });
+
+test('impedimentDuplicateId: 未解決か解決済に同じ ID が複数あるときだけ真（PR #11 cubic）', () => {
+  const done = imp({ status: 'Resolved', resolution: '直した' });
+  const other = imp({ title: '別の', status: 'Resolved', resolution: '別' });
+  assert.equal(m.impedimentDuplicateId([imp()], [], 'IMP-002'), false);
+  assert.equal(m.impedimentDuplicateId([imp()], [done], 'IMP-002'), false, '途中で止まった操作は重複ではない');
+  assert.equal(m.impedimentDuplicateId([imp(), imp({ title: 'x' })], [], 'IMP-002'), true);
+  assert.equal(m.impedimentDuplicateId([imp()], [done, done], 'IMP-002'), true);
+  assert.equal(m.impedimentDuplicateId([imp()], [other], 'IMP-002'), false, '中身の違う1行は対象外（未解決側の編集は止めない）');
+  assert.equal(m.impedimentDuplicateId([imp()], [], ' IMP-002 '), false);
+});

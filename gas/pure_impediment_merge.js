@@ -117,6 +117,14 @@ function impedimentHalfResolved(openRows, resolvedRows, id) {
   return impedimentSameIdentity(open[oi], resolved[ri]);
 }
 
+/**
+ * 未解決か解決済に同じ ID が複数あるか。どの行が対象・対か決められないので、サーバでも書き換えを断る
+ * （古い画面・直接の呼び出しに備える）。解決済に中身の違う同じ ID が1行あるだけなら対象外（未解決側の編集は止めない）。
+ */
+function impedimentDuplicateId(openRows, resolvedRows, id) {
+  return impRealCount_(openRows || [], id) > 1 || impRealCount_(resolvedRows || [], id) > 1;
+}
+
 function updateImpediment(rows, id, fields, expected) {
   const list = rows || [];
   const i = impRealIndex_(list, id);   // 雛形の行は編集させない
@@ -214,5 +222,5 @@ function planUnresolvePending(openRows, resolvedRows, id) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { impedimentRowsEqual, impedimentSameIdentity, impedimentHalfResolved, appendImpediment, updateImpediment, planResolve, planUnresolve, planUnresolvePending };
+  module.exports = { impedimentRowsEqual, impedimentSameIdentity, impedimentHalfResolved, impedimentDuplicateId, appendImpediment, updateImpediment, planResolve, planUnresolve, planUnresolvePending };
 }
