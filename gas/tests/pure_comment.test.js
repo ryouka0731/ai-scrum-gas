@@ -54,6 +54,10 @@ test('戻し: 元の id と日時のまま末尾へ。既にあれば変えな�
   assert.equal(again.rows.length, 1);
   // id は形を問わず、空だけを拒む（削除はどんな形の id も受け付けるため。バグ探し C-5）
   assert.equal(c.restoreComment([], row({ id: ' ' })).reason, 'invalid');
+  // 空でなければどんな形でも戻す（正規形の CMT-xxxxxxxx を求めない）。前後の空白は落とす
+  const loose = c.restoreComment([], row({ id: ' x ' }));
+  assert.equal(loose.ok, true);
+  assert.equal(loose.rows[0].id, 'x');
   assert.equal(c.restoreComment([], row({ target_id: 'x' })).reason, 'invalid');
   assert.equal(c.restoreComment([], row({ body: ' ' })).reason, 'invalid');
   assert.equal(c.restoreComment([], null).reason, 'invalid');
