@@ -201,3 +201,87 @@ test('P2: 削除した id は、取得の応答（削除前の写し）が後か
   assert.equal(h.cardCommentCountOf('PBI-001'), 'コメント 1');
 });
 
+// ---------------------------------------------------------------------------
+// P4: 履歴パネルは最初の 50 件だけを描き、「さらに表示（残り N 件）」で次の 50 件
+// ---------------------------------------------------------------------------
+
+function bigHistory(n, lines) {
+  const entries = [];
+  for (let i = 0; i < n; i++) {
+    const a = []; const b = [];
+    for (let k = 0; k < lines; k++) { a.push('行' + k + ' v' + i); b.push('行' + k + ' v' + (i + 1)); }
+    entries.push({ at: '2026-01-01 00:' + String(Math.floor(i / 60)).padStart(2, '0') + ':' + String(i % 60).padStart(2, '0'),
+      actor: 'a@example.com', action: 'update', field: 'description', before: a.join('\n'), after: b.join('\n') });
+  }
+  return entries;
+}
+function countNodes(h, id) {
+  let nodes = 0;
+  (function walk(e) { nodes++; (e.children || []).forEach(walk); })(h.sandbox.document.getElementById(id));
+  return nodes;
+}
+function moreButton(h) {
+  const hit = [];
+  (function w(e) { if (e.classList && e.classList.contains('history-more')) hit.push(e); (e.children || []).forEach(w); })(
+    h.sandbox.document.getElementById('panel-history'));
+  return hit;
+}
+const items = function (h) {
+  const hit = [];
+  (function w(e) { if (e.classList && e.classList.contains('history-item')) hit.push(e); (e.children || []).forEach(w); })(
+    h.sandbox.document.getElementById('panel-history'));
+  return hit.length;
+};
+
+// 元の再現（BUG-P4）は「1回の描画で 50,000 ノード以下」としていた。裁定（50 件ずつ描く）では、
+// 1件 = 前 500 行 + 後 500 行 の差分なので 50 件で約 50,300 ノードになる。上限は「50 件分」に合わせた
+// （元の 20 万ノードの約 1/4）。
+test('BUG-P4. 履歴 200 件 × 500 行の説明でも、最初の描画は 50 件まで（DOM は 50 件分で頭打ち）', () => {
+  const h = bootBoard();
+  h.openCard('PBI-001');
+  h.historyToggle('panel-history');
+  pendingOf(h, 'apiGetHistory')[0].handlers.success({ ok: true, entries: bigHistory(200, 500) });
+  assert.equal(items(h), 50);
+  const nodes = countNodes(h, 'panel-history');
+  assert.ok(nodes <= 50 * 1010 + 20, '履歴パネルの DOM ノード ' + nodes);
+  const more = moreButton(h);
+  assert.equal(more.length, 1);
+  const t = [];
+  (function w(e) { if (e.textContent) t.push(e.textContent); (e.children || []).forEach(w); })(more[0]);
+  assert.match(t.join(''), /さらに表示（残り 150 件）/);
+});
+
+test('P4: 「さらに表示」で次の 50 件を足す。すべて出たらボタンは消え、省略の注記は最後に出る', () => {
+  const h = bootBoard();
+  h.openCard('PBI-001');
+  h.historyToggle('panel-history');
+  pendingOf(h, 'apiGetHistory')[0].handlers.success({ ok: true, entries: bigHistory(120, 3), truncated: true });
+  assert.equal(items(h), 50);
+  assert.doesNotMatch(textIn(h, 'panel-history'), /これより前の履歴は省略しています/);
+  moreButton(h)[0].listeners.click.forEach(function (fn) { fn({}); });
+  assert.equal(items(h), 100);
+  assert.match(textIn(h, 'panel-history'), /さらに表示（残り 20 件）/);
+  moreButton(h)[0].listeners.click.forEach(function (fn) { fn({}); });
+  assert.equal(items(h), 120);
+  assert.equal(moreButton(h).length, 0);
+  assert.match(textIn(h, 'panel-history'), /これより前の履歴は省略しています/);
+});
+
+test('P4: 50 件の境目で同じ時刻・同じ人の更新が分かれても、見出しは1つにまとまる', () => {
+  const h = bootBoard();
+  h.openCard('PBI-001');
+  h.historyToggle('panel-history');
+  const entries = [];
+  for (let i = 0; i < 52; i++) {
+    entries.push({ at: i < 49 ? '2026-01-01 00:00:' + String(i).padStart(2, '0') : '2026-01-02 00:00:00',
+      actor: 'a@example.com', action: 'update', field: i < 49 ? 'title' : ['title', 'priority', 'size'][i - 49], before: 'a', after: 'b' });
+  }
+  pendingOf(h, 'apiGetHistory')[0].handlers.success({ ok: true, entries: entries });
+  moreButton(h)[0].listeners.click.forEach(function (fn) { fn({}); });
+  const heads = [];
+  (function w(e) { if (e.classList && e.classList.contains('history-head')) heads.push(e.textContent); (e.children || []).forEach(w); })(
+    h.sandbox.document.getElementById('panel-history'));
+  assert.equal(heads.length, 50);
+  assert.equal(heads.filter(function (t) { return t.indexOf('2026-01-02') === 0; }).length, 1);
+  assert.equal(items(h), 52);
+});

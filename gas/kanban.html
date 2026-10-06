@@ -52,7 +52,7 @@
   button:hover { background: var(--card-2); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* カードの開く入口（タイトル、tabindex=0）と、焦点の戻り先の入れ物（tabindex=-1）にも輪郭を出す */
-  .card .title:focus-visible, #board:focus-visible, #table-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card .title:focus-visible, #board:focus-visible, #table-view:focus-visible, .history-group:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button[disabled] { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   button.primary:hover { filter: brightness(1.08); }
@@ -206,6 +206,7 @@
   .history-line.del { color: var(--danger); text-decoration: line-through; }
   .history-line.add { color: var(--accent); }
   .history-line.same { color: var(--ink-2); }
+  .history-more { margin-top: var(--sp-2); font-size: 12px; }
   /* カードと障害物の表の件数 */
   .comment-count { font-size: 11px; color: var(--ink-2); }
   td .comment-count { margin-left: var(--sp-2); white-space: nowrap; }
@@ -2718,6 +2719,8 @@ var HISTORY_LINE_DIFF_MAX = 500;
 // 1回の描画で行差分に使ってよい LCS の表の大きさの合計（(n+1)*(m+1) を更新ごとに足す）。
 // 使い切った後の複数行の更新は、LCS を使わず丸ごと del → add で出す（画面の固まりを防ぐ）。
 var HISTORY_DIFF_BUDGET = 2000000;
+// 履歴の一覧を一度に描く件数。残りは「さらに表示」で同じ件数ずつ足す（DOM の大きさを縛る）。
+var HISTORY_PAGE = 50;
 
 // 項目名は一覧・障害物の表の列見出しと同じ言葉（kanban_history.test.js が LIST_COLUMNS /
 // IMPEDIMENT_COLUMNS との一致を固定している）。
@@ -2918,7 +2921,9 @@ function historyValue(v) {
 
 /**
  * 一覧を描く。文字はすべて textContent で入れる（値に <b> 等があっても文字のまま）。
- * truncated（サーバが上限件で切った）なら、最後に省略した旨を出す。
+ * 最初は HISTORY_PAGE 件まで描き、残りは「さらに表示（残り N 件）」で HISTORY_PAGE 件ずつ足す
+ * （DOM の大きさを描いた件数で縛る。HISTORY_DIFF_BUDGET は1回の描画の LCS の計算だけを縛る）。
+ * truncated（サーバが上限件で切った）なら、すべて出したあとの最後に省略した旨を出す。
  */
 function fillHistory(content, entries, truncated) {
   clearHost(content);
@@ -2926,66 +2931,119 @@ function fillHistory(content, entries, truncated) {
     setHistoryStatus(content, 'まだ履歴がありません', 'info');
     return;
   }
-  var budget = HISTORY_DIFF_BUDGET;
-  historyGroups(entries).forEach(function (g) {
+  var list = document.createElement('div');
+  content.appendChild(list);
+  var footer = document.createElement('div');
+  content.appendChild(footer);
+  // last は最後に描いたまとまり（次のページの先頭が同じ時刻・同じ人なら、そこへ続けて足す）。
+  var state = { entries: entries, truncated: truncated, shown: 0, budget: 0, list: list, footer: footer, last: null };
+  appendHistoryPage(state);
+}
+
+/** 次の HISTORY_PAGE 件を足し、末尾（「さらに表示」か省略の注記）を描き直す。最初に足したまとまりを返す。 */
+function appendHistoryPage(state) {
+  var end = Math.min(state.entries.length, state.shown + HISTORY_PAGE);
+  var first = null;
+  state.budget = HISTORY_DIFF_BUDGET;   // 予算は1回の描画（1ページ）ごと
+  historyGroups(state.entries.slice(state.shown, end)).forEach(function (g) {
+    var box = appendHistoryGroup(state, g);
+    if (!first) first = box;
+  });
+  state.shown = end;
+  var footer = state.footer;
+  clearHost(footer);
+  footer.className = '';
+  var rest = state.entries.length - state.shown;
+  if (rest > 0) {
+    var more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'history-more';
+    more.textContent = 'さらに表示（残り ' + rest + ' 件）';
+    more.addEventListener('click', function () {
+      var added = appendHistoryPage(state);
+      // 押したボタンは描き直しで消える。焦点は次の「さらに表示」か、足した先頭のまとまりへ移す。
+      var next = state.footer.querySelector('.history-more');
+      var target = next || added;
+      if (target && typeof target.focus === 'function') target.focus();
+    });
+    footer.appendChild(more);
+  } else if (state.truncated) {
+    footer.className = 'history-status info';
+    footer.textContent = 'これより前の履歴は省略しています';
+  }
+  return first;
+}
+
+/**
+ * まとまり g（同じ at + actor の連続）を描いて足す。直前に描いたまとまりと同じ at + actor なら
+ * （ページの境目で分かれたもの）、そこへ続けて足す。新しく作ったまとまり（続けたなら null）を返す。
+ */
+function appendHistoryGroup(state, g) {
+  var last = state.last;
+  var cont = !!last && last.at === g.at && last.actor === g.actor;
+  if (!cont) {
     var box = document.createElement('div');
     box.className = 'history-group';
-    var actions = [];
-    g.items.forEach(function (e) {
-      var label = HISTORY_ACTION_LABELS[e.action] || historyText(e.action);
-      if (actions.indexOf(label) === -1) actions.push(label);
-    });
+    box.tabIndex = -1;   // 「さらに表示」の後に焦点を移せるように
     var head = document.createElement('div');
     head.className = 'history-head';
-    head.textContent = historyText(g.at) + ' · ' + commentAuthorLabel(g.actor) + ' · ' + actions.join('・');
     box.appendChild(head);
     var ul = document.createElement('ul');
     ul.className = 'history-items';
-    g.items.forEach(function (e) {
-      if (e.action !== 'update') return;   // 項目の変更以外は見出しの操作名で足りる
-      var li = document.createElement('li');
-      li.className = 'history-item';
-      var label = HISTORY_FIELD_LABELS[e.field] || historyText(e.field);
-      var text = document.createElement('div');
-      text.className = 'history-item-text';
-      li.appendChild(text);
-      if (HISTORY_MULTILINE[e.field]) {
-        text.textContent = label + ':';
-        var diff = document.createElement('div');
-        diff.className = 'history-diff';
-        var beforeLines = historyLines(e.before);
-        var afterLines = historyLines(e.after);
-        var lcsCost = (beforeLines.length + 1) * (afterLines.length + 1);
-        var lcsUsed = beforeLines.length <= HISTORY_LINE_DIFF_MAX && afterLines.length <= HISTORY_LINE_DIFF_MAX;
-        var lines;
-        if (lcsUsed && lcsCost > budget) {
-          lines = beforeLines.map(function (t) { return { op: 'del', text: t }; })
-            .concat(afterLines.map(function (t) { return { op: 'add', text: t }; }));
-        } else {
-          if (lcsUsed) budget -= lcsCost;
-          lines = historyLineDiff(e.before, e.after);
-        }
-        lines.forEach(function (d) {
-          var line = document.createElement('div');
-          line.className = 'history-line ' + d.op;
-          line.textContent = (d.op === 'del' ? '−' : d.op === 'add' ? '＋' : '　') + d.text;
-          diff.appendChild(line);
-        });
-        li.appendChild(diff);
-      } else {
-        text.textContent = label + ': ' + historyValue(e.before) + ' → ' + historyValue(e.after);
-      }
-      ul.appendChild(li);
-    });
-    if (ul.children.length) box.appendChild(ul);
-    content.appendChild(box);
-  });
-  if (truncated) {
-    var more = document.createElement('div');
-    more.className = 'history-status info';
-    more.textContent = 'これより前の履歴は省略しています';
-    content.appendChild(more);
+    last = { at: g.at, actor: g.actor, box: box, head: head, ul: ul, ulShown: false, actions: [] };
+    state.last = last;
+    state.list.appendChild(box);
   }
+  g.items.forEach(function (e) {
+    var label = HISTORY_ACTION_LABELS[e.action] || historyText(e.action);
+    if (last.actions.indexOf(label) === -1) last.actions.push(label);
+    var li = historyItem(state, e);
+    if (li) last.ul.appendChild(li);
+  });
+  last.head.textContent = historyText(g.at) + ' · ' + commentAuthorLabel(g.actor) + ' · ' + last.actions.join('・');
+  if (!last.ulShown && last.ul.children.length) {
+    last.box.appendChild(last.ul);
+    last.ulShown = true;
+  }
+  return cont ? null : last.box;
+}
+
+/** 項目の変更1件の行（li）。項目の変更以外は見出しの操作名で足りるので null。 */
+function historyItem(state, e) {
+  if (e.action !== 'update') return null;
+  var li = document.createElement('li');
+  li.className = 'history-item';
+  var label = HISTORY_FIELD_LABELS[e.field] || historyText(e.field);
+  var text = document.createElement('div');
+  text.className = 'history-item-text';
+  li.appendChild(text);
+  if (!HISTORY_MULTILINE[e.field]) {
+    text.textContent = label + ': ' + historyValue(e.before) + ' → ' + historyValue(e.after);
+    return li;
+  }
+  text.textContent = label + ':';
+  var diff = document.createElement('div');
+  diff.className = 'history-diff';
+  var beforeLines = historyLines(e.before);
+  var afterLines = historyLines(e.after);
+  var lcsCost = (beforeLines.length + 1) * (afterLines.length + 1);
+  var lcsUsed = beforeLines.length <= HISTORY_LINE_DIFF_MAX && afterLines.length <= HISTORY_LINE_DIFF_MAX;
+  var lines;
+  if (lcsUsed && lcsCost > state.budget) {
+    lines = beforeLines.map(function (t) { return { op: 'del', text: t }; })
+      .concat(afterLines.map(function (t) { return { op: 'add', text: t }; }));
+  } else {
+    if (lcsUsed) state.budget -= lcsCost;
+    lines = historyLineDiff(e.before, e.after);
+  }
+  lines.forEach(function (d) {
+    var line = document.createElement('div');
+    line.className = 'history-line ' + d.op;
+    line.textContent = (d.op === 'del' ? '−' : d.op === 'add' ? '＋' : '　') + d.text;
+    diff.appendChild(line);
+  });
+  li.appendChild(diff);
+  return li;
 }
 
 /**

@@ -90,7 +90,7 @@ describe('bughunt2 P: 実ブラウザの規模（1,000 枚・500 コメント・
     assert.ok(m.nodes / 500 <= 12, '1件あたり ' + m.nodes / 500);
   });
 
-  [[100, 'description 100 行'], [500, 'description 500 行（現状は予算超過後に丸ごと del/add で約20万ノード）']].forEach(([lines, label]) => {
+  [[100, 'description 100 行'], [500, 'description 500 行（予算超過後は丸ごと del/add。2巡目 H2 から最初は 50 件だけ描く）']].forEach(([lines, label]) => {
     test('履歴 200 件 × ' + label + ': 開いてから描き終わるまで 20秒未満（固まり・例外なし）', async (t) => {
       await openPage(bigData(50, 0, historyRows(200, lines)));
       await session.evaluate('document.querySelector("#board .card[data-id=\\"PBI-001\\"] .title").click(); return true;');
@@ -101,9 +101,13 @@ describe('bughunt2 P: 実ブラウザの規模（1,000 枚・500 コメント・
       const r = await session.evaluate(
         'document.body.offsetHeight; var el = performance.now() - window.__t0;'
         + 'return { elapsed: el, groups: document.querySelectorAll("#panel-history .history-group").length,'
-        + ' nodes: document.querySelectorAll("#panel-history *").length, errors: window.__errors.slice() };');
+        + ' nodes: document.querySelectorAll("#panel-history *").length, errors: window.__errors.slice(),'
+        + ' more: (document.querySelector("#panel-history .history-more") || {}).textContent || "" };');
       t.diagnostic('履歴 200 × ' + lines + ' 行: ' + r.elapsed.toFixed(0) + 'ms / グループ ' + r.groups + ' / ノード ' + r.nodes);
-      assert.equal(r.groups, 200);
+      // 2巡目 H2（P4）: 最初は 50 件だけ描き、残りは「さらに表示」で足す。
+      assert.equal(r.groups, 50);
+      assert.equal(r.more, 'さらに表示（残り 150 件）');
+      assert.ok(r.nodes <= 50 * (2 * lines + 20), 'ノード ' + r.nodes);
       assert.ok(r.elapsed < 20000, '描画まで ' + r.elapsed + 'ms');
       assert.deepEqual(r.errors, []);
     });
