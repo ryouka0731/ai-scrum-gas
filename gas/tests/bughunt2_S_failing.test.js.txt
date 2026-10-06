@@ -1,0 +1,91 @@
+'use strict';
+// 2巡目 S: 確認済みのバグの再現（現状は失敗する）。
+// 実行（同じディレクトリに置かないと ./bughunt2_S_harness.js が解決しない）:
+//   cp gas/tests/bughunt2_S_failing.test.js.txt gas/tests/bughunt2_S_failing.test.js && node --test gas/tests/bughunt2_S_failing.test.js; rm gas/tests/bughunt2_S_failing.test.js
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const H = require('./bughunt2_S_harness.js');
+const plain = H.plain;
+
+function resolveImp002(h) {
+  const v = plain(h.ctx.apiGetView('impediment'));
+  const r = plain(h.ctx.apiResolveImpediment('IMP-002', '直した', v.view.open[0]));
+  assert.equal(r.ok, true, JSON.stringify(r));
+  return r;
+}
+
+// --- S-BUG-1 ---------------------------------------------------------------
+test('S-BUG-1a: 解決の取り消しで、ブラウザが送った moved の中身（タイトル・報告者・報告日・状態）に障害物をすり替えられない', () => {
+  const h = H.createCtx(H.baseFiles());
+  const r = resolveImp002(h);
+  const forged = Object.assign({}, r.moved, { title: '別の件', reported_by: 'ceo@example.com', description: 'すり替え', reported_at: '1999-01-01', status: 'Resolved', resolution: 'x' });
+  const u = plain(h.ctx.apiUnresolveImpediment(forged, r.resolvedRow));
+  const line = h.files['impediment_log.csv'].split('\n').filter((l) => /^IMP-002,/.test(l))[0] || '';
+  // 期待: 拒否する（invalid / conflict）か、戻すのは解決前の行そのもの（moved の中身は使わない）
+  assert.ok(u.ok === false || line === 'IMP-002,回線が遅い,d,alice,2026-10-01,Open,,,',
+    '取り消しで任意の内容に書き換えられた: ' + line);
+});
+
+test('S-BUG-1b: 解決の取り消しで、障害物を雛形の形（（…））に書き換えて一覧から消せない（作成・編集の検証を迂回できない）', () => {
+  const h = H.createCtx(H.baseFiles());
+  const r = resolveImp002(h);
+  const forged = Object.assign({}, r.moved, { title: '（隠す）', reported_by: '' });
+  plain(h.ctx.apiUnresolveImpediment(forged, r.resolvedRow));
+  const view = plain(h.ctx.apiGetView('impediment')).view;
+  const visible = view.open.concat(view.resolved).some((x) => String(x.id).trim() === 'IMP-002');
+  assert.ok(visible, 'IMP-002 が未解決・解決済のどちらからも見えなくなった（削除の無い障害物を実質的に消せる）');
+});
+
+// --- S-BUG-2 ---------------------------------------------------------------
+test('S-BUG-2a: シートへの無害化（escapeSheetCell）が、- と長い数字の並びで二乗時間にならない', () => {
+  const E = require('../pure_sheet_escape.js');
+  const s = '-' + '1'.repeat(6000) + 'x';
+  const t = Date.now();
+  E.escapeSheetCell(s);
+  const ms = Date.now() - t;
+  // 線形なら 1ms 未満。現状は約 1 秒（10000 桁で約 2 秒、40000 桁で約 26 秒）
+  assert.ok(ms < 100, 'escapeSheetCell が ' + ms + 'ms かかった（SHEET_PLAIN_NUMBER_RE のバックトラック）');
+});
+
+test('S-BUG-2b: スプリント名の正規化（normalizeSprint）が、長い数字の並び＋末尾の非数字で二乗時間にならない', () => {
+  const F = require('../pure_filter.js');
+  const s = '1'.repeat(20000) + 'x';
+  const t = Date.now();
+  F.normalizeSprint(s);
+  const ms = Date.now() - t;
+  assert.ok(ms < 100, 'normalizeSprint が ' + ms + 'ms かかった（/^(.*?)(\\d+)$/ のバックトラック）');
+});
+
+test('S-BUG-2c: 1回の apiUpdatePbi で入れたスプリント値で、全員の盤面の読み込み（apiGetView board）が遅くならない', () => {
+  const h = H.createCtx(H.baseFiles());
+  const u = plain(h.ctx.apiUpdatePbi('PBI-001', { title: 'A', sprint: '1'.repeat(20000) + 'x' }, '2026-10-01 00:00:00'));
+  assert.equal(u.ok, true, '前提: 長いスプリント値が受け付けられる');
+  const t = Date.now();
+  const v = plain(h.ctx.apiGetView('board'));
+  const ms = Date.now() - t;
+  assert.equal(v.ok, true);
+  assert.ok(ms < 200, '盤面の読み込みに ' + ms + 'ms（sprintChoices → normalizeSprint）');
+});
+
+// --- S-BUG-3 ---------------------------------------------------------------
+test('S-BUG-3: トリガーのハンドラ scheduledSync を google.script.run から呼んでも、同期（ロック・シートの全消去と再構築）が走らない', () => {
+  // 仕様（2026-09-04 web-app-design「google.script.run の公開範囲（規約）」2.）:
+  // メニュー / トリガーのハンドラは副作用より前に UI の無い実行を弾く。scheduledSync だけ門が無い。
+  const h = H.createCtx(H.baseFiles());
+  h.ctx.scheduledSync();   // ブラウザからの呼び出し（引数なし。トリガーなら時間主導イベントが渡る）
+  const effects = h.log.filter((x) => /^(Lock|SpreadsheetApp\.getActiveSpreadsheet|Sheet\.)/.test(x));
+  assert.deepEqual(effects, [], 'ブラウザから同期が走った: ' + effects.slice(0, 6).join(', '));
+});
+
+// --- S-BUG-4 ---------------------------------------------------------------
+test('S-BUG-4: 同じ ID の行が2つある PBI の削除を取り消したあと、鍵の破棄（CacheService.remove）が失敗しても、同じ鍵で2回目は戻らない', () => {
+  const f = H.baseFiles();
+  f['product_backlog.csv'] += H.csvLine(H.PBI_FIELDS, { id: 'PBI-002', title: 'B2', status: 'New', created_at: '2026-10-01 00:00:00', updated_at: '2026-10-01 00:00:05' }) + '\n';
+  const h = H.createCtx(f, { failCacheRemove: true });
+  const d = plain(h.ctx.apiDeletePbi('PBI-002', '2026-10-01 00:00:01'));
+  assert.equal(d.ok, true);
+  assert.equal(plain(h.ctx.apiRestorePbi(d.undoToken)).ok, true);
+  const r2 = plain(h.ctx.apiRestorePbi(d.undoToken));
+  const n = h.files['product_backlog.csv'].split('\n').filter((l) => /^PBI-002,/.test(l)).length;
+  assert.equal(n, 2, '取り消しが2回効いて PBI-002 が ' + n + ' 行になった（2回目: ' + JSON.stringify(r2.ok) + '）');
+});
