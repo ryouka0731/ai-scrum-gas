@@ -2201,8 +2201,9 @@ function setCommentList(targetId, list) {
 
 /**
  * 読み込み・障害物の書き込みの応答が運ぶ件数で差し替える。取得済みの一覧と件数が食い違う対象は、
- * 一覧が古い（他の人が書いた等）ので捨てる（開いたときに取る）。開いている節の対象は、一覧が古いか、
- * まだ取れていない（取得の失敗）なら取り直す。
+ * 一覧が古い（他の人が書いた等）ので捨てる（開いたときに取る）。開いている節の対象は、件数が同じでも
+ * 取り直す（他の人の削除と追加で件数だけが揃うことがある）。取り直すと、この件数より前に出した取得の
+ * 応答は捨てられる（古い一覧の長さで件数を戻さない）。取れるまでは今の一覧を出し続ける。
  */
 function takeCommentCounts(counts) {
   commentCounts = Object.assign({}, counts || {});
@@ -2211,13 +2212,7 @@ function takeCommentCounts(counts) {
     if (commentsOf(t).length === commentCountOf(t)) return;
     if (!open || open.targetId !== t) delete commentsByTarget[t];
   });
-  if (!open) return;
-  var f = commentFetch[open.hostId];
-  var failed = !!(f && f.targetId === open.targetId && f.error);
-  if ((commentsKnown(open.targetId) && commentsOf(open.targetId).length !== commentCountOf(open.targetId))
-    || (!commentsKnown(open.targetId) && failed)) {
-    fetchComments(open.hostId, open.targetId);
-  }
+  if (open) fetchComments(open.hostId, open.targetId);
 }
 
 /** カード・表に添える件数。コメントが無ければ null。 */

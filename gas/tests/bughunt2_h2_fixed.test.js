@@ -350,3 +350,39 @@ test('S1: 解決の応答に undoToken が無い（預けられなかった）�
   assert.equal(h.hiddenOf('toast'), true);
   assert.match(h.textOf('message'), /IMP-002「止まっている」を解決しました。/);
 });
+
+// --- PR #11 cubic: 件数が同じでも一覧が最新とは限らない。遅れた取得の応答で新しい件数を戻さない ---
+
+const C3 = cmt('CMT-00000003', 'PBI-001', 'maya@example.com', '2026-10-06 11:00:00', '別の人が足した', false);
+function reloadWith(h, counts) {
+  h.click('reload');
+  const v = pendingOf(h, 'apiGetView');
+  v[v.length - 1].handlers.success({ ok: true, name: 'board', view: h.boardOf(COLS),
+    summary: { byStatus: [], total: { count: 2, points: 0 } }, commentCounts: counts, sprintChoices: [] });
+}
+
+test('P2c: 開いている対象は、新しい件数が届けば件数が同じでも取り直す（他の人の削除と追加で件数が揃った場合）', () => {
+  const h = bootBoard();
+  h.openCard('PBI-001');
+  pendingOf(h, 'apiGetComments')[0].handlers.success({ ok: true, comments: [C1, C2] });
+  reloadWith(h, { 'PBI-001': 2 });   // サーバでは C1 が消え、C3 が足された
+  const again = pendingOf(h, 'apiGetComments');
+  assert.equal(again.length, 1, '開いている対象を取り直していない');
+  assert.deepEqual(again[0].args, ['PBI-001']);
+  again[0].handlers.success({ ok: true, comments: [C2, C3] });
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000002', 'CMT-00000003']);
+});
+
+test('P2c: 新しい件数より前に出した取得の応答が後から届いても、件数を古い一覧の長さへ戻さない', () => {
+  const h = bootBoard();
+  h.openCard('PBI-001');
+  const first = pendingOf(h, 'apiGetComments')[0];
+  reloadWith(h, { 'PBI-001': 3 });
+  first.handlers.success({ ok: true, comments: [C1, C2] });   // 件数より古い写し
+  assert.equal(h.cardCommentCountOf('PBI-001'), 'コメント 3', '古い一覧で件数が戻った');
+  const later = pendingOf(h, 'apiGetComments');
+  assert.equal(later.length, 1, '新しい件数の後に取り直していない');
+  later[0].handlers.success({ ok: true, comments: [C1, C2, C3] });
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000001', 'CMT-00000002', 'CMT-00000003']);
+  assert.equal(h.cardCommentCountOf('PBI-001'), 'コメント 3');
+});
