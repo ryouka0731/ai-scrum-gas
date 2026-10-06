@@ -82,6 +82,29 @@ test('F5: 追跡されたファイルだけを配布し、未追跡の個人用�
   } finally { cleanup(root, dest); }
 });
 
+test('F5: 配布物の中の未追跡ファイル（無視されていないもの）は1件ずつ警告し、要約に件数を出す。無視されたものは黙って配らない', () => {
+  const root = makeRepo((r) => {
+    fs.writeFileSync(path.join(r, 'scrum', 'tracked.md'), 't');
+    fs.writeFileSync(path.join(r, '.gitignore'), 'scrum/ignored.tmp\n');
+  });
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-g4-dest-'));
+  try {
+    // 追跡の後に作る（= git add を忘れた新しいファイル）
+    fs.mkdirSync(path.join(root, 'scrum', 'sprint009'));
+    fs.writeFileSync(path.join(root, 'scrum', 'sprint009', 'sprint_backlog.md'), 'new');
+    fs.writeFileSync(path.join(root, 'scrum', 'forgot.md'), 'new');
+    fs.writeFileSync(path.join(root, 'scrum', 'ignored.tmp'), 'junk');
+    const r = runPublish(root, dest);
+    assert.equal(r.status, 0, r.stderr);
+    const out = r.stdout + r.stderr;
+    assert.match(out, /scrum\/sprint009\/sprint_backlog\.md/, '未追跡のファイルを警告していない: ' + out);
+    assert.match(out, /scrum\/forgot\.md/);
+    assert.doesNotMatch(out, /ignored\.tmp/, '無視されたファイルまで警告している');
+    assert.match(out, /完了しました（[^）]*2 件の未追跡ファイルを配布せず/, '要約に未追跡の件数が無い: ' + out);
+    assert.equal(fs.existsSync(path.join(dest, 'scrum', 'forgot.md')), false, '未追跡のファイルを配った');
+  } finally { cleanup(root, dest); }
+});
+
 test('F5: git リポジトリでないときは明確なメッセージで失敗する', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-g4-nogit-'));
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-g4-dest-'));

@@ -64,6 +64,18 @@ function trackedFiles() {
   return set;
 }
 
+/**
+ * 配布対象のうち、未追跡で .gitignore 等にも無視されていないファイルの相対パス（並び順）を返す。
+ * これらは配らない（trackedFiles）。git add を忘れた新しい成果物に気づけるよう、1件ずつ知らせるために使う。
+ * 取得できなければ空配列（配布そのものは止めない）。
+ */
+function untrackedFiles() {
+  const result = spawnSync('git', ['ls-files', '-z', '--others', '--exclude-standard', '--'].concat(PUBLISH_ITEMS),
+    { cwd: ROOT_DIR, encoding: 'utf8' });
+  if (result.error || result.status !== 0) return [];
+  return String(result.stdout || '').split('\0').filter(Boolean).sort();
+}
+
 /** 現在時刻を YYYY-MM-DD HH:mm:ss で返す。 */
 function nowText() {
   const d = new Date();
@@ -174,8 +186,13 @@ function main(destArg) {
 
   let copiedCount = 0;
   let skippedLinkCount = 0;
+  // 未追跡のファイルは配らない。黙って落とすと、git add を忘れた成果物が配られないまま「完了」に見える。
+  const untracked = untrackedFiles();
 
   console.log('==> 配布します: ' + DEST_DIR);
+  untracked.forEach(function (f) {
+    console.warn('git で追跡されていないため配布しません（git add を忘れていませんか）: ' + f);
+  });
   try {
     PUBLISH_ITEMS.forEach(function (item) {
       const src = path.join(ROOT_DIR, item);
@@ -205,7 +222,8 @@ function main(destArg) {
   fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n', 'utf8');
 
   console.log('==> 完了しました（' + copiedCount + ' ファイルをコピー'
-    + (skippedLinkCount > 0 ? '、' + skippedLinkCount + ' 件のリンク・通常でないファイルをスキップ' : '') + '）');
+    + (skippedLinkCount > 0 ? '、' + skippedLinkCount + ' 件のリンク・通常でないファイルをスキップ' : '')
+    + (untracked.length > 0 ? '、' + untracked.length + ' 件の未追跡ファイルを配布せず' : '') + '）');
   console.log('配布記録: ' + recordPath + '（' + record.publishedAt + ' / ' + record.commit + ' / ' + record.branch + '）');
 }
 
