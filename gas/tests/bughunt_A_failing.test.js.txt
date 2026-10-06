@@ -1,23 +1,10 @@
 'use strict';
 // 実行: cp gas/tests/bughunt_A_failing.test.js.txt /tmp/bughunt_A_failing.test.js のうえ require のパスを直すか、
 //       cp gas/tests/bughunt_A_failing.test.js.txt gas/tests/bughunt_A_failing.test.js && node --test gas/tests/bughunt_A_failing.test.js
+// BUG1・BUG2 は直したので gas/tests/bughunt_g1_fixed.test.js へ移した。
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseCsv, csvToObjects } = require('../pure_csv.js');
-const { toCsv } = require('../pure_csv_write.js');
 const { escapeSheetCell } = require('../pure_sheet_escape.js');
-
-test('BUG1: 途中の空行が幻の空行オブジェクトになり、書き戻しで ",," 行として永続化する', () => {
-  const rows = csvToObjects('a,b\n1,2\n\n3,4\n');
-  assert.strictEqual(rows.length, 2, JSON.stringify(rows));
-  assert.ok(!toCsv(rows, ['a', 'b']).includes('\n,\n'));
-});
-
-test('BUG2: 引用符で始まらないフィールド中の " 以降が、ファイル末尾まで1フィールドに飲み込まれる', () => {
-  // 手書き CSV の「5" モニタ」のようなタイトル
-  const rows = parseCsv('a,b\n5" monitor,x\n3,4\n');
-  assert.deepStrictEqual(rows, [['a', 'b'], ['5" monitor', 'x'], ['3', '4']]);
-});
 
 test('BUG3: タブ/LF で始まる数値文字列は無害化されない（コメントの意図 "タブ・CR・LF で始まる値はそれ自体も無害化する" に反する）', () => {
   assert.strictEqual(escapeSheetCell('\t1'), "'\t1");
