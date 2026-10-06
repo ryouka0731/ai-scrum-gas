@@ -20,7 +20,7 @@ const plain = H.plain;
 // 意図して公開している入口（Web アプリ）。
 const INTENDED_WEB = ['doGet', 'apiGetView', 'apiUpdateStatus', 'apiCreatePbi', 'apiUpdatePbi', 'apiDeletePbi',
   'apiRestorePbi', 'apiCreateImpediment', 'apiUpdateImpediment', 'apiResolveImpediment', 'apiUnresolveImpediment',
-  'apiAddComment', 'apiDeleteComment', 'apiRestoreComment', 'apiGetHistory'];
+  'apiAddComment', 'apiDeleteComment', 'apiRestoreComment', 'apiGetHistory', 'apiGetComments'];
 // メニュー / トリガーのハンドラ（文字列で解決されるため `_` を付けられない。仕様: 副作用より前に getUi を置く）。
 const MENU_HANDLERS = ['onOpen', 'menuSyncNow', 'menuConfigure', 'menuInstallTrigger', 'menuRemoveTrigger'];
 const TRIGGER_HANDLERS = ['scheduledSync'];

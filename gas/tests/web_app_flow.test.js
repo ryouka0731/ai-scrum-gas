@@ -935,19 +935,23 @@ test('コメントの取り消しは、保存した形（前後の空白を落�
   assert.equal(res.restored.body, '戻す');
 });
 
-test('apiGetView(board) は comments を載せ、mine を付ける', () => {
+// 2巡目 H2（P2）: ビューは件数（commentCounts）だけを載せ、本文は apiGetComments で対象ごとに取る。
+test('apiGetView(board) は commentCounts を載せる。本文は apiGetComments が mine を付けて返す', () => {
   const { ctx } = createTestContext(cmtFiles(
     'CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\nCMT-0000000b,PBI-001,you@example.com,2026-10-06 11:00:00,つぎ\n'));
   const res = ctx.apiGetView('board');
   assert.equal(res.ok, true);
-  assert.deepEqual(plain(res.comments)['PBI-001'].map((c) => [c.id, c.mine]), [['CMT-0000000a', true], ['CMT-0000000b', false]]);
+  assert.equal(res.comments, undefined);
+  assert.deepEqual(plain(res.commentCounts), { 'PBI-001': 2 });
+  const got = ctx.apiGetComments('PBI-001');
+  assert.deepEqual(plain(got.comments).map((c) => [c.id, c.mine]), [['CMT-0000000a', true], ['CMT-0000000b', false]]);
 });
 
-test('comments.csv が無くても盤面は読め、comments は空', () => {
+test('comments.csv が無くても盤面は読め、commentCounts は空', () => {
   const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
   const res = ctx.apiGetView('board');
   assert.equal(res.ok, true);
-  assert.deepEqual(plain(res.comments), {});
+  assert.deepEqual(plain(res.commentCounts), {});
 });
 
 test('追加: UUID から ID を作り、ログイン中のメールと時刻で末尾に足す', () => {
@@ -957,7 +961,9 @@ test('追加: UUID から ID を作り、ログイン中のメールと時刻で
   assert.equal(res.comment.id, 'CMT-00000001');
   assert.equal(res.comment.author, 'me@example.com');
   assert.match(files['comments.csv'], /^id,target_id,author,created_at,body\nCMT-00000001,PBI-001,me@example\.com,\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},"一行目\n二行目"\n$/);
-  assert.equal(plain(res.comments)['PBI-001'][0].mine, true);
+  assert.equal(res.targetId, 'PBI-001');
+  assert.equal(res.count, 1);
+  assert.equal(plain(res.comments)[0].mine, true);
 });
 
 test('追加: comments.csv が無ければ案内付きで失敗し、何も作らない', () => {
@@ -1004,11 +1010,12 @@ test('戻す: 他人の author の行は forbidden で書かない', () => {
   assert.equal(files['comments.csv'], CMT_HEADER);
 });
 
-test('障害物の応答にも comments が載る', () => {
+test('障害物の応答にも commentCounts が載る', () => {
   const { ctx } = createTestContext(Object.assign(cmtFiles('CMT-0000000a,IMP-002,me@example.com,2026-10-06 10:00:00,はじめ\n'),
     { 'impediment_log.csv': IMP_HEADER + IMP2, 'impediment_log_resolved.csv': IMP_HEADER }));
   const res = ctx.apiGetView('impediment');
-  assert.equal(plain(res.comments)['IMP-002'][0].mine, true);
+  assert.deepEqual(plain(res.commentCounts), { 'IMP-002': 1 });
+  assert.equal(plain(ctx.apiGetComments('IMP-002').comments)[0].mine, true);
 });
 
 test('追加: ログインが取れないと forbidden で何も書かない', () => {
@@ -1030,9 +1037,9 @@ test('追加: ID が衝突し続けたら error で書かず、1回だけなら�
   assert.equal(b.ctx.apiAddComment('PBI-001', 'x').comment.id, 'CMT-00000002');
 });
 
-test('apiGetView(list) も comments を載せる', () => {
+test('apiGetView(list) も commentCounts を載せる', () => {
   const { ctx } = createTestContext(cmtFiles('CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\n'));
-  assert.equal(plain(ctx.apiGetView('list').comments)['PBI-001'].length, 1);
+  assert.deepEqual(plain(ctx.apiGetView('list').commentCounts), { 'PBI-001': 1 });
 });
 
 // ---------------------------------------------------------------------------

@@ -7,33 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const S = require('./bughunt2_P_support.js');
 const { createHarness } = require('./kanban_harness.js');
-
-const NEW_PBI = { title: 'n', description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' };
-
-// ---------------------------------------------------------------------------
-// BUG-P2 (medium): コメントが「全部」すべてのビュー応答とコメント書き込みの応答に載る
-// ---------------------------------------------------------------------------
-// spec 第6段階は「履歴は増え続けるので、ビューの応答には載せない」とした。コメントも増え続けるのに
-// 盤面・一覧・障害物の応答と、コメントを1件足すたびの応答（apiAddComment / Delete / Restore）に全対象・全件が載る。
-// 6,000件（8人で1年ぶん。本文200文字）で、盤面を開くたび・コメントを送るたびに約 4.5MB（UTF-8）を往復する。
-// 期待: ビュー応答の大きさはコメント数にほぼ依らない（件数だけ、または開いた対象の分だけ）。
-test('BUG-P2a. コメント 6,000 件で、盤面の応答が肥大する（コメント無しの 50 倍以上）', () => {
-  const none = S.createCtx(S.standardFiles(300, null));
-  const many = S.createCtx(S.standardFiles(300, 6000, { bodyChars: 200 }));
-  const base = S.payloadBytes(none.ctx.apiGetView('board'));
-  const big = S.payloadBytes(many.ctx.apiGetView('board'));
-  assert.ok(big < 3 * base, '盤面の応答 ' + base + ' バイト → ' + big + ' バイト（' + (big / base).toFixed(1) + ' 倍）。コメントの本文が全部載っている');
-});
-
-test('BUG-P2b. コメントを1件送るたびの応答に、全コメントが載る（6,000件で約 4.5MB）', () => {
-  const c = S.createCtx(S.standardFiles(300, 6000, { bodyChars: 200 }));
-  const r = c.ctx.apiAddComment(S.pid(1), 'こんにちは');
-  assert.equal(r.ok, true);
-  const bytes = S.payloadBytes(r);
-  assert.ok(bytes < 200000, '書き込みの応答が ' + bytes + ' バイト（送った1件は約 300 バイト）');
-});
 
 // ---------------------------------------------------------------------------
 // BUG-P4 (medium): 履歴パネルの DOM が、描く行数の予算なしに 20万ノードになる

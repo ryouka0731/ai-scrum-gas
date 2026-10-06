@@ -210,6 +210,14 @@ function isProductError(e) {
   return !!(e && e.stack && /kanban\.html/.test(e.stack.split('\n').slice(0, 4).join('\n')));
 }
 
+/** コメント節の取得の状態: 'loading'（読み込んでいます…）/ 'failed'（読み込めませんでした）/ 'shown'。 */
+function commentLoadState(w, hostId) {
+  const t = W.allText(w.el(hostId));
+  if (/コメントを読み込めませんでした/.test(t)) return 'failed';
+  if (/コメントを読み込んでいます…/.test(t)) return 'loading';
+  return 'shown';
+}
+
 /**
  * 静止後の不変条件。violations を返す（空なら合格）。
  * phase: 'quiescent'（最後の読み込みの前） / 'final'（最新にした後）
@@ -289,7 +297,11 @@ function checkInvariants(w, phase, ctx) {
       if (!w.el('panel-comments').hidden) {
         const shown = h.commentsIn('panel-comments').map(function (c) { return c.id; });
         const truth = (tcomments[title] || []).map(function (c) { return c.id; });
-        if (JSON.stringify(shown) !== JSON.stringify(truth) && (phase === 'final' || ctx.strictComments)) {
+        const load = commentLoadState(w, 'panel-comments');
+        if (load === 'loading') v.push('PBI パネル ' + title + ' のコメントが「読み込んでいます…」のまま');
+        // 取得が失敗した節は「読み込めませんでした」を出す（誤った一覧は出さない）。最新にすれば取り直す。
+        if ((load !== 'failed' || phase === 'final') && JSON.stringify(shown) !== JSON.stringify(truth)
+          && (phase === 'final' || ctx.strictComments)) {
           v.push('PBI パネル ' + title + ' のコメントが ' + JSON.stringify(shown) + '（サーバ ' + JSON.stringify(truth) + '）');
         }
         const f = h.commentFormOf('panel-comments');
@@ -304,7 +316,10 @@ function checkInvariants(w, phase, ctx) {
     if (/^IMP-/.test(title) && !w.el('imp-panel-comments').hidden) {
       const shown = h.commentsIn('imp-panel-comments').map(function (c) { return c.id; });
       const truth = (tcomments[title] || []).map(function (c) { return c.id; });
-      if (JSON.stringify(shown) !== JSON.stringify(truth) && (phase === 'final' || ctx.strictComments)) {
+      const load = commentLoadState(w, 'imp-panel-comments');
+      if (load === 'loading') v.push('障害物パネル ' + title + ' のコメントが「読み込んでいます…」のまま');
+      if ((load !== 'failed' || phase === 'final') && JSON.stringify(shown) !== JSON.stringify(truth)
+        && (phase === 'final' || ctx.strictComments)) {
         v.push('障害物パネル ' + title + ' のコメントが ' + JSON.stringify(shown) + '（サーバ ' + JSON.stringify(truth) + '）');
       }
       if (h.commentFormOf('imp-panel-comments').inputDisabled) v.push('障害物パネルのコメント入力が塞がったまま');

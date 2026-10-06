@@ -16,7 +16,7 @@ const { buildImpedimentView } = require('../../pure_view_impediment.js');
 const { summarizeBacklog, summarizeImpediment } = require('../../pure_summary.js');
 const { KANBAN_STATUSES } = require('../../pure_grid_board.js');
 const { sprintChoices } = require('../../pure_sprint_options.js');
-const { groupComments } = require('../../pure_comment.js');
+const { countComments } = require('../../pure_comment.js');
 const { historyFor, HISTORY_LIMIT } = require('../../pure_history.js');
 
 /** 実行されたら立つ旗の名前。 */
@@ -41,9 +41,12 @@ function buildResponses(data) {
   const rows = data.rows;
   const open = data.impOpen || [];
   const resolved = data.impResolved || [];
-  const comments = groupComments(data.comments || [], data.me || 'me');
+  const counts = countComments(data.comments || []);
   const out = {};
-  Object.keys(base).forEach(function (k) { out[k] = Object.assign({}, base[k], { comments: comments }); });
+  Object.keys(base).forEach(function (k) {
+    out[k] = Object.assign({}, base[k]);
+    if (Object.prototype.hasOwnProperty.call(out[k], 'commentCounts')) out[k].commentCounts = counts;
+  });
   const sum = summarizeBacklog(rows, KANBAN_STATUSES);
   out.board = Object.assign({}, out.board, { view: buildBoardData(rows), summary: sum, sprintChoices: sprintChoices(VELOCITY, rows) });
   out.list = Object.assign({}, out.list, { view: buildListView(rows), summary: sum });
@@ -86,19 +89,21 @@ function stubScript(data) {
     + 'window.__calls = []; window.__errors = [];\n'
     + 'window.addEventListener("error", function (e) { window.__errors.push(String(e.message)); });\n'
     + 'var seq = 100;\n'
-    + 'function group() { var o = {}; CFG.commentRows.forEach(function (c) { (o[c.target_id] = o[c.target_id] || []).push(Object.assign({}, c, { mine: c.author === CFG.me })); }); return o; }\n'
+    + 'function listOf(t) { return CFG.commentRows.filter(function (c) { return c.target_id === t; }).map(function (c) { return Object.assign({}, c, { mine: c.author === CFG.me }); }); }\n'
+    + 'function forTarget(t) { var l = listOf(t); return { targetId: t, comments: l, count: l.length }; }\n'
     + 'function makeRunner() {\n'
     + '  var ok = null, ng = null;\n'
     + '  var r = { withSuccessHandler: function (f) { ok = f; return r; }, withFailureHandler: function (f) { ng = f; return r; } };\n'
     + '  function reply(fn) { setTimeout(function () { if (ok) ok(fn()); }, 0); }\n'
     + '  r.apiGetView = function (name) { window.__calls.push({ method: "apiGetView", args: [name] }); reply(function () { return CFG.responses[name] || { ok: false, message: "none" }; }); };\n'
+    + '  r.apiGetComments = function (id) { window.__calls.push({ method: "apiGetComments", args: [id] }); reply(function () { return { ok: true, comments: listOf(id) }; }); };\n'
     + '  r.apiGetHistory = function (id) { window.__calls.push({ method: "apiGetHistory", args: [id] }); reply(function () { return id === CFG.historyTarget ? CFG.history : { ok: true, entries: [] }; }); };\n'
     + '  r.apiAddComment = function (id, body) { window.__calls.push({ method: "apiAddComment", args: [id, body] }); reply(function () {\n'
     + '    var c = { id: "CMT-" + ("0000000" + (seq++).toString(16)).slice(-8), target_id: id, author: CFG.me, created_at: "2026-10-01 12:00:00", body: body };\n'
-    + '    CFG.commentRows.push(c); return { ok: true, comment: Object.assign({}, c), comments: group() }; }); };\n'
+    + '    CFG.commentRows.push(c); return Object.assign({ ok: true, comment: Object.assign({}, c) }, forTarget(id)); }); };\n'
     + '  r.apiDeleteComment = function (id) { window.__calls.push({ method: "apiDeleteComment", args: [id] }); reply(function () {\n'
     + '    var i = CFG.commentRows.findIndex(function (c) { return c.id === id; }); var rem = CFG.commentRows.splice(i, 1)[0];\n'
-    + '    return { ok: true, removed: rem, comments: group() }; }); };\n'
+    + '    return Object.assign({ ok: true, removed: rem }, forTarget(rem.target_id)); }); };\n'
     + '  r.apiDeletePbi = function (id) { window.__calls.push({ method: "apiDeletePbi", args: [id] }); reply(function () {\n'
     + '    var row = CFG.rows.filter(function (x) { return x.id === id; })[0] || null;\n'
     + '    return { ok: true, board: CFG.afterDelete[id], id: null, undoToken: "tok-del", removed: row }; }); };\n'

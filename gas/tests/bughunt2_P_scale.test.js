@@ -161,8 +161,8 @@ test('P6. 10,000 件の盤面: 応答は 4MB 未満、ロードマップは 1MB 
   assert.ok(S.payloadBytes(rm) < 1e6, 'ロードマップ ' + S.payloadBytes(rm));
 });
 
-test('P7. コメントの応答: 全コメントがビューと書き込みの応答に載る。大きさはコメント数に線形で、1件あたり本文+300文字以内', () => {
-  // 現状の設計（応答に全コメント）の大きさを固定する。これが重いことは failing 側で指摘している。
+test('P7. コメントの応答: ビューには対象ごとの件数だけが載る。コメントを4倍にしても盤面の応答はほぼ変わらない', () => {
+  // 2巡目 H2（P2）で、全コメントを載せる設計から件数（commentCounts）だけを載せる設計に変えた。
   const bodyChars = 100;
   const make = (n) => {
     const c = S.createCtx(S.standardFiles(100, n, { bodyChars: bodyChars }));
@@ -171,9 +171,9 @@ test('P7. コメントの応答: 全コメントがビューと書き込みの�
   const base = make(0);
   const a = make(1000) - base;
   const b = make(4000) - base;
-  assert.ok(a / 1000 <= bodyChars + 300, '1件あたり ' + a / 1000 + ' 文字');
-  const ratio = b / a;
-  assert.ok(ratio > 3.5 && ratio < 4.5, '4倍にして ' + ratio.toFixed(2) + ' 倍');
+  // 件数は最大 50 対象（standardFiles が散らす数）。1対象あたり数十文字以内。
+  assert.ok(a <= 50 * 30, '1,000 件で ' + a + ' 文字増えた');
+  assert.ok(b - a <= 50 * 2, '4,000 件にして ' + (b - a) + ' 文字増えた');
 });
 
 test('P8. 変更履歴の見出しだけの短い値なら、200件の応答は 100KB 未満（切り捨ては件数で効く）', () => {
@@ -294,7 +294,9 @@ test('P18. apiGetView(board/list/roadmap/done) とコメント・履歴: 件数�
     return () => { const r = c.ctx.apiGetView(name); if (!r.ok) throw new Error(r.message); };
   };
   ['board', 'list', 'roadmap', 'done'].forEach((v) => assertNearLinear('apiGetView ' + v, (n) => view(v, n), 600));
-  assertNearLinear('apiGetView board コメント', (n) => view('board', 100, n), 600);
+  // 2巡目 H2（P2）から盤面はコメントの件数だけを数える（1件あたりの仕事が小さい）。600 件では 2ms 弱で揺れが
+  // 主になるため、起点を 2,000 件にする（比べるのは同じく 4 倍にしたときの時間の比）。
+  assertNearLinear('apiGetView board コメント', (n) => view('board', 100, n), 2000);
   assertNearLinear('apiGetHistory', (n) => {
     const c = S.createCtx(S.standardFiles(10, 0, { logChars: n * 1000 }));
     return () => c.ctx.apiGetHistory(S.pid(1));

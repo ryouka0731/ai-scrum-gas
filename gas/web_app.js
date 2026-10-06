@@ -130,7 +130,8 @@ function apiGetView(name) {
       if (key === 'board') {
         out.sprintChoices = sprintChoices(readCsvRowsBestEffort_(VELOCITY_CSV_NAME), rows);
       }
-      out.comments = commentsPayload_();
+      // コメントは件数だけ載せる（本文は増え続けるので、パネルを開いたときに apiGetComments で取る）。
+      out.commentCounts = commentCountsPayload_();
       return out;
     }
     if (key === 'done') {
@@ -550,7 +551,7 @@ function impedimentPayload_(openRows, resolvedRows) {
     view: buildImpedimentView(openRows, resolvedRows),
     summary: summarizeImpediment(openRows, resolvedRows),
     sprintChoices: sprintChoices(readCsvRowsBestEffort_(VELOCITY_CSV_NAME), openRows.concat(resolvedRows)),
-    comments: commentsPayload_(),
+    commentCounts: commentCountsPayload_(),
   };
 }
 
@@ -839,9 +840,29 @@ function currentUserEmail_() {
   try { return String(Session.getActiveUser().getEmail() || ''); } catch (e) { return ''; }
 }
 
-/** 全対象のコメント。ファイルが無い・壊れていても空にする（他の表示を巻き添えにしない）。 */
-function commentsPayload_() {
-  return groupComments(readCsvRowsBestEffort_(COMMENT_CSV_NAME), currentUserEmail_());
+/** 対象ごとのコメントの件数。ファイルが無い・壊れていても空にする（他の表示を巻き添えにしない）。 */
+function commentCountsPayload_() {
+  return countComments(readCsvRowsBestEffort_(COMMENT_CSV_NAME));
+}
+
+/**
+ * 1つの対象のコメントを古い順に返す（mine 付き）。パネルを開いたときだけ呼ばれる。
+ * 読み取りのみなのでロックは取らない。ファイルが無い・壊れているときは空の一覧。
+ */
+function apiGetComments(targetId) {
+  const id = String(targetId === null || targetId === undefined ? '' : targetId).trim();
+  if (!COMMENT_TARGET_RE.test(id)) {
+    return { ok: false, reason: 'invalid', message: 'コメントの対象が不正です: ' + id };
+  }
+  return { ok: true, comments: commentsForTarget(readCsvRowsBestEffort_(COMMENT_CSV_NAME), id, currentUserEmail_()) };
+}
+
+/** 書き込みの応答に載せる、その対象の一覧と件数。対象が分からなければ何も載せない。 */
+function commentTargetPayload_(rows, targetId, me) {
+  const id = String(targetId || '').trim();
+  if (!COMMENT_TARGET_RE.test(id)) return {};
+  const list = commentsForTarget(rows, id, me);
+  return { targetId: id, comments: list, count: list.length };
 }
 
 /** CMT- + UUID の先頭8桁。 */
@@ -851,7 +872,8 @@ function newCommentId_() {
 
 /**
  * コメントの書き込みの共通手順。ロックを取り、読み直し、ヘッダーを検査してから mutate(rows) を呼ぶ。
- * mutate は { ok:true, rows, extra? } か { ok:false, reason, message } を返す。rows が null なら書かない。
+ * mutate は { ok:true, rows, target, extra? } か { ok:false, reason, message, target? } を返す。rows が null なら書かない。
+ * target（対象の ID）が分かれば、応答にその対象の comments・count・targetId を載せる。
  */
 function withCommentWrite_(mutate) {
   const lock = LockService.getScriptLock();
@@ -866,13 +888,17 @@ function withCommentWrite_(mutate) {
     const rows = readRowsForWrite_(text, COMMENT_FIELDS, COMMENT_CSV_NAME);
     const me = currentUserEmail_();
     const result = mutate(rows, me);
-    if (!result.ok) return { ok: false, reason: result.reason, message: result.message, comments: groupComments(rows, me) };
+    // 応答には、その対象の一覧と件数だけを載せる（全対象を載せると、件数に比例して往復が肥大する）。
+    if (!result.ok) {
+      return Object.assign({ ok: false, reason: result.reason, message: result.message },
+        commentTargetPayload_(rows, result.target, me));
+    }
     let warning = null;
     if (result.rows) {
       writeScrumFile_(COMMENT_CSV_NAME, toCsv(result.rows, COMMENT_FIELDS));
       warning = appendHistory_(result.history);
     }
-    return Object.assign({ ok: true, comments: groupComments(result.rows || rows, me) }, result.extra || {},
+    return Object.assign({ ok: true }, commentTargetPayload_(result.rows || rows, result.target, me), result.extra || {},
       warning ? { historyWarning: warning } : {});
   } catch (e) {
     return { ok: false, reason: 'error', message: e.message };
@@ -884,15 +910,16 @@ function withCommentWrite_(mutate) {
 /** コメントを足す。ID・書いた人・時刻はサーバが決める。 */
 function apiAddComment(targetId, body) {
   return withCommentWrite_(function (rows, me) {
-    if (!me) return { ok: false, reason: 'forbidden', message: 'ログイン情報を取得できないためコメントできません。' };
+    const target = String(targetId === null || targetId === undefined ? '' : targetId).trim();
+    if (!me) return { ok: false, reason: 'forbidden', message: 'ログイン情報を取得できないためコメントできません。', target: target };
     const v = validateComment(targetId, body);
-    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
+    if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n'), target: target };
     const taken = function (id) { return rows.some(function (r) { return String(r.id || '').trim() === id; }); };
     let id = newCommentId_();
     for (let i = 0; i < 4 && taken(id); i++) id = newCommentId_();
-    if (taken(id)) return { ok: false, reason: 'error', message: 'ID が重複しました。もう一度お試しください。' };
+    if (taken(id)) return { ok: false, reason: 'error', message: 'ID が重複しました。もう一度お試しください。', target: target };
     const r = appendComment(rows, id, targetId, me, String(body), nowText_());
-    return { ok: true, rows: r.rows, extra: { comment: r.comment },
+    return { ok: true, rows: r.rows, target: r.comment.target_id, extra: { comment: r.comment },
       history: [{ target_id: r.comment.target_id, action: 'comment_add' }] };
   });
 }
@@ -902,10 +929,12 @@ function apiDeleteComment(commentId) {
   return withCommentWrite_(function (rows, me) {
     const r = deleteComment(rows, commentId, me);
     if (!r.ok) {
-      return { ok: false, reason: r.reason,
+      // 見つからないときは対象も分からない（一覧を載せない）。
+      const at = rows.filter(function (x) { return String(x.id || '').trim() === String(commentId === null || commentId === undefined ? '' : commentId).trim(); })[0];
+      return { ok: false, reason: r.reason, target: at ? at.target_id : '',
         message: r.reason === 'forbidden' ? '自分のコメントだけ削除できます。' : 'このコメントが見つかりません。' };
     }
-    return { ok: true, rows: r.rows, extra: { removed: r.removed },
+    return { ok: true, rows: r.rows, target: (r.removed || {}).target_id, extra: { removed: r.removed },
       history: [{ target_id: String((r.removed || {}).target_id || '').trim(), action: 'comment_delete' }] };
   });
 }
@@ -917,16 +946,17 @@ function apiDeleteComment(commentId) {
 function apiRestoreComment(row) {
   return withCommentWrite_(function (rows, me) {
     const picked = Object.assign({}, row || {}, { author: String((row || {}).author || '') });
+    const target = String(picked.target_id === null || picked.target_id === undefined ? '' : picked.target_id).trim();
     if (!me || picked.author !== me) {
-      return { ok: false, reason: 'forbidden', message: '自分のコメントだけ戻せます。' };
+      return { ok: false, reason: 'forbidden', message: '自分のコメントだけ戻せます。', target: target };
     }
     const r = restoreComment(rows, picked);
-    if (!r.ok) return { ok: false, reason: 'invalid', message: '戻す内容が不正です。' };
+    if (!r.ok) return { ok: false, reason: 'invalid', message: '戻す内容が不正です。', target: target };
     // 保存した形の行（id・target_id は前後の空白を落とす）を返す。画面は送った行ではなくこれで重ねる
     // （送った行のままだと id が食い違い、サーバの写しの行と一時的に二重に出る）。
     const id = String(picked.id || '').trim();
     const saved = r.rows.filter(function (x) { return String(x.id || '').trim() === id; })[0];
-    return { ok: true, rows: r.unchanged ? null : r.rows, extra: { restored: saved },
+    return { ok: true, rows: r.unchanged ? null : r.rows, target: target, extra: { restored: saved },
       history: [{ target_id: String(picked.target_id || '').trim(), action: 'comment_restore' }] };
   });
 }

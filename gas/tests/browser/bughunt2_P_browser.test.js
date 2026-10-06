@@ -76,10 +76,12 @@ describe('bughunt2 P: 実ブラウザの規模（1,000 枚・500 コメント・
 
   test('500 件のコメント: カードを開いてコメント節が 3秒未満で出て、1件あたり 12 ノード以内', async (t) => {
     await openPage(bigData(200, 500));
+    // 2巡目 H2（P2）から、本文はパネルを開いたときに apiGetComments で取る（応答は非同期）。
+    await session.evaluate('window.__t0 = performance.now();'
+      + 'document.querySelector("#board .card[data-id=\\"PBI-001\\"] .title").click(); return true;');
+    await session.waitFor('return document.querySelectorAll("#panel-comments li").length === 500 ? 1 : 0', 'コメントの描画', 10000);
     const m = await session.evaluate(
-      'var t = performance.now();'
-      + 'document.querySelector("#board .card[data-id=\\"PBI-001\\"] .title").click(); document.body.offsetHeight;'
-      + 'var open = performance.now() - t;'
+      'document.body.offsetHeight; var open = performance.now() - window.__t0;'
       + 'var host = document.getElementById("panel-comments");'
       + 'return { open: open, items: host.querySelectorAll("li").length, nodes: host.querySelectorAll("*").length };');
     t.diagnostic('500 コメント: パネルを開く ' + m.open.toFixed(0) + 'ms / ノード ' + m.nodes);

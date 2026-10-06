@@ -347,7 +347,7 @@ const API_METHODS = [
   'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi',
   'apiCreateImpediment', 'apiUpdateImpediment', 'apiResolveImpediment', 'apiUnresolveImpediment',
   'apiAddComment', 'apiDeleteComment', 'apiRestoreComment',
-  'apiGetHistory'
+  'apiGetHistory', 'apiGetComments'
 ];
 
 /** 呼び出しをキューに積むだけの google.script.run を作る。 */

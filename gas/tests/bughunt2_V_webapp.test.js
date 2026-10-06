@@ -516,7 +516,9 @@ test('apiDeleteComment: 他人のコメントは消せない・無い ID は not
   const e = makeEnv(scrum({ 'comments.csv': csv }));
   let r = e.ctx.apiDeleteComment('CMT-00000001');
   assert.equal(r.reason, 'forbidden'); assert.match(r.message, /自分のコメントだけ/);
-  assert.equal(J(r.comments['PBI-001']).length, 2, '失敗でも最新のコメントを返す');
+  // 2巡目 H2（P2）: 応答はその対象の一覧（comments）と件数（count）だけ。
+  assert.equal(J(r.comments).length, 2, '失敗でも最新のコメントを返す');
+  assert.equal(r.count, 2);
   r = e.ctx.apiDeleteComment('CMT-99999999');
   assert.equal(r.reason, 'not_found');
   r = e.ctx.apiDeleteComment('CMT-00000002');

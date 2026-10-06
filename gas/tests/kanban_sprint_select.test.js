@@ -110,11 +110,13 @@ test('前後に空白のあるスプリントを触らずに保存しても、�
     '触っていないスプリントを送っている（元の値が書き換わる）');
 });
 
-test('パネルを開いてもサーバへ往復しない（選択肢は盤面の応答が運ぶ）', () => {
+test('パネルを開いてもスプリントの選択肢のためにサーバへ往復しない（選択肢は盤面の応答が運ぶ）', () => {
   const h = ready(CHOICES);
   const before = h.calls.length;
   h.openCard('PBI-001');
-  assert.equal(h.calls.length, before, 'パネルを開くだけでサーバを呼んでいる');
+  // 2巡目 H2（P2）: パネルを開くとコメント（apiGetComments）だけは取りに行く。それ以外は呼ばない。
+  const others = h.calls.slice(before).filter(function (c) { return c.method !== 'apiGetComments'; });
+  assert.equal(others.length, 0, 'パネルを開くだけでサーバを呼んでいる');
   assert.ok(h.optionsOf('f-sprint').length > 1, '選択肢が並んでいない');
 });
 

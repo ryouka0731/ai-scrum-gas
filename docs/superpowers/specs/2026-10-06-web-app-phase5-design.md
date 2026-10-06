@@ -69,14 +69,29 @@ PBI や障害物について話し合う場所が無い。今は説明欄に追�
 ## API
 
 ```
-apiAddComment(targetId, body)   → { ok, comments, comment }
-apiDeleteComment(commentId)     → { ok, comments, removed }
-apiRestoreComment(row)          → { ok, comments }
+apiAddComment(targetId, body)   → { ok, targetId, comments, count, comment }   （2026-10-07 から。下の追記）
+apiDeleteComment(commentId)     → { ok, targetId, comments, count, removed }
+apiRestoreComment(row)          → { ok, targetId, comments, count, restored }
+apiGetComments(targetId)        → { ok, comments }                            （2026-10-07 に追加）
 ```
 
-- `comments` は `{ <target_id>: [comment, …] }`（全対象。古い順）。パネルと件数の両方がこれを使う
-- 読み取りは**専用の API を作らない**。`apiGetView` の `board` / `list` / `impediment` の応答に
-  `comments` を載せる。パネルを開くたびの往復が無く、件数も同じ応答から出せる
+> **追記（2026-10-07）**: ビューと書き込みの応答に全対象・全件のコメントを載せる設計をやめた（コメントは増え続け、
+> 6,000 件で盤面を開くたび・コメントを送るたびに約 4.5MB を往復した。第6段階が履歴をビューに載せないのと同じ理由）。
+> - `apiGetView` の `board` / `list` / `impediment` と障害物の書き込みの応答は、件数 `commentCounts: { <target_id>: n }` だけを載せる
+> - 本文は読み取り専用の `apiGetComments(targetId)` で対象ごとに取る（古い順、`mine` 付き。形の不正は `invalid`、
+>   ファイルが無ければ空）。パネルを開いたときに呼び、応答までは「コメントを読み込んでいます…」を出す。
+>   遅れて届いた前の対象・前の取得の応答は通し番号で捨てる。失敗は節に出し、「最新にする」で取り直す
+> - コメントの書き込みの応答は、その対象の `comments`（一覧）・`count`（件数）・`targetId` だけ。
+>   対象の分からない失敗（`not_found`）は一覧を載せない
+> - 下の「画面」の順序の扱いは対象ごとに読み替える: 発行番号による新旧の判定は対象ごと。確定した自分の操作の
+>   重ね（足した行は消えない・消した `id` は戻らない）は、取得した一覧と書き込みの応答の一覧の両方に当てる。
+>   取得を出したあとにその対象への書き込みが確定していたら、取得の応答は使わない（書き込みの応答の一覧の方が新しい）
+> - カード・表の件数は `commentCounts` と、取り込んだ一覧の長さから出す。読み込みの件数が取得済みの一覧と
+>   食い違えば、その一覧は捨てる（開いている節なら取り直す）
+
+- ~~`comments` は `{ <target_id>: [comment, …] }`（全対象。古い順）。パネルと件数の両方がこれを使う~~（2026-10-07 に廃止。上の追記）
+- ~~読み取りは専用の API を作らない。`apiGetView` の `board` / `list` / `impediment` の応答に
+  `comments` を載せる~~（2026-10-07 に廃止。件数だけを載せ、本文は `apiGetComments`）
 - 失敗: `{ ok:false, reason, message, comments? }`。`reason` は `busy` / `invalid` / `forbidden` / `not_found` / `error`
 - 各コメントには `mine`（ログイン中の人が書いたか）を付けて返す。画面は `mine` のときだけ「削除」を出す。
   判定はサーバでもう一度行う（画面の申告を信じない）
@@ -109,7 +124,7 @@ apiRestoreComment(row)          → { ok, comments }
 | `scrum/comments.csv`（新） | 雛形（ヘッダー行のみ） |
 | `gas/pure_comment.js`（新） | `COMMENT_FIELDS`、検証、追記・削除・戻しの純関数、`groupComments(rows, me)` |
 | `gas/pure_write_guard.js` | 許可リストに `comments.csv` |
-| `gas/web_app.js` | `withCommentWrite_`、3つの API、ビューの応答に `comments` |
+| `gas/web_app.js` | `withCommentWrite_`、3つの API、ビューの応答に `comments`（2026-10-07 から `commentCounts` と `apiGetComments`） |
 | `gas/kanban.html` | パネルのコメント節、カードと一覧の件数 |
 
 ID の採番はサーバの `Utilities.getUuid()` を使うが、純関数には ID を引数で渡す（テストで固定できるように）。
@@ -118,7 +133,7 @@ ID の採番はサーバの `Utilities.getUuid()` を使うが、純関数には
 
 - 純関数: 検証（空・2000字超・`target_id` の形）、追記、本人以外の削除拒否、戻しの冪等、`groupComments` の並びと `mine`
 - `web_app_flow`: ファイルが無いときの読み取り（空）と書き込み（案内付きで失敗）、ヘッダー不一致で書かない、
-  他人のコメントを消せない、`apiGetView` が `comments` を載せる
+  他人のコメントを消せない、`apiGetView` が `comments` を載せる（2026-10-07 から `commentCounts` を載せ、本文は `apiGetComments`）
 - DOM シム: パネルにコメントが出る・追加・自分のものだけ削除が出る・取り消し・新規作成中は節が無い・
   応答の順序（古い応答で戻らない）・件数の表示
 - 実ブラウザ: パネルの縦の並び（コメント節で保存ボタンが押せなくならない）

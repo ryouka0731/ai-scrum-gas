@@ -538,6 +538,7 @@ function runCommentSeed(seed, steps) {
     let label;
     let apply = () => {};
     let histEvent = null;
+    let restoreTarget = '';
     if (op === 0 || op === 1) {
       const target = r.chance(0.85) ? r.pick(['PBI-001', 'PBI-002', ' IMP-003 ']) : r.pick(['CMT-00000001', 'PBI-', '', null, 7, ['PBI-001']]);
       const body = r.chance(0.85) ? 'BODY-' + seed + '-' + step + r.pick(['', ',カンマ', '\r\n改行', '"引用"']) : r.pick(['', '   ', 'あ'.repeat(2001), null]);
@@ -578,6 +579,7 @@ function runCommentSeed(seed, steps) {
       if (r.chance(0.2)) row.author = r.pick(['you@example.com', 'me@example.com', '']);
       if (r.chance(0.1)) row.created_at = 'yesterday';
       label = 'restore ' + JSON.stringify([row.id, row.author, me]);
+      restoreTarget = String(row.target_id).trim();
       const exists = model.some((x) => x.id === row.id);
       if (!me || row.author !== me) expect = { ok: false, reason: 'forbidden' };
       // 日時は形を問わず、空だけを拒む（削除できた行は戻せる。G1 C-5 の修正）
@@ -612,11 +614,14 @@ function runCommentSeed(seed, steps) {
     apply();
     assert.deepEqual(rowsOf(files['comments.csv'], CMT_FIELDS).map((x) => JSON.stringify(x)).sort(),
       model.map((x) => JSON.stringify(x)).sort(), ctxLabel + ': comments.csv とモデルが違う');
-    // 応答の comments は全体で、mine は本人のものだけ
-    const flat = [];
-    Object.keys(res.comments).forEach((k) => res.comments[k].forEach((c) => flat.push(c)));
-    assert.equal(flat.length, model.length, ctxLabel + ': 応答の comments の件数');
-    flat.forEach((c) => assert.equal(c.mine, !!me && c.author === me, ctxLabel + ': mine'));
+    // 応答の comments はその対象の一覧（2巡目 H2 の P2 から）。件数は count、mine は本人のものだけ
+    const opTarget = op <= 1 ? String(res.comment.target_id) : op <= 3 ? String(res.removed.target_id).trim() : restoreTarget;
+    const inTarget = model.filter((x) => String(x.target_id).trim() === opTarget);
+    assert.equal(res.targetId, opTarget, ctxLabel + ': 応答の targetId');
+    assert.equal(res.comments.length, inTarget.length, ctxLabel + ': 応答の comments の件数');
+    assert.equal(res.count, inTarget.length, ctxLabel + ': 応答の count');
+    res.comments.forEach((c) => assert.equal(c.mine, !!me && c.author === me, ctxLabel + ': mine'));
+    res.comments.forEach((c) => assert.equal(c.target_id, opTarget, ctxLabel + ': 他の対象のコメント'));
     const added = newHistoryRows(snapshot['change_log.csv'], files['change_log.csv'], ctxLabel);
     if (!histEvent) {
       assert.deepEqual(added, [], ctxLabel + ': 何も書かないのに履歴が増えた');
