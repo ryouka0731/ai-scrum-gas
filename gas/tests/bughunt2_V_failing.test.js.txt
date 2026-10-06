@@ -1,0 +1,68 @@
+'use strict';
+// 2巡目 V: 実在するバグの再現（失敗するテスト）。実行: cp でコピーして
+//   cp gas/tests/bughunt2_V_failing.test.js.txt gas/tests/bughunt2_V_failing_run.test.js && node --test gas/tests/bughunt2_V_failing_run.test.js; rm gas/tests/bughunt2_V_failing_run.test.js
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { makeEnv, J, BACKLOG_HEADER } = require('./bughunt2_V_env.js');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const ROOT = path.join(__dirname, '..', '..');
+const SCRIPT = path.join(ROOT, 'scripts', 'publish.js');
+function tmp() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt2-V-publish-'));
+  return { dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+function run(arg) {
+  const r = spawnSync(process.execPath, [SCRIPT, arg], { cwd: ROOT, encoding: 'utf8' });
+  return { code: r.status, out: String(r.stdout), err: String(r.stderr) };
+}
+
+const T = '2026-01-01 00:00:00';
+function env() {
+  return makeEnv({ files: { 'product_backlog.csv': BACKLOG_HEADER + 'PBI-001,A,,,Low,1,New,,' + T + ',' + T + '\n', 'product_backlog_done.csv': BACKLOG_HEADER }, folders: {} });
+}
+const ids = (board) => [].concat.apply([], J(board).columns.map((c) => c.cards.map((x) => x.id)));
+
+test('BUG-V1: 全角括弧だけで囲んだタイトルで PBI を作ると、成功と返るのに盤面から消える（障害物は同じ入力を拒否する）', () => {
+  const e = env();
+  const r = e.ctx.apiCreatePbi({ title: '（仮）', priority: 'Low' });
+  // 期待: 拒否（invalid）されるか、作ったなら盤面に出る。実際: ok:true なのに盤面に出ない。
+  if (r.ok) assert.ok(ids(r.board).indexOf(r.id) !== -1, r.id + ' を作ったと返したが盤面に無い（雛形扱いで隠れた）');
+  else assert.equal(r.reason, 'invalid');
+});
+
+test('BUG-V1b: 既存の PBI のタイトルを（…）だけで囲む保存は、成功と返るのに盤面から消えて編集も削除もできなくなる', () => {
+  const e = env();
+  const r = e.ctx.apiUpdatePbi('PBI-001', { title: '（旧）', priority: 'Low', status: 'New', size: '1' }, T);
+  if (r.ok) assert.ok(ids(r.board).indexOf('PBI-001') !== -1, 'PBI-001 が盤面から消えた');
+  else assert.equal(r.reason, 'invalid');
+});
+
+test('BUG-V2: 配布先の scrum/ がリンクのとき、配布記録（.published.json）だけがリンク先（配布フォルダの外）へ書かれる', () => {
+  const t = tmp();
+  const outside = tmp();
+  try {
+    fs.symlinkSync(outside.dir, path.join(t.dir, 'scrum'));
+    const r = run(t.dir);
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(fs.readdirSync(outside.dir), [], 'リンク先に書き込んだ');
+    assert.match(r.err, /通常のフォルダではないため/);
+    assert.match(r.out, /リンク・通常でないファイルをスキップ/);
+  } finally { t.cleanup(); outside.cleanup(); }
+});
+
+test('BUG-V2b: 配布先の scrum/.published.json がリンクのとき、リンク先の既存ファイル（配布フォルダの外）を配布記録で上書きする', () => {
+  const t = tmp();
+  const outside = tmp();
+  try {
+    fs.mkdirSync(path.join(t.dir, 'scrum'));
+    const victim = path.join(outside.dir, 'victim.txt');
+    fs.writeFileSync(victim, '大事な内容');
+    fs.symlinkSync(victim, path.join(t.dir, 'scrum', '.published.json'));
+    const r = run(t.dir);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(fs.readFileSync(victim, 'utf8'), '大事な内容', 'リンク先の外部ファイルが上書きされた');
+  } finally { t.cleanup(); outside.cleanup(); }
+});
