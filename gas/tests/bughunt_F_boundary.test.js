@@ -391,6 +391,9 @@ function makeFakeRepo() {
 }
 
 function runPublish(root, dest) {
+  // publish.js は git 追跡ファイルだけを配る（G4 F5）。偽リポジトリを初期化して全ファイルを追跡させる。
+  spawnSync('git', ['init', '-q'], { cwd: root });
+  spawnSync('git', ['add', '-A', '-f'], { cwd: root });
   return spawnSync(process.execPath, [path.join(root, 'scripts', 'publish.js'), dest], { encoding: 'utf8' });
 }
 
@@ -413,7 +416,8 @@ test('publish: 空白・日本語のファイル名、空ディレクトリ、�
     assert.equal(fs.readFileSync(path.join(dest, 'scrum', 'sprint 001', '日本語 フォルダ', 'ふぁいる 1.md'), 'utf8'), 'a');
     assert.equal(fs.readFileSync(path.join(dest, 'scrum', 'comments.csv'), 'utf8'), 'x');
     assert.equal(fs.readFileSync(path.join(dest, 'scrum', 'comments.csv.bak'), 'utf8'), 'y');
-    assert.ok(fs.statSync(path.join(dest, 'scrum', 'emptydir')).isDirectory());
+    // 空ディレクトリは追跡されないため配布しない（G4 F5 で仕様変更）
+    assert.equal(fs.existsSync(path.join(dest, 'scrum', 'emptydir')), false);
     // 配布対象外（Scrum/ は4点に無い）
     assert.equal(fs.existsSync(path.join(dest, 'Scrum')) && !fs.existsSync(path.join(dest, 'scrum')), false);
     const rec = JSON.parse(fs.readFileSync(path.join(dest, 'scrum', '.published.json'), 'utf8'));

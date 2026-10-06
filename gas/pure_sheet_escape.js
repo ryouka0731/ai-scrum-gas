@@ -18,6 +18,8 @@ const SHEET_PLAIN_NUMBER_RE = /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/;
 function escapeSheetCell(value) {
   if (typeof value !== 'string') return value;
   if (!SHEET_FORMULA_LEAD_RE.test(value)) return value;
+  // タブ・CR・LF で始まる値は、続きが数値でも無害化する（先頭の制御文字が数式注入の足場になりうる）。
+  if (/^[\t\r\n]/.test(value)) return "'" + value;
   if (SHEET_PLAIN_NUMBER_RE.test(value)) return value;
   return "'" + value;
 }

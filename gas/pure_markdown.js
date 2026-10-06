@@ -28,7 +28,7 @@ function isSeparatorRow(line) {
 
 /** 指定見出しから次の見出しまでの行を返す。同名の見出しが複数ある場合は最初の一致を採用する。 */
 function linesUnderHeading(text, heading) {
-  const lines = String(text || '').split('\n');
+  const lines = String(text || '').split(/\r?\n/);
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
     if (headingTextOf(lines[i]) === heading) { start = i + 1; break; }
@@ -46,12 +46,19 @@ function linesUnderHeading(text, heading) {
 function extractMarkdownTable(text, heading) {
   const lines = linesUnderHeading(text, heading);
   if (!lines) return null;
-  const tableLines = lines.filter(function (l) { return l.trim().indexOf('|') === 0; });
+  // 最初の表だけを対象にする（表の開始行から、表でない行に当たるまで）。
+  const tableLines = [];
+  for (let i = 0; i < lines.length; i++) {
+    const isTableLine = lines[i].trim().indexOf('|') === 0;
+    if (isTableLine) tableLines.push(lines[i]);
+    else if (tableLines.length > 0) break;
+  }
   if (tableLines.length < 2) return null;
   const headers = splitTableRow(tableLines[0]);
   const rows = [];
   for (let i = 1; i < tableLines.length; i++) {
-    if (isSeparatorRow(tableLines[i])) continue;
+    // 区切り行はヘッダー直後の1行だけ。「| - | - |」のようなデータ行を落とさない。
+    if (i === 1 && isSeparatorRow(tableLines[i])) continue;
     rows.push(splitTableRow(tableLines[i]));
   }
   return { headers: headers, rows: rows };
