@@ -36,16 +36,6 @@ test('S-BUG-1b: 解決の取り消しで、障害物を雛形の形（（…）�
   assert.ok(visible, 'IMP-002 が未解決・解決済のどちらからも見えなくなった（削除の無い障害物を実質的に消せる）');
 });
 
-// --- S-BUG-3 ---------------------------------------------------------------
-test('S-BUG-3: トリガーのハンドラ scheduledSync を google.script.run から呼んでも、同期（ロック・シートの全消去と再構築）が走らない', () => {
-  // 仕様（2026-09-04 web-app-design「google.script.run の公開範囲（規約）」2.）:
-  // メニュー / トリガーのハンドラは副作用より前に UI の無い実行を弾く。scheduledSync だけ門が無い。
-  const h = H.createCtx(H.baseFiles());
-  h.ctx.scheduledSync();   // ブラウザからの呼び出し（引数なし。トリガーなら時間主導イベントが渡る）
-  const effects = h.log.filter((x) => /^(Lock|SpreadsheetApp\.getActiveSpreadsheet|Sheet\.)/.test(x));
-  assert.deepEqual(effects, [], 'ブラウザから同期が走った: ' + effects.slice(0, 6).join(', '));
-});
-
 // --- S-BUG-4 ---------------------------------------------------------------
 test('S-BUG-4: 同じ ID の行が2つある PBI の削除を取り消したあと、鍵の破棄（CacheService.remove）が失敗しても、同じ鍵で2回目は戻らない', () => {
   const f = H.baseFiles();

@@ -147,3 +147,49 @@ test('BUG-V2b: 配布先の scrum/.published.json がリンクのとき、リン
     assert.match(r.err, /配布記録（\.published\.json）を書きませんでした/);
   } finally { t.cleanup(); outside.cleanup(); }
 });
+
+// --- S3: トリガーのハンドラ scheduledSync は、直前（60秒以内）に同期できていれば何もしない ---------------------
+// google.script.run からも呼べてしまうため、連打で全シートの再構築とロックの占有を繰り返させない。
+// 正規のトリガーは30分毎なので影響しない（裁定: 呼び出し元の判定ではなく頻度の上限で塞ぐ）。
+
+const syncEffects = (h) => h.log.filter((x) => /^(Lock|SpreadsheetApp\.getActiveSpreadsheet|Sheet\.)/.test(x));
+
+test('S-BUG-3: scheduledSync を続けて呼んでも、2回目（60秒以内）は同期（ロック・シートの全消去と再構築）が走らない', () => {
+  const h = H.createCtx(H.baseFiles());
+  h.ctx.scheduledSync();
+  assert.ok(syncEffects(h).length > 0, '前提: 1回目は同期する');
+  assert.ok(h.props.LAST_SCHEDULED_SYNC_MS, '成功した時刻を記録する');
+  h.log.length = 0;
+  h.ctx.scheduledSync();
+  assert.deepEqual(syncEffects(h), [], '2回目も同期が走った: ' + syncEffects(h).slice(0, 6).join(', '));
+});
+
+test('S-BUG-3: 前回の同期から60秒以上たっていれば同期する。記録が未来・壊れた値なら同期する', () => {
+  const h = H.createCtx(H.baseFiles());
+  [String(Date.now() - 61000), String(Date.now() + 3600000), 'abc', ''].forEach((v) => {
+    h.props.LAST_SCHEDULED_SYNC_MS = v;
+    h.log.length = 0;
+    h.ctx.scheduledSync();
+    assert.ok(syncEffects(h).length > 0, '記録 ' + JSON.stringify(v) + ' で同期しなかった');
+  });
+});
+
+test('S-BUG-3: 同期に失敗したとき・ロックが取れず見送ったときは時刻を記録しない（次の呼び出しで同期する）', () => {
+  const f = H.createCtx(H.baseFiles());
+  f.props.SCRUM_FOLDER_ID = '';
+  f.ctx.scheduledSync();
+  assert.equal(f.props.LAST_SCHEDULED_SYNC_MS, undefined);
+  const b = H.createCtx(H.baseFiles(), { lockBusy: true });
+  b.ctx.scheduledSync();
+  assert.equal(b.props.LAST_SCHEDULED_SYNC_MS, undefined);
+});
+
+test('S-BUG-3: 頻度の判定（pure）', () => {
+  const R = require('../pure_sync_rate.js');
+  const now = 1000000;
+  assert.equal(R.isSyncTooSoon(String(now - 59999), now), true);
+  assert.equal(R.isSyncTooSoon(String(now), now), true);
+  assert.equal(R.isSyncTooSoon(String(now - 60000), now), false);
+  assert.equal(R.isSyncTooSoon(String(now + 1), now), false, '未来の記録は信じない（時計のずれで止まり続けない）');
+  [null, undefined, '', 'x', '12abc', 'NaN', 'Infinity'].forEach((v) => assert.equal(R.isSyncTooSoon(v, now), false, String(v)));
+});
