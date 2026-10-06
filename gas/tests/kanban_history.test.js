@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createHarness, scriptSource } = require('./kanban_harness.js');
-const { groupHistory, lineDiff, LINE_DIFF_MAX } = require('../pure_history.js');
+const { groupHistory, lineDiff, LINE_DIFF_MAX, HISTORY_ACTIONS } = require('../pure_history.js');
 const { LIST_COLUMNS } = require('../pure_view_backlog.js');
 const { IMPEDIMENT_COLUMNS } = require('../pure_view_impediment.js');
 
@@ -354,6 +354,30 @@ test('11c. 画面の項目名は、一覧・障害物の表の列見出しと同
   expected.forEach(function (f) {
     assert.equal(labels[f], fromColumns[f], f + ' の項目名が表の列見出しと違う');
   });
+  // 操作名の表は、記録する操作の一覧と過不足なく対応する。
+  assert.deepEqual(Object.keys(page.HISTORY_ACTION_LABELS).sort(), HISTORY_ACTIONS.slice().sort());
   // 写しであることを、ソースの中でも明示している（直すときに両方を直させるため）。
   assert.match(scriptSource(), /pure_history\.js/);
+});
+
+test('12. 取り直しの間は前の一覧を残し、パネルのスクロール位置を保つ。開き直しは読み込み中から', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  openHistory(h, 'panel-history', ENTRIES);
+  const panel = h.sandbox.document.getElementById('panel');
+  panel.scrollTop = 120;
+  h.drag('PBI-001', 'Ready');
+  latest(h).handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  const again = callsOf(h, 'apiGetHistory');
+  assert.equal(again.length, 1);
+  assert.equal(h.historyStateOf('panel-history').status, null, '取り直しの間に読み込み中へ置き換えた');
+  assert.equal(h.historyGroupsIn('panel-history').length, 2, '取り直しの間に前の一覧が消えた');
+  again[0].handlers.success({ ok: true, entries: ENTRIES.slice(2) });
+  assert.equal(h.historyGroupsIn('panel-history').length, 1);
+  assert.equal(panel.scrollTop, 120, '描き直しでスクロール位置が変わった');
+  // 閉じて開き直すと、前の一覧は出さず読み込み中から始める。
+  h.historyToggle('panel-history');
+  h.historyToggle('panel-history');
+  assert.equal(h.historyStateOf('panel-history').status, '読み込んでいます…');
+  assert.deepEqual(h.historyGroupsIn('panel-history'), []);
 });

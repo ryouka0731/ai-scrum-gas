@@ -2124,7 +2124,8 @@ var HISTORY_ACTION_LABELS = {
 };
 var HISTORY_NOTE = 'Web アプリからの変更だけを記録しています';
 
-// 節の id → { targetId, toggle, body, content, open, req }（最後に描いたもの）。パネルを閉じたら null。
+// 節の id → { targetId, toggle, body, content, open, req, shown }（最後に描いたもの）。パネルを閉じたら null。
+// shown は、開いてから応答を1度でも描いたか（取り直しの間は前の一覧を残すため）。
 var historyUi = {};
 // 取りに行くたびに増える通し番号。応答はこれが自分の節の req と一致するときだけ描く。
 var historyReq = 0;
@@ -2226,12 +2227,13 @@ function renderHistory(hostId, targetId) {
   body.appendChild(content);
   host.appendChild(body);
 
-  var ui = { targetId: targetId, toggle: toggle, body: body, content: content, open: false, req: 0 };
+  var ui = { targetId: targetId, toggle: toggle, body: body, content: content, open: false, req: 0, shown: false };
   toggle.addEventListener('click', function () {
     if (historyUi[hostId] !== ui) return;
     if (ui.open) {
       ui.open = false;
       ui.req = 0;   // 閉じたあとに届いた応答は描かない
+      ui.shown = false;   // 開き直したら「読み込んでいます…」から始める
       body.hidden = true;
       toggle.setAttribute('aria-expanded', 'false');
       clearHost(content);
@@ -2265,22 +2267,35 @@ function fetchHistory(hostId) {
   var seq = ++historyReq;
   ui.req = seq;
   var targetId = ui.targetId;
-  setHistoryStatus(ui.content, '読み込んでいます…', 'info');
+  // 取り直し（書き込みの後）では、応答が届くまで前の一覧を残す（消すとちらつき、位置も飛ぶ）。
+  if (!ui.shown) setHistoryStatus(ui.content, '読み込んでいます…', 'info');
   var current = function () {
     return historyUi[hostId] === ui && ui.open && ui.req === seq && historyPanelShows(hostId, targetId);
+  };
+  // 描き直してもパネルの中のスクロール位置を保つ（901px 以上はパネルの中でスクロールする）。
+  var draw = function (fn) {
+    var panel = document.getElementById(hostId === 'panel-history' ? 'panel' : 'imp-panel');
+    var top = panel.scrollTop;
+    fn();
+    panel.scrollTop = top;
+    ui.shown = true;
   };
   google.script.run
     .withSuccessHandler(function (res) {
       if (!current()) return;
-      if (!res || !res.ok) {
-        setHistoryStatus(ui.content, '履歴を読み込めませんでした: ' + ((res && res.message) || ''), 'error');
-        return;
-      }
-      fillHistory(ui.content, res.entries || []);
+      draw(function () {
+        if (!res || !res.ok) {
+          setHistoryStatus(ui.content, '履歴を読み込めませんでした: ' + ((res && res.message) || ''), 'error');
+          return;
+        }
+        fillHistory(ui.content, res.entries || []);
+      });
     })
     .withFailureHandler(function (err) {
       if (!current()) return;
-      setHistoryStatus(ui.content, '履歴を読み込めませんでした: ' + ((err && err.message) || ''), 'error');
+      draw(function () {
+        setHistoryStatus(ui.content, '履歴を読み込めませんでした: ' + ((err && err.message) || ''), 'error');
+      });
     })
     .apiGetHistory(targetId);
 }
