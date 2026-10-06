@@ -14,6 +14,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const ACTIVE = 'var a=document.activeElement; return {tag:a.tagName, id:a.id, isBody:a===document.body||a===document.documentElement,'
   + ' visible: a.getClientRects().length>0};';
+// 焦点のある要素が属するカードの ID（カードの外なら空文字）。カードで焦点を受けるのは開く入口のタイトル。
+const ACTIVE_CARD = 'var a=document.activeElement; var c=a&&a.closest?a.closest("#board .card"):null; return c?c.dataset.id:"";';
+const TITLE = function (i) { return 'document.querySelectorAll("#board .card .title")[' + i + ']'; };
 
 describe('bughunt E: 直した実バグ（G3）', { skip: SKIP }, () => {
   let session = null;
@@ -30,8 +33,10 @@ describe('bughunt E: 直した実バグ（G3）', { skip: SKIP }, () => {
     const html = buildPage({ rows: [row({ id: 'PBI-001' }), row({ id: 'PBI-002', status: 'Ready' })],
       comments: [], impOpen: [imp()], impResolved: [] });
     await openPage(html, 1024, 'light');
+    // Tab で止まるのはカードの開く入口（タイトル）。
     const cards = await session.evaluate(
-      'return Array.from(document.querySelectorAll("#board .card")).map(function (c) { return { tabIndex: c.tabIndex, role: c.getAttribute("role") }; });');
+      'return Array.from(document.querySelectorAll("#board .card")).map(function (c) { var t = c.querySelector(".title");'
+      + ' return { tabIndex: t ? t.tabIndex : -1, role: t ? t.getAttribute("role") : null }; });');
     assert.equal(cards.length, 2);
     cards.forEach(function (c) {
       assert.ok(c.tabIndex >= 0, 'カードが Tab で止まらない（tabIndex=' + c.tabIndex + '、role=' + c.role + '）。'
@@ -54,6 +59,8 @@ describe('bughunt E: 直した実バグ（G3）', { skip: SKIP }, () => {
       const a = await session.evaluate(ACTIVE);
       assert.equal(a.isBody, false,
         'パネルを閉じたら焦点が body に落ちた（開いた元のカード等へ戻らない）。キーボード・スクリーンリーダー利用者は文書の先頭からやり直しになる');
+      // 見えている別の部品でもなく、開いた元のカードへ戻る。
+      assert.equal(await session.evaluate(ACTIVE_CARD), 'PBI-001', 'パネルを開いた元のカードとは別の所へ焦点が戻った');
     });
   });
 
@@ -124,14 +131,20 @@ describe('bughunt E: 直した実バグ（G3）', { skip: SKIP }, () => {
   });
 
   // 追加: 振る舞いの確認 ------------------------------------------------------------------
-  test('BUG-E1: カードに role=button と ID+タイトルの名前があり、Enter / Space で開く', async () => {
-    const html = buildPage({ rows: [row({ id: 'PBI-001', title: '題名' })], comments: [], impOpen: [imp()], impResolved: [] });
+  test('BUG-E1: カードの開く入口（タイトル）に role=button と ID+タイトルの名前があり、Enter / Space で開く。role=button の中に操作部品は無い', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001', title: '題名', priority: 'High' })], comments: [], impOpen: [imp()], impResolved: [] });
     await openPage(html, 1024, 'light');
-    const c = await session.evaluate('var c=document.querySelector("#board .card"); return {role:c.getAttribute("role"), name:c.getAttribute("aria-label")};');
+    const c = await session.evaluate('var c=document.querySelector("#board .card .title"); return {role:c.getAttribute("role"), name:c.getAttribute("aria-label")};');
     assert.equal(c.role, 'button');
     assert.ok(c.name.indexOf('PBI-001') >= 0 && c.name.indexOf('題名') >= 0, c.name);
+    // role=button の子孫は支援技術から見えなくなる。カード自身も含め、中に操作部品を持つ role=button は無い。
+    const nested = await session.evaluate('return Array.from(document.querySelectorAll("#board [role=button]")).filter(function (b) {'
+      + ' return b.querySelector("button,a[href],input,select,textarea,[tabindex]"); }).length;');
+    assert.equal(nested, 0, '操作部品を中に持つ role=button がある');
+    assert.equal(await session.evaluate('return document.querySelector("#board .card .help > button") ? 1 : 0;'), 1,
+      '前提: カードに優先度の補足（? ボタン）がある');
     for (const key of ['Enter', ' ']) {
-      await session.evaluate('var c=document.querySelector("#board .card"); c.focus();'
+      await session.evaluate('var c=document.querySelector("#board .card .title"); c.focus();'
         + 'c.dispatchEvent(new KeyboardEvent("keydown",{key:' + JSON.stringify(key) + ',bubbles:true,cancelable:true})); return 1;');
       await sleep(100);
       assert.equal(await session.evaluate('return document.getElementById("panel").hidden;'), false, key + ' でパネルが開く');
@@ -143,22 +156,24 @@ describe('bughunt E: 直した実バグ（G3）', { skip: SKIP }, () => {
   test('BUG-E2: パネルを閉じると、開いた元のカードへ焦点が戻る', async () => {
     const html = buildPage({ rows: [row({ id: 'PBI-001' }), row({ id: 'PBI-002', status: 'Ready' })], comments: [], impOpen: [imp()], impResolved: [] });
     await openPage(html, 1024, 'light');
-    await session.evaluate('var c=document.querySelectorAll("#board .card")[1]; c.focus(); c.click(); return 1;');
+    await session.evaluate('var c=' + TITLE(1) + '; c.focus(); c.click(); return 1;');
     await sleep(100);
     const id = await session.evaluate('return document.querySelectorAll("#board .card")[1].dataset.id;');
     await session.evaluate(JS.escape);
     await sleep(100);
-    assert.equal(await session.evaluate('return document.activeElement.dataset ? document.activeElement.dataset.id : "";'), id);
+    assert.equal(await session.evaluate(ACTIVE_CARD), id);
   });
 
   test('M3: カードに焦点がある間に盤面を描き直しても（最新にする）、同じ ID のカードに焦点が残る', async () => {
     const html = buildPage({ rows: [row({ id: 'PBI-001' }), row({ id: 'PBI-002', status: 'Ready' })], comments: [], impOpen: [imp()], impResolved: [] });
     await openPage(html, 1024, 'light');
-    await session.evaluate('var c=document.querySelectorAll("#board .card")[1]; c.focus(); return 1;');
-    const before = await session.evaluate('return document.activeElement.dataset.id;');
+    await session.evaluate('var c=' + TITLE(1) + '; c.focus(); return 1;');
+    const before = await session.evaluate(ACTIVE_CARD);
+    assert.equal(before, 'PBI-002', '前提: 2枚目のカードに焦点がある');
     await session.evaluate('var c=document.activeElement; window.__oldCard=c; document.getElementById("reload").click(); return 1;');
     await sleep(200);
-    const r = await session.evaluate('var a=document.activeElement; return {id: a.dataset ? a.dataset.id || "" : "", rebuilt: a !== window.__oldCard, isBody: a === document.body};');
+    const r = await session.evaluate('var a=document.activeElement; var c=a.closest?a.closest("#board .card"):null;'
+      + ' return {id: c ? c.dataset.id : "", rebuilt: a !== window.__oldCard, isBody: a === document.body};');
     assert.equal(r.rebuilt, true, '盤面が描き直されていない（検査の前提）');
     assert.equal(r.isBody, false, '描き直しで焦点が body へ落ちた');
     assert.equal(r.id, before);

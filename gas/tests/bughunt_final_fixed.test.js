@@ -198,11 +198,18 @@ function cardEl(h, id) {
   (function walk(n) { (n.children || []).forEach(function (c) { if (c.classList && c.classList.contains('card') && c.dataset.id === id) out.push(c); walk(c); }); })(h.sandbox.document.getElementById('board'));
   return out[0] || null;
 }
-const focusedId = (h) => { const a = h.sandbox.document.activeElement; return a && a.dataset ? a.dataset.id || null : null; };
+// 焦点のある要素が属するカードの ID。カードで焦点を受けるのは開く入口のタイトル。
+const focusedId = (h) => {
+  for (let n = h.sandbox.document.activeElement; n; n = n.parentNode) {
+    if (n.classList && n.classList.contains('card')) return n.dataset.id || null;
+  }
+  return null;
+};
+const focusCard = (h, id) => cardEl(h, id).querySelector('.title').focus();
 
 test('M3: カードに焦点がある間に盤面を描き直しても、同じ ID のカードへ焦点を戻す', () => {
   const h = boot({ New: [A, B] });
-  cardEl(h, 'PBI-002').focus();
+  focusCard(h, 'PBI-002');
   h.drag('PBI-001', 'Ready');   // 描き直し（楽観的な移動）
   assert.equal(focusedId(h), 'PBI-002', '描き直しで焦点が落ちた');
   last(h).handlers.success({ ok: true, board: h.boardOf(cols({ New: [B], Ready: [{ ...A, updated_at: 'T2' }] })) });
@@ -211,7 +218,7 @@ test('M3: カードに焦点がある間に盤面を描き直しても、同じ 
 
 test('M3: 焦点のあるカードそのものが動いても、そのカードに焦点を戻す。消えたら戻さない', () => {
   const h = boot({ New: [A, B] });
-  cardEl(h, 'PBI-001').focus();
+  focusCard(h, 'PBI-001');
   h.drag('PBI-001', 'Ready');
   assert.equal(focusedId(h), 'PBI-001');
   last(h).handlers.success({ ok: true, board: h.boardOf(cols({ New: [B] })) });   // 別の経路で消えていた

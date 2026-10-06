@@ -51,8 +51,8 @@
   }
   button:hover { background: var(--card-2); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  /* カード（tabindex=0）と、焦点の戻り先の入れ物（tabindex=-1）にも輪郭を出す */
-  .card:focus-visible, #board:focus-visible, #table-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* カードの開く入口（タイトル、tabindex=0）と、焦点の戻り先の入れ物（tabindex=-1）にも輪郭を出す */
+  .card .title:focus-visible, #board:focus-visible, #table-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button[disabled] { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   button.primary:hover { filter: brightness(1.08); }
@@ -773,8 +773,13 @@ function render(b) {
   if (focusId === null) return;
   var cards = root.querySelectorAll('.card');
   for (var i = 0; i < cards.length; i++) {
-    if (cards[i].dataset.id === focusId) { cards[i].focus(); return; }
+    if (cards[i].dataset.id === focusId) { cardFocusTarget(cards[i]).focus(); return; }
   }
+}
+
+/** カードで焦点を受ける要素（開く入口のタイトル）。 */
+function cardFocusTarget(cardEl) {
+  return cardEl.querySelector('.title') || cardEl;
 }
 
 /** 焦点が root の中のカード（またはその中の要素）にあれば、そのカードの ID。無ければ null。 */
@@ -851,7 +856,7 @@ function cardOpener(id) {
   return {
     find: function () {
       var cards = document.querySelectorAll('#board .card');
-      for (var i = 0; i < cards.length; i++) { if (cards[i].dataset.id === id) return cards[i]; }
+      for (var i = 0; i < cards.length; i++) { if (cards[i].dataset.id === id) return cardFocusTarget(cards[i]); }
       return null;
     },
     fallbackId: 'board'
@@ -894,10 +899,8 @@ function renderCard(card) {
     + (panelState.id === card.id ? ' selected' : '');
   el.draggable = !pendingIds[card.id];
   el.dataset.id = card.id;
-  // キーボードでも開ける（Tab で止まり、Enter / Space で開く）。名前は ID とタイトル。
-  el.setAttribute('tabindex', '0');
-  el.setAttribute('role', 'button');
-  el.setAttribute('aria-label', card.id + ' ' + (card.title || ''));
+  // カード自体には role を付けない。中に優先度の補足（? ボタン）があり、role=button の子孫は
+  // 支援技術から見えなくなるため。開く操作はタイトルが受け持つ（下）。マウスはカードのどこでも開ける。
 
   var prio = document.createElement('div');
   prio.className = 'prio';
@@ -921,9 +924,14 @@ function renderCard(card) {
   prio.appendChild(idText);
   el.appendChild(prio);
 
+  // キーボードで開く入口（Tab で止まり、Enter / Space で開く）。名前は ID とタイトル。
+  // <button> にしないのは、ボタンの上から始めたドラッグを始めないブラウザ（Firefox）があるため。
   var title = document.createElement('div');
   title.className = 'title';
   title.textContent = card.title;
+  title.setAttribute('tabindex', '0');
+  title.setAttribute('role', 'button');
+  title.setAttribute('aria-label', card.id + ' ' + (card.title || ''));
   el.appendChild(title);
 
   var meta = document.createElement('div');
@@ -960,9 +968,9 @@ function renderCard(card) {
     if (activeView !== 'board') return;
     openPanel(card.id, null, cardOpener(card.id));
   });
-  // 中の「?」ボタン等で起きたキー操作には応えない（カード自身に焦点があるときだけ）。
-  el.addEventListener('keydown', function (ev) {
-    if (ev.target !== el) return;
+  // 中の「?」ボタン等で起きたキー操作には応えない（開く入口＝タイトルに焦点があるときだけ）。
+  title.addEventListener('keydown', function (ev) {
+    if (ev.target !== title) return;
     if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
     ev.preventDefault();   // Space で画面がスクロールしないように
     if (pendingIds[card.id]) return;

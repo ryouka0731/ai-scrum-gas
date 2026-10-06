@@ -27,20 +27,43 @@ function ready() {
 }
 const cards = (h) => h.sandbox.document.querySelectorAll('#board .card');
 
-test('E1: カードは tabindex=0・role=button で、名前に ID とタイトルを含む', () => {
+const titleOf = (c) => c.querySelector('.title');
+
+test('E1: カードの開く入口（タイトル）は tabindex=0・role=button で、名前に ID とタイトルを含む', () => {
   const h = ready();
   const list = cards(h);
   assert.equal(list.length, 2);
   list.forEach((c) => {
-    assert.equal(c.getAttribute('tabindex'), '0');
-    assert.equal(c.getAttribute('role'), 'button');
+    assert.equal(titleOf(c).getAttribute('tabindex'), '0');
+    assert.equal(titleOf(c).getAttribute('role'), 'button');
+    // カード自身は role=button にしない（中の ? ボタンが支援技術から見えなくなる）
+    assert.equal(c.getAttribute('role'), null);
+    assert.equal(c.getAttribute('tabindex'), null);
   });
-  assert.equal(list[0].getAttribute('aria-label'), 'PBI-001 題名A');
+  assert.equal(titleOf(list[0]).getAttribute('aria-label'), 'PBI-001 題名A');
 });
 
-test('E1: カードで Enter / Space を押すとパネルが開く。他のキーでは開かない', () => {
+test('E1: role=button の中に操作部品（? の補足ボタン等）を置かない', () => {
+  const withPrio = INITIAL.map((c) => ({ status: c.status, cards: c.cards.map((x) => Object.assign({}, x, { priority: 'High' })) }));
+  const h = createHarness(withPrio);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(withPrio) });
+  const bad = [];
+  (function walk(n, inButton) {
+    (n.children || []).forEach(function (c) {
+      const isBtn = c.getAttribute && c.getAttribute('role') === 'button';
+      const interactive = c.tagName === 'button' || (c.getAttribute && c.getAttribute('tabindex') !== null);
+      if (inButton && interactive) bad.push(c.tagName + '.' + c.className);
+      walk(c, inButton || isBtn);
+    });
+  })(h.sandbox.document.getElementById('board'), false);
+  assert.deepEqual(bad, []);
+  assert.ok(h.sandbox.document.querySelectorAll('#board .card .help').length > 0, '前提: カードに補足がある');
+});
+
+test('E1: カードの開く入口で Enter / Space を押すとパネルが開く。他のキーでは開かない', () => {
   const h = ready();
-  const card = () => cards(h)[0];
+  const card = () => titleOf(cards(h)[0]);
   let prevented = 0;
   const key = (k) => card().listeners.keydown.forEach((fn) => fn.call(card(), { key: k, target: card(), preventDefault: () => { prevented++; } }));
   key('a');
@@ -57,12 +80,12 @@ test('E1: カードで Enter / Space を押すとパネルが開く。他のキ�
 test('E2: カードから開いたパネルを Escape で閉じると、そのカードへ焦点が戻る', () => {
   const h = ready();
   h.openCard('PBI-002');
-  const before = cards(h).map((c) => c.focusCount);
+  const before = cards(h).map((c) => titleOf(c).focusCount);
   h.pressKey('Escape');
   assert.equal(h.hiddenOf('panel'), true);
   const after = cards(h);
-  assert.equal(after[1].focusCount > 0, true, '開いた元のカードに focus() が呼ばれる');
-  assert.equal(after[0].focusCount, 0);
+  assert.equal(titleOf(after[1]).focusCount > 0, true, '開いた元のカード（の開く入口）に focus() が呼ばれる');
+  assert.equal(titleOf(after[0]).focusCount, 0);
   assert.equal(before.length, 2);
 });
 
