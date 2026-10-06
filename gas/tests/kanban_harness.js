@@ -163,9 +163,15 @@ Element.prototype.getAttribute = function (name) {
 Element.prototype.addEventListener = function (type, fn) {
   (this.listeners[type] || (this.listeners[type] = [])).push(fn);
 };
-// 今焦点がある要素（document.activeElement）。focus() が最後に呼ばれた要素。
-let activeElement = null;
-Element.prototype.focus = function () { this.focusCount++; activeElement = this; };
+// 焦点はハーネス（文書）ごとに持つ。要素は作った文書の焦点の控え（_focus）を持ち、静的な要素は
+// createHarness が祖先まで印を付ける。focus() は自分か祖先の控えへ「最後に focus() した要素」を書く。
+// 共有の変数にすると、2つ目のハーネスを作った時点で1つ目の document.activeElement が消える。
+Element.prototype.focus = function () {
+  this.focusCount++;
+  let n = this;
+  while (n && !n._focus) n = n.parentNode;
+  if (n) n._focus.active = this;
+};
 Element.prototype.contains = function (other) {
   for (let n = other; n; n = n.parentNode) { if (n === this) return true; }
   return false;
@@ -400,8 +406,11 @@ function cloneColumns(cols) {
  * そのまま初期読み込みになるため、apiGetView がちょうど1件積まれる）。
  */
 function createHarness(initialColumns) {
-  activeElement = null;
+  const focus = { active: null };   // この文書の焦点（document.activeElement の元）
   const byId = buildStaticElements();
+  Object.keys(byId).forEach(function (id) {
+    for (let n = byId[id]; n; n = n.parentNode) n._focus = focus;
+  });
   const calls = [];
   let timerSeq = 0;
   const timers = {};
@@ -411,6 +420,7 @@ function createHarness(initialColumns) {
   // 実測がある）。既定は同じ値にしておき、食い違わせたいテストだけが setWindowInner で
   // ずらす（どちらを読んでいるかを見分けられるようにするため）。
   const documentElement = new Element('html');
+  documentElement._focus = focus;
   documentElement.clientWidth = 1440;
   documentElement.clientHeight = 900;
 
@@ -422,6 +432,7 @@ function createHarness(initialColumns) {
     },
     // 実ブラウザと同じく、文書から外れた要素に焦点があるときは焦点なし（null）を返す。
     get activeElement() {
+      const activeElement = focus.active;
       let n = activeElement;
       while (n && n.parentNode) n = n.parentNode;
       if (!n) return null;
@@ -438,9 +449,10 @@ function createHarness(initialColumns) {
       });
       return out;
     },
-    createElement: function (tag) { return new Element(String(tag).toLowerCase()); },
+    createElement: function (tag) { const el = new Element(String(tag).toLowerCase()); el._focus = focus; return el; },
     createElementNS: function (ns, tag) {
       const el = new Element(String(tag).toLowerCase());
+      el._focus = focus;
       el.namespaceURI = ns;
       return el;
     },

@@ -224,3 +224,20 @@ test('M3: 焦点が盤面の外にあれば、描き直しで焦点を奪わな�
   h.drag('PBI-001', 'Ready');
   assert.equal(h.sandbox.document.activeElement, h.sandbox.document.getElementById('reload'));
 });
+
+test('シム: 焦点はハーネスごとに持つ。2つ目のハーネスを作っても1つ目の activeElement は消えない', () => {
+  const h1 = createHarness(cols({ New: [A, B] }));
+  h1.sandbox.load();
+  h1.calls[0].handlers.success({ ok: true, view: h1.boardOf(cols({ New: [A, B] })) });
+  const reload1 = h1.sandbox.document.getElementById('reload');
+  reload1.focus();
+  assert.equal(h1.sandbox.document.activeElement, reload1);
+  const h2 = createHarness(cols({ New: [A] }));
+  h2.sandbox.load();
+  assert.equal(h1.sandbox.document.activeElement, reload1, '2つ目のハーネスで1つ目の焦点が消えた');
+  assert.equal(h2.sandbox.document.activeElement, null, '1つ目の焦点が2つ目の文書に漏れた');
+  const reload2 = h2.sandbox.document.getElementById('reload');
+  reload2.focus();
+  assert.equal(h1.sandbox.document.activeElement, reload1, '2つ目で焦点を動かすと1つ目の焦点が動いた');
+  assert.equal(h2.sandbox.document.activeElement, reload2);
+});
