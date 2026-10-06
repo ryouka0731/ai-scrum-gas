@@ -141,6 +141,33 @@ test('削除の応答に鍵（undoToken）が無ければ、押しても失敗�
   assert.ok(h.textOf('message').indexOf('取り消しはできません') !== -1, h.textOf('message'));
 });
 
+test('取り消しで戻したカードは、取り消しより前に出した書き込みの遅れた応答（そのカードの無い写し）で消えない', () => {
+  const h = ready();
+  h.openCard('PBI-002');
+  h.drag('PBI-002', 'Ready');                       // 移動 M（送信中のまま）
+  const move = h.calls[h.calls.length - 1];
+  assert.equal(move.method, 'apiUpdateStatus');
+  h.click('panel-delete');                          // 削除 D（サーバは M より先に処理した）
+  const del = h.calls[h.calls.length - 1];
+  assert.equal(del.method, 'apiDeletePbi');
+  del.handlers.success({ ok: true, id: null, undoToken: 'tok-del', removed: { id: 'PBI-002', title: 'B' },
+    board: h.boardOf(cols({ New: [CARD_A] })) });
+  h.click('toast-undo');                            // 取り消し R
+  const restore = h.calls[h.calls.length - 1];
+  assert.equal(restore.method, 'apiRestorePbi');
+  restore.handlers.success({ ok: true, id: null, board: h.boardOf(cols({
+    New: [CARD_A, { id: 'PBI-002', title: 'B', updated_at: 'T9' }] })) });
+  assert.ok(h.screen()[0].cards.indexOf('PBI-002') !== -1, '前提: 戻した');
+  // M は D の後に処理され not_found。運ぶ写しには PBI-002 が無い（R より前の写し）。
+  move.handlers.success({ ok: false, reason: 'not_found', message: 'この PBI が見つかりません。最新の内容に更新しました。',
+    board: h.boardOf(cols({ New: [CARD_A] })) });
+  assert.ok(h.screen()[0].cards.indexOf('PBI-002') !== -1, '戻したカードが古い応答で画面から消えた');
+  // 取り消しより後の、信じてよい読み込みに無ければ消える（守り続けない）。
+  h.click('reload');
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, view: h.boardOf(cols({ New: [CARD_A] })), sprintChoices: CHOICES });
+  assert.equal(h.screen()[0].cards.indexOf('PBI-002'), -1, '読み込みの写しより戻したカードを優先し続けた');
+});
+
 test('検証エラーではパネルが閉じず、入力が残る', () => {
   const h = ready();
   h.clickAdd('New');
