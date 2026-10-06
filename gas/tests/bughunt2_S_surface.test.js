@@ -200,8 +200,8 @@ test('S-6: api* に敵対的な引数を送っても、ロックは必ず解放�
       }
       if (threw) {
         // 例外が許されるのは、ロックの外で String() が TypeError を投げる読み出し（apiGetView / apiGetHistory /
-        // apiGetComments）だけ（呼んだ本人の失敗で終わり、何も書かない）。
-        if (!/^apiGet(View|History|Comments)$/.test(name)) failures.push('例外が漏れた: ' + where + ' -> ' + threw.message);
+        // apiGetComments）の TypeError だけ（呼んだ本人の失敗で終わり、何も書かない）。
+        if (!/^apiGet(View|History|Comments)$/.test(name) || threw.name !== 'TypeError') failures.push('例外が漏れた: ' + where + ' -> ' + threw.message);
         if (JSON.stringify(h.files) !== filesBefore) failures.push('例外なのに書いた: ' + where);
         if (JSON.stringify(h.props) !== propsBefore) failures.push('例外なのにプロパティを書いた: ' + where);
         if (JSON.stringify(h.cache) !== cacheBefore) failures.push('例外なのにキャッシュを書いた: ' + where);

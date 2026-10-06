@@ -178,12 +178,11 @@ function showHistory(entries) {
   const collect = (cls) => { const hit = []; (function w(e) { if (e.classList && e.classList.contains(cls)) hit.push(e); (e.children || []).forEach(w); })(host); return hit; };
   // 1回の描画（最初のページ）で描いた件数。「さらに表示」で残りを足す前に数える。
   const firstItems = collect('history-item').length;
-  const firstNodes = countNodes(host);
   const firstLcs = { n: lcsCells.n, calls: lcsCells.calls };
   // 1件あたりのノードは、すべてのページを足してから全件で割る（PR #11 cubic）。
   let more;
   while ((more = collect('history-more')).length) more[0].listeners.click.forEach((fn) => fn({}));
-  return { nodes: countNodes(host), items: collect('history-item').length, t, firstItems, firstNodes, lcs: firstLcs };
+  return { nodes: countNodes(host), items: collect('history-item').length, t, firstItems, lcs: firstLcs };
 }
 
 test('C8. 履歴: 200 件 × 短い値は 1件あたり 40 ノード以内、複数行（10行）でも 60 ノード以内', () => {
