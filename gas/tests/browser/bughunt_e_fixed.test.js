@@ -1,11 +1,6 @@
 'use strict';
 /**
- * bughunt E: 実バグを突く検査（今は落ちる）。
- *
- * 走らせ方（.txt が glob に拾われないようにしてある）:
- *   cp gas/tests/browser/bughunt_e_failing.test.js.txt gas/tests/browser/bughunt_e_failing.test.js
- *   node --test gas/tests/browser/bughunt_e_failing.test.js
- *   rm gas/tests/browser/bughunt_e_failing.test.js
+ * bughunt E（G3: キーボード・アクセシビリティ）: 直した実バグの再発防止。
  */
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -20,7 +15,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ACTIVE = 'var a=document.activeElement; return {tag:a.tagName, id:a.id, isBody:a===document.body||a===document.documentElement,'
   + ' visible: a.getClientRects().length>0};';
 
-describe('bughunt E: 落ちる検査（実バグ）', { skip: SKIP }, () => {
+describe('bughunt E: 直した実バグ（G3）', { skip: SKIP }, () => {
   let session = null;
   before(async () => { session = await launch(); });
   after(async () => { if (session) await session.close(); });
@@ -126,5 +121,47 @@ describe('bughunt E: 落ちる検査（実バグ）', { skip: SKIP }, () => {
     const dup = names.filter(function (n, i) { return names.indexOf(n) !== i; });
     assert.deepEqual(dup, [],
       '同じ名前のボタンが複数ある: ' + JSON.stringify(names) + '（スクリーンリーダーでは、どの「削除」がPBIでどれがコメントか区別できない）');
+  });
+
+  // 追加: 振る舞いの確認 ------------------------------------------------------------------
+  test('BUG-E1: カードに role=button と ID+タイトルの名前があり、Enter / Space で開く', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001', title: '題名' })], comments: [], impOpen: [imp()], impResolved: [] });
+    await openPage(html, 1024, 'light');
+    const c = await session.evaluate('var c=document.querySelector("#board .card"); return {role:c.getAttribute("role"), name:c.getAttribute("aria-label")};');
+    assert.equal(c.role, 'button');
+    assert.ok(c.name.indexOf('PBI-001') >= 0 && c.name.indexOf('題名') >= 0, c.name);
+    for (const key of ['Enter', ' ']) {
+      await session.evaluate('var c=document.querySelector("#board .card"); c.focus();'
+        + 'c.dispatchEvent(new KeyboardEvent("keydown",{key:' + JSON.stringify(key) + ',bubbles:true,cancelable:true})); return 1;');
+      await sleep(100);
+      assert.equal(await session.evaluate('return document.getElementById("panel").hidden;'), false, key + ' でパネルが開く');
+      await session.evaluate(JS.escape);
+      await sleep(100);
+    }
+  });
+
+  test('BUG-E2: パネルを閉じると、開いた元のカードへ焦点が戻る', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001' }), row({ id: 'PBI-002', status: 'Ready' })], comments: [], impOpen: [imp()], impResolved: [] });
+    await openPage(html, 1024, 'light');
+    await session.evaluate('var c=document.querySelectorAll("#board .card")[1]; c.focus(); c.click(); return 1;');
+    await sleep(100);
+    const id = await session.evaluate('return document.querySelectorAll("#board .card")[1].dataset.id;');
+    await session.evaluate(JS.escape);
+    await sleep(100);
+    assert.equal(await session.evaluate('return document.activeElement.dataset ? document.activeElement.dataset.id : "";'), id);
+  });
+
+  test('BUG-E3: コメントを消すと、次のコメントの削除ボタンへ焦点が移る', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001' })], me: 'me', impOpen: [imp()], impResolved: [],
+      comments: [{ id: 'CMT-00000001', target_id: 'PBI-001', author: 'me', created_at: '2026-09-10 10:00:00', body: 'a' },
+        { id: 'CMT-00000002', target_id: 'PBI-001', author: 'me', created_at: '2026-09-10 10:01:00', body: 'b' }] });
+    await openPage(html, 1024, 'light');
+    await session.evaluate(JS.click('#board .card'));
+    await sleep(100);
+    await session.evaluate('var d=document.querySelector("#panel-comments .comment-delete"); d.focus(); d.click(); return 1;');
+    await sleep(150);
+    const r = await session.evaluate('var a=document.activeElement; return {cls:a.className, id:a.closest("li")&&a.closest("li").dataset.id};');
+    assert.match(r.cls, /comment-delete/);
+    assert.equal(r.id, 'CMT-00000002');
   });
 });

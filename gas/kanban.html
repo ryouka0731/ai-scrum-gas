@@ -51,6 +51,8 @@
   }
   button:hover { background: var(--card-2); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* カード（tabindex=0）と、焦点の戻り先の入れ物（tabindex=-1）にも輪郭を出す */
+  .card:focus-visible, #board:focus-visible, #table-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button[disabled] { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   button.primary:hover { filter: brightness(1.08); }
@@ -234,6 +236,12 @@
      落ちた）。overflow-wrap: anywhere は「どこでも折り返せる」ことで自動的な
      最小幅そのものを小さくするため、これ単体で両方直る（実測: 単体で全件通過）。 */
   #toast-text { overflow-wrap: anywhere; }
+  /* タイトルが長くても通知が画面より高くならないよう、本文は3行で切る（全文は title 属性）。
+     通知は固定位置でスクロールできず、高くなりすぎると「取り消す」が画面の外へ出る。 */
+  #toast-text {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+    line-clamp: 3; overflow: hidden;
+  }
   #toast button {
     background: transparent; border-color: transparent; color: var(--bg);
     text-decoration: underline; padding: var(--sp-1) var(--sp-2);
@@ -345,8 +353,8 @@
 <div class="views" id="views" role="tablist"></div>
 <div id="summary"></div>
 <div id="main">
-  <div id="board"></div>
-  <div id="table-view" class="table-wrap" hidden></div>
+  <div id="board" tabindex="-1"></div>
+  <div id="table-view" class="table-wrap" tabindex="-1" hidden></div>
   <aside id="panel" class="side-panel" hidden aria-label="PBI の詳細">
     <div class="panel-head">
       <h2 id="panel-title">PBI</h2>
@@ -793,6 +801,7 @@ function renderColumn(col) {
   add.className = 'add';
   add.type = 'button';
   fillButton(add, 'plus', '追加');
+  add.dataset.status = col.status;
   add.addEventListener('click', function () { onAddClick(col.status); });
   div.appendChild(add);
   return div;
@@ -803,7 +812,43 @@ function onAddClick(status) {
   // 盤面が隠れているとき起こらない）。#board は hidden で隠れていても DOM からは
   // 消えていないため、この防御が無いと隠れた盤面の「追加」ボタンから書き込みが飛ぶ。
   if (activeView !== 'board') return;
-  openPanel(null, status);
+  openPanel(null, status, {
+    find: function () {
+      var adds = document.querySelectorAll('#board .add');
+      for (var i = 0; i < adds.length; i++) { if (adds[i].dataset.status === status) return adds[i]; }
+      return null;
+    },
+    fallbackId: 'board'
+  });
+}
+
+/**
+ * パネルを閉じたとき焦点を戻す先。盤面・表は開くたびに作り直されるため、要素そのものではなく
+ * 「探し方」を持つ。見つからなければ fallbackId の要素（盤面 / 表の入れ物）へ戻す。
+ */
+var panelOpener = null;
+var impPanelOpener = null;
+
+function cardOpener(id) {
+  return {
+    find: function () {
+      var cards = document.querySelectorAll('#board .card');
+      for (var i = 0; i < cards.length; i++) { if (cards[i].dataset.id === id) return cards[i]; }
+      return null;
+    },
+    fallbackId: 'board'
+  };
+}
+
+/** パネルを閉じたあと、焦点が失われた（body か閉じたパネルの中）ときだけ、開いた元へ戻す。 */
+function restoreFocus(opener, panelId) {
+  var a = document.activeElement;
+  var panel = document.getElementById(panelId);
+  var lost = !a || a === document.body || a === document.documentElement || (panel && panel.contains(a));
+  if (!lost || !opener) return;
+  var target = opener.find ? opener.find() : null;
+  if (!target || target.hidden) target = document.getElementById(opener.fallbackId);
+  if (target && typeof target.focus === 'function') target.focus();
 }
 
 /**
@@ -831,6 +876,10 @@ function renderCard(card) {
     + (panelState.id === card.id ? ' selected' : '');
   el.draggable = !pendingIds[card.id];
   el.dataset.id = card.id;
+  // キーボードでも開ける（Tab で止まり、Enter / Space で開く）。名前は ID とタイトル。
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('role', 'button');
+  el.setAttribute('aria-label', card.id + ' ' + (card.title || ''));
 
   var prio = document.createElement('div');
   prio.className = 'prio';
@@ -891,7 +940,16 @@ function renderCard(card) {
     if (pendingIds[card.id]) return;
     // 盤面タブを見ていないのに開かせない（move() と同じ規則）。
     if (activeView !== 'board') return;
-    openPanel(card.id, null);
+    openPanel(card.id, null, cardOpener(card.id));
+  });
+  // 中の「?」ボタン等で起きたキー操作には応えない（カード自身に焦点があるときだけ）。
+  el.addEventListener('keydown', function (ev) {
+    if (ev.target !== el) return;
+    if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+    ev.preventDefault();   // Space で画面がスクロールしないように
+    if (pendingIds[card.id]) return;
+    if (activeView !== 'board') return;
+    openPanel(card.id, null, cardOpener(card.id));
   });
   return el;
 }
@@ -1202,12 +1260,13 @@ function writeForm(card, status) {
 }
 
 /** id が null なら新規作成。presetStatus は新規作成時の初期ステータス。 */
-function openPanel(id, presetStatus) {
+function openPanel(id, presetStatus, opener) {
   closeImpPanel();   // 障害物のパネルと同時には開かない
   var card = id ? findCard(board, id) : null;
   if (id && !card) return;
   var status = id ? columnStatusOf(board, id) : (presetStatus || STATUS_OPTIONS[0]);
   panelSeq++;
+  panelOpener = opener || panelOpener;
   panelState = { id: id, expectedUpdatedAt: card ? card.updated_at : '', status: status, fields: null };
   document.getElementById('panel-title').textContent = id ? id : '新しい PBI';
   document.getElementById('panel-delete').hidden = !id;
@@ -1224,12 +1283,17 @@ function openPanel(id, presetStatus) {
   document.getElementById('f-title').focus();
 }
 
-function closePanel() {
+function closePanel(restore) {
+  var wasOpen = !document.getElementById('panel').hidden;
+  var opener = panelOpener;
+  panelOpener = null;
   document.getElementById('panel').hidden = true;
   panelSeq++;   // 閉じたあとに応答が来ても、そのパネルは既に無い
   panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
   forgetHistory('panel-history');
   render(board);
+  // 利用者が閉じた・保存や削除が済んだときだけ戻す（別のパネルを開く・タブ切替では戻さない）。
+  if (restore === true && wasOpen) restoreFocus(opener, 'panel');
 }
 
 // 送信中もフォームの入力欄が編集できてしまうと、応答が成功したときに
@@ -1289,7 +1353,7 @@ function savePanel() {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         var newId = id || res.id;
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, newId));
-        if (mine) closePanel();
+        if (mine) closePanel(true);
         setMessage((id ? id + ' を保存しました。' : res.id + ' を作成しました。'), 'info');
         afterHistoryWrite(res, newId, msgMark);
       } else {
@@ -1343,6 +1407,7 @@ var shownIsSticky = false;
 function renderToast(text, onUndo, actionLabel, iconName) {
   var el = document.getElementById('toast');
   document.getElementById('toast-text').textContent = text;
+  document.getElementById('toast-text').title = text;   // 3行で切れた分も全文を見られる
   var btn = document.getElementById('toast-undo');
   btn.innerHTML = '';
   fillButton(btn, iconName || 'undo', actionLabel || '取り消す');
@@ -1443,7 +1508,7 @@ function deletePbi() {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         deletedPbiIds[id] = true;
         render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
-        if (mine) closePanel();
+        if (mine) closePanel(true);
         showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
         afterHistoryWrite(res, id, msgMark);
       } else {
@@ -1585,11 +1650,12 @@ function setImpResolving(on) {
 }
 
 /** id が null なら新規作成。 */
-function openImpPanel(id) {
+function openImpPanel(id, opener) {
   var row = id ? findImpRow(id) : null;
   if (id && !row) return;
   closePanel();   // PBI のパネルと同時には開かない
   impPanelSeq++;
+  impPanelOpener = opener || impPanelOpener;
   impPanelState = { id: id, expected: row, resolving: false };
   document.getElementById('imp-panel-title').textContent = id ? id : '新しい障害物';
   document.getElementById('i-title').value = (row && row.title) || '';
@@ -1611,11 +1677,15 @@ function openImpPanel(id) {
   document.getElementById('i-title').focus();
 }
 
-function closeImpPanel() {
+function closeImpPanel(restore) {
+  var wasOpen = !document.getElementById('imp-panel').hidden;
+  var opener = impPanelOpener;
+  impPanelOpener = null;
   document.getElementById('imp-panel').hidden = true;
   impPanelSeq++;
   impPanelState = { id: null, expected: null, resolving: false };
   forgetHistory('imp-panel-history');
+  if (restore === true && wasOpen) restoreFocus(opener, 'imp-panel');
 }
 
 function readImpForm() {
@@ -1798,12 +1868,12 @@ function saveImpPanel() {
   var fields = readImpForm();
   if (id) {
     sendImpWrite('apiUpdateImpediment', [id, fields, impPanelState.expected], '保存', function (res, mine) {
-      if (mine) closeImpPanel();
+      if (mine) closeImpPanel(true);
       setMessage(id + ' を保存しました。', 'info');
     });
   } else {
     sendImpWrite('apiCreateImpediment', [fields], '作成', function (res, mine) {
-      if (mine) closeImpPanel();
+      if (mine) closeImpPanel(true);
       setMessage(res.id + ' を作成しました。', 'info');
     });
   }
@@ -1821,11 +1891,11 @@ function resolveImp() {
   var resolution = document.getElementById('i-resolution').value;
   var expected = impPanelState.expected;
   sendImpWrite('apiResolveImpediment', [id, resolution, expected], '解決', function (res, mine) {
-    if (mine) closeImpPanel();
+    if (mine) closeImpPanel(true);
     showResolveOutcome(id, resolution, expected, res);
   }, function (res, mine) {
     // 解決済に足した行が正になり、未解決には出なくなる。パネルを開いたままにしない。
-    if (mine) closeImpPanel();
+    if (mine) closeImpPanel(true);
     showResolveOutcome(id, resolution, expected, res);
   });
 }
@@ -2053,7 +2123,7 @@ function fillCommentList(box, hostId, targetId) {
   var list = commentsOf(targetId);
   var ul = document.createElement('ul');
   ul.className = 'comment-list';
-  list.forEach(function (c) {
+  list.forEach(function (c, index) {
     var li = document.createElement('li');
     li.dataset.id = c.id;
     var meta = document.createElement('div');
@@ -2074,6 +2144,9 @@ function fillCommentList(box, hostId, targetId) {
       del.type = 'button';
       del.className = 'comment-delete danger';
       fillButton(del, 'trash', '削除');
+      // 同じパネルに「削除」が並ぶので、どのコメントのものかを名前に含める（日時が無ければ何件目か）。
+      del.setAttribute('aria-label', commentAuthorLabel(c.author) + ' のコメントを削除（'
+        + (c.created_at ? c.created_at : (index + 1) + '件目') + '）');
       del.disabled = !!commentDeleting[c.id];
       del.addEventListener('click', function () { deleteComment(hostId, targetId, c.id); });
       meta.appendChild(del);
@@ -2274,9 +2347,45 @@ function sendComment(hostId, targetId) {
     .apiAddComment(targetId, body);
 }
 
+/** 消すコメントの前後で、削除ボタンを持つ最も近いコメントの id（次を先に、無ければ前）。 */
+function commentDeleteNeighbours(hostId, commentId) {
+  var box = document.getElementById(hostId);
+  var items = box ? box.querySelectorAll('li') : [];
+  var at = -1;
+  for (var i = 0; i < items.length; i++) { if (items[i].dataset.id === commentId) at = i; }
+  var withDelete = function (li) { return !!li.querySelector('.comment-delete'); };
+  var next = null, prev = null;
+  for (var n = at + 1; at >= 0 && n < items.length && !next; n++) { if (withDelete(items[n])) next = items[n].dataset.id; }
+  for (var p = at - 1; p >= 0 && !prev; p--) { if (withDelete(items[p])) prev = items[p].dataset.id; }
+  return { next: next, prev: prev };
+}
+
+/**
+ * コメントを消した（または消せなかった）あと、焦点が失われていれば移す。
+ * 消せなかったときは同じ削除ボタン。消せたときは次のコメントの削除、無ければ前、無ければ入力欄。
+ * 利用者が別の場所へ焦点を移していたら動かさない。
+ */
+function focusAfterCommentDelete(hostId, targetId, commentId, neighbours, kept) {
+  var a = document.activeElement;
+  var box = document.getElementById(hostId);
+  if (a && a !== document.body && a !== document.documentElement && !(box && box.contains(a) && a.disabled)) return;
+  var ui = commentUiFor(hostId, targetId);
+  if (!ui || !box) return;
+  var btnOf = function (id) {
+    var items = box.querySelectorAll('li');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].dataset.id === id) return items[i].querySelector('.comment-delete');
+    }
+    return null;
+  };
+  var target = (kept ? btnOf(commentId) : null) || btnOf(neighbours.next) || btnOf(neighbours.prev) || ui.input;
+  if (target && typeof target.focus === 'function') target.focus();
+}
+
 /** 自分のコメントを消す。確認は挟まず、取り消せる通知を出す。 */
 function deleteComment(hostId, targetId, commentId) {
   if (commentDeleting[commentId]) return;
+  var neighbours = commentDeleteNeighbours(hostId, commentId);   // 消えたあとの焦点の行き先
   commentDeleting[commentId] = true;
   var issued = ++commentWriteIssued;
   commentPending[issued] = true;
@@ -2304,6 +2413,7 @@ function deleteComment(hostId, targetId, commentId) {
         refreshOpenComments();
       }
       pruneCommentOverlay();
+      focusAfterCommentDelete(hostId, targetId, commentId, neighbours, !(res.ok && res.removed));
       if (res.ok) showUndoToast('コメントを削除しました。', function () { restoreComment(res.removed); });
       else fail(res.message);
       afterHistoryWrite(res, res.ok ? targetId : null, msgMark);
@@ -2312,6 +2422,7 @@ function deleteComment(hostId, targetId, commentId) {
       settle();
       pruneCommentOverlay();
       refreshOpenComments();
+      focusAfterCommentDelete(hostId, targetId, commentId, neighbours, true);
       fail('コメントを削除できませんでした: ' + err.message);
     })
     .apiDeleteComment(commentId);
@@ -3057,11 +3168,22 @@ function renderTable(view) {
     add.id = 'imp-add';
     add.type = 'button';
     fillButton(add, 'plus', '障害物を追加');
-    add.addEventListener('click', function () { openImpPanel(null); });
+    add.addEventListener('click', function () {
+      openImpPanel(null, { find: function () { return document.getElementById('imp-add'); }, fallbackId: 'table-view' });
+    });
     actions.appendChild(add);
     host.appendChild(actions);
     if (view.pending && view.pending.length > 0) host.appendChild(pendingSection(view.pending));
-    host.appendChild(tableSection('未解決', view.columns, view.open, function (row) { openImpPanel(row.id); }, true));
+    host.appendChild(tableSection('未解決', view.columns, view.open, function (row) {
+      openImpPanel(row.id, {
+        find: function () {
+          var rs = document.querySelectorAll('#table-view tr.clickable');
+          for (var i = 0; i < rs.length; i++) { if (rs[i].dataset.id === row.id) return rs[i]; }
+          return null;
+        },
+        fallbackId: 'table-view'
+      });
+    }, true));
     host.appendChild(tableSection('解決済', view.columns, view.resolved, null, true));
     return;
   }
@@ -3145,6 +3267,7 @@ window.addEventListener('resize', function () { closeOpenHelp(); });
 document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
+document.getElementById('panel-delete').setAttribute('aria-label', 'PBI を削除');
 fillButton(document.getElementById('imp-panel-save'), 'save', '保存');
 fillButton(document.getElementById('imp-panel-cancel-resolve'), 'close', 'やめる');
 document.getElementById('imp-panel-cancel-resolve').addEventListener('click', function () {
@@ -3152,10 +3275,10 @@ document.getElementById('imp-panel-cancel-resolve').addEventListener('click', fu
   document.getElementById('imp-panel-resolve').focus();   // 押したボタンが隠れるので、フォーカスを残す
 });
 document.getElementById('imp-panel-close').appendChild(makeIcon('close'));
-document.getElementById('imp-panel-close').addEventListener('click', closeImpPanel);
+document.getElementById('imp-panel-close').addEventListener('click', function () { closeImpPanel(true); });
 document.getElementById('imp-panel-save').addEventListener('click', saveImpPanel);
 document.getElementById('imp-panel-resolve').addEventListener('click', resolveImp);
-document.getElementById('panel-close').addEventListener('click', closePanel);
+document.getElementById('panel-close').addEventListener('click', function () { closePanel(true); });
 document.getElementById('panel-save').addEventListener('click', savePanel);
 fillButton(document.getElementById('toast-undo'), 'undo', '取り消す');
 document.getElementById('panel-delete').addEventListener('click', deletePbi);
@@ -3190,8 +3313,8 @@ document.addEventListener('keydown', function (ev) {
   if (closeOpenHelp()) return;
   // 「完了する」の通知は閉じない（完了させる手段が他に無い）。普通の通知だけ閉じる。
   if (!document.getElementById('toast').hidden && !shownIsSticky) { hideToast(); return; }
-  if (!document.getElementById('panel').hidden) { closePanel(); return; }
-  if (!document.getElementById('imp-panel').hidden) closeImpPanel();
+  if (!document.getElementById('panel').hidden) { closePanel(true); return; }
+  if (!document.getElementById('imp-panel').hidden) closeImpPanel(true);
 });
 renderTabs();
 showView(activeView);
