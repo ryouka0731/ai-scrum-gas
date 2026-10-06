@@ -1,0 +1,130 @@
+'use strict';
+/**
+ * bughunt E: 実バグを突く検査（今は落ちる）。
+ *
+ * 走らせ方（.txt が glob に拾われないようにしてある）:
+ *   cp gas/tests/browser/bughunt_e_failing.test.js.txt gas/tests/browser/bughunt_e_failing.test.js
+ *   node --test gas/tests/browser/bughunt_e_failing.test.js
+ *   rm gas/tests/browser/bughunt_e_failing.test.js
+ */
+const { describe, test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+
+const { chromePath, launch } = require('./chrome_session.js');
+const { buildPage, row, imp, JS } = require('./bughunt_e_support.js');
+
+const CHROME = chromePath();
+const SKIP = CHROME ? false : 'Chrome が見つからないので飛ばします';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const ACTIVE = 'var a=document.activeElement; return {tag:a.tagName, id:a.id, isBody:a===document.body||a===document.documentElement,'
+  + ' visible: a.getClientRects().length>0};';
+
+describe('bughunt E: 落ちる検査（実バグ）', { skip: SKIP }, () => {
+  let session = null;
+  before(async () => { session = await launch(); });
+  after(async () => { if (session) await session.close(); });
+
+  async function openPage(html, width, scheme) {
+    await session.open({ html: html, width: width, height: 800, scheme: scheme || 'light' });
+    await session.waitFor(JS.boardReady, '盤面の初回読み込み');
+  }
+
+  // BUG-E1 -----------------------------------------------------------------------------
+  test('BUG-E1: 盤面のカードはキーボードで焦点を取れ、Enter / Space で開ける（Tab 順に居る）', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001' }), row({ id: 'PBI-002', status: 'Ready' })],
+      comments: [], impOpen: [imp()], impResolved: [] });
+    await openPage(html, 1024, 'light');
+    const cards = await session.evaluate(
+      'return Array.from(document.querySelectorAll("#board .card")).map(function (c) { return { tabIndex: c.tabIndex, role: c.getAttribute("role") }; });');
+    assert.equal(cards.length, 2);
+    cards.forEach(function (c) {
+      assert.ok(c.tabIndex >= 0, 'カードが Tab で止まらない（tabIndex=' + c.tabIndex + '、role=' + c.role + '）。'
+        + 'キーボードだけでは PBI を開けない（障害物の表の行は tabindex=0 で Enter / Space に応える）');
+    });
+  });
+
+  // BUG-E2 -----------------------------------------------------------------------------
+  ['Escape', '閉じるボタン'].forEach(function (how) {
+    test('BUG-E2: PBI パネルを ' + how + ' で閉じたあと、焦点が body へ落ちない', async () => {
+      const html = buildPage({ rows: [row({ id: 'PBI-001' })], comments: [], impOpen: [imp()], impResolved: [] });
+      await openPage(html, 1024, 'light');
+      await session.evaluate(JS.click('#board .card'));
+      await sleep(100);
+      assert.equal((await session.evaluate(ACTIVE)).id, 'f-title', '前提: パネルを開くと標題欄に焦点が行く');
+      if (how === 'Escape') await session.evaluate(JS.escape);
+      else await session.evaluate('document.getElementById("panel-close").focus(); document.getElementById("panel-close").click(); return 1;');
+      await sleep(100);
+      assert.equal(await session.evaluate('return document.getElementById("panel").hidden;'), true, '前提: パネルが閉じた');
+      const a = await session.evaluate(ACTIVE);
+      assert.equal(a.isBody, false,
+        'パネルを閉じたら焦点が body に落ちた（開いた元のカード等へ戻らない）。キーボード・スクリーンリーダー利用者は文書の先頭からやり直しになる');
+    });
+  });
+
+  test('BUG-E2: 障害物パネルを Escape で閉じたあとも、焦点が body へ落ちない', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001' })], comments: [], impOpen: [imp()], impResolved: [] });
+    await openPage(html, 1024, 'light');
+    await session.evaluate(JS.clickText('#tabs', '障害物'));
+    await session.waitFor('return document.querySelector("#table-view tr.clickable") ? 1 : 0', '障害物の行');
+    await session.evaluate('var r=document.querySelector("#table-view tr.clickable"); r.focus(); r.click(); return 1;');
+    await sleep(100);
+    assert.equal(await session.evaluate('return !document.getElementById("imp-panel").hidden;'), true);
+    await session.evaluate(JS.escape);
+    await sleep(100);
+    assert.equal(await session.evaluate('return document.getElementById("imp-panel").hidden;'), true);
+    assert.equal((await session.evaluate(ACTIVE)).isBody, false, '障害物パネルを閉じたら焦点が body に落ちた');
+  });
+
+  // BUG-E3 -----------------------------------------------------------------------------
+  test('BUG-E3: 自分のコメントを削除したあと、焦点が body へ落ちない', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001' })], me: 'me', impOpen: [imp()], impResolved: [],
+      comments: [{ id: 'CMT-00000001', target_id: 'PBI-001', author: 'me', created_at: '2026-09-10 10:00:00', body: 'a' },
+        { id: 'CMT-00000002', target_id: 'PBI-001', author: 'me', created_at: '2026-09-10 10:01:00', body: 'b' }] });
+    await openPage(html, 1024, 'light');
+    await session.evaluate(JS.click('#board .card'));
+    await sleep(100);
+    await session.evaluate('var d=document.querySelector("#panel-comments .comment-delete"); d.focus(); d.click(); return 1;');
+    await sleep(150);
+    assert.equal(await session.evaluate('return document.querySelectorAll("#panel-comments .comment-body").length;'), 1,
+      '前提: コメントが1件消えた');
+    assert.equal((await session.evaluate(ACTIVE)).isBody, false,
+      '削除ボタンごと要素が消え、焦点が body に落ちた（次のコメントの削除や入力欄へ移らない）');
+  });
+
+  // BUG-E4 -----------------------------------------------------------------------------
+  [[375, 1000], [1440, 3000]].forEach(function (c) {
+    const width = c[0], n = c[1];
+    test('BUG-E4: 長いタイトルの PBI を削除しても、通知の「取り消す」が画面内に残る (' + width + 'px, ' + n + '字)', async () => {
+      const html = buildPage({ rows: [row({ id: 'PBI-001', title: 'あ'.repeat(n) }), row({ id: 'PBI-002', status: 'Ready' })],
+        comments: [], impOpen: [imp()], impResolved: [] });
+      await openPage(html, width, 'light');
+      await session.evaluate(JS.click('#board .card'));
+      await sleep(100);
+      await session.evaluate(JS.click('#panel-delete'));
+      await session.waitFor('return document.getElementById("toast").hidden ? 0 : 1', '削除の通知');
+      const r = await session.evaluate(
+        'var b=document.getElementById("toast-undo").getBoundingClientRect();'
+        + 'return {top:b.top,bottom:b.bottom,vh:innerHeight,vw:innerWidth};');
+      assert.ok(r.top >= 0 && r.bottom <= r.vh,
+        '「取り消す」が画面の外にある（top=' + Math.round(r.top) + ' bottom=' + Math.round(r.bottom) + ' / 画面の高さ ' + r.vh
+        + '）。通知は固定位置で画面より高くなり、スクロールもできない');
+    });
+  });
+
+  // BUG-E5 -----------------------------------------------------------------------------
+  test('BUG-E5: 1つのパネルの中で、押せるボタンの名前が重複しない（PBI の「削除」とコメントの「削除」）', async () => {
+    const html = buildPage({ rows: [row({ id: 'PBI-001' })], me: 'me', impOpen: [imp()], impResolved: [],
+      comments: [{ id: 'CMT-00000001', target_id: 'PBI-001', author: 'me', created_at: '2026-09-10 10:00:00', body: 'a' },
+        { id: 'CMT-00000002', target_id: 'PBI-001', author: 'me', created_at: '2026-09-10 10:01:00', body: 'b' }] });
+    await openPage(html, 1024, 'light');
+    await session.evaluate(JS.click('#board .card'));
+    await sleep(100);
+    const names = await session.evaluate(
+      'return Array.from(document.querySelectorAll("#panel button")).filter(function (b) { return b.getClientRects().length > 0; })'
+      + '.map(function (b) { return (b.getAttribute("aria-label") || b.textContent).trim(); });');
+    const dup = names.filter(function (n, i) { return names.indexOf(n) !== i; });
+    assert.deepEqual(dup, [],
+      '同じ名前のボタンが複数ある: ' + JSON.stringify(names) + '（スクリーンリーダーでは、どの「削除」がPBIでどれがコメントか区別できない）');
+  });
+});
