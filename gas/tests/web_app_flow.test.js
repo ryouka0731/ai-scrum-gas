@@ -896,6 +896,16 @@ function cmtFiles(body) {
   return { 'product_backlog.csv': headerOnlyCsv(), 'comments.csv': CMT_HEADER + (body || '') };
 }
 
+test('コメントの取り消しは、保存した形（前後の空白を落とした id）の行を restored で返す', () => {
+  const { ctx } = createTestContext(cmtFiles());
+  const res = ctx.apiRestoreComment({ id: ' CMT-0000000f ', target_id: ' PBI-001 ', author: 'me@example.com',
+    created_at: '2026-10-06 10:00:00', body: '戻す' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.restored.id, 'CMT-0000000f');
+  assert.equal(res.restored.target_id, 'PBI-001');
+  assert.equal(res.restored.body, '戻す');
+});
+
 test('apiGetView(board) は comments を載せ、mine を付ける', () => {
   const { ctx } = createTestContext(cmtFiles(
     'CMT-0000000a,PBI-001,me@example.com,2026-10-06 10:00:00,はじめ\nCMT-0000000b,PBI-001,you@example.com,2026-10-06 11:00:00,つぎ\n'));

@@ -2562,9 +2562,12 @@ function restoreComment(row) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete commentPending[issued];
       if (res.ok) commentWritesDone++;
+      // 重ねるのはサーバが保存した形の行（restored。id の前後の空白を落としたもの）。
+      // 送った行のままだと id が食い違い、写しの行と一時的に二重に出る。無ければ送った行を使う。
+      var back = (res.ok && res.restored) || row;
       if (res.ok && row.id) delete commentDeletedIds[row.id];
-      // 戻す応答は戻した行を運ばない。送った行（row）を使う。
-      if (res.ok) noteOwnComment(row.id, issued, row);
+      if (res.ok && back.id) delete commentDeletedIds[back.id];
+      if (res.ok) noteOwnComment(back.id, issued, back);
       if (!applyComments(res.comments, issued)) applyCommentOverlay();
       pruneCommentOverlay();
       if (res.ok) setMessage('コメントを戻しました。', 'info');

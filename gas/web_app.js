@@ -808,7 +808,11 @@ function apiRestoreComment(row) {
     }
     const r = restoreComment(rows, picked);
     if (!r.ok) return { ok: false, reason: 'invalid', message: '戻す内容が不正です。' };
-    return { ok: true, rows: r.unchanged ? null : r.rows,
+    // 保存した形の行（id・target_id は前後の空白を落とす）を返す。画面は送った行ではなくこれで重ねる
+    // （送った行のままだと id が食い違い、サーバの写しの行と一時的に二重に出る）。
+    const id = String(picked.id || '').trim();
+    const saved = r.rows.filter(function (x) { return String(x.id || '').trim() === id; })[0];
+    return { ok: true, rows: r.unchanged ? null : r.rows, extra: { restored: saved },
       history: [{ target_id: String(picked.target_id || '').trim(), action: 'comment_restore' }] };
   });
 }
