@@ -39,8 +39,13 @@ test('F4: 表記違いの同一スプリントは1列にまとめ、■ と帯�
     { sprint: 'Sprint 1', sprint_start: '2026-01-01', sprint_end: '2026-01-07' },
     { sprint: 'sprint001', sprint_start: '2026-01-08', sprint_end: '2026-01-14' },
   ];
-  const r = buildRoadmapGrid([{ id: 'PBI-001', title: 'a', sprint: 'Sprint 1' }], vel);
-  assert.equal(r.marks.length, r.grid[1].filter((c) => c === '■').length);
+  const r = buildRoadmapGrid([{ id: 'PBI-001', title: 'a', sprint: 'Sprint 1' },
+    { id: 'PBI-002', title: 'b', sprint: 'sprint001' }, { id: 'PBI-003', title: 'c', sprint: '' }], vel);
+  const squares = r.grid.reduce((n, row) => n + row.filter((c) => c === '■').length, 0);
+  assert.equal(r.marks.length, squares);
+  assert.ok(r.marks.length >= 2, '前提: 帯が2つ以上ある');
+  // 帯は1つずつ ■ のセルを指す（数が同じでも、ずれた位置を指していれば落とす）。
+  r.marks.forEach((m) => assert.equal(r.grid[m.row][m.col], '■', JSON.stringify(m) + ' が ■ を指していない'));
   assert.equal(r.grid[0].length, 3);
 });
 
@@ -118,15 +123,21 @@ test('F5: git リポジトリでないときは明確なメッセージで失敗
 });
 
 test('F6: 読み取り専用のファイルも2回目の配布で上書きできる', () => {
+  const f = (r) => path.join(r, 'scrum', 'ro.md');
   const root = makeRepo((r) => {
-    const f = path.join(r, 'scrum', 'ro.md');
-    fs.writeFileSync(f, 'v1');
-    fs.chmodSync(f, 0o444);
+    fs.writeFileSync(f(r), 'v1');
+    fs.chmodSync(f(r), 0o444);
   });
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-g4-dest-'));
   try {
     assert.equal(runPublish(root, dest).status, 0);
+    assert.equal(fs.readFileSync(f(dest), 'utf8'), 'v1');
+    // 追跡しているファイルを v2 にして配り直す（読み取り専用のまま）。
+    fs.chmodSync(f(root), 0o644);
+    fs.writeFileSync(f(root), 'v2');
+    fs.chmodSync(f(root), 0o444);
     const r = runPublish(root, dest);
     assert.equal(r.status, 0, r.stderr);
+    assert.equal(fs.readFileSync(f(dest), 'utf8'), 'v2', '2回目の配布で上書きされていない');
   } finally { cleanup(root, dest); }
 });
