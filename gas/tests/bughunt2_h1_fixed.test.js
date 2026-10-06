@@ -65,3 +65,37 @@ test('S-BUG-2c: 1回の apiUpdatePbi で入れたスプリント値で、全員�
   assert.equal(v.ok, true);
   assert.ok(ms < 200, '盤面の読み込みに ' + ms + 'ms（sprintChoices → normalizeSprint）');
 });
+
+// --- V1: 全角括弧だけで囲んだ PBI のタイトルは、雛形の行と見分けられないので拒否する --------------------
+
+const V = require('./bughunt2_V_env.js');
+const VT = '2026-01-01 00:00:00';
+function vEnv() {
+  return V.makeEnv({ files: { 'product_backlog.csv': V.BACKLOG_HEADER + 'PBI-001,A,,,Low,1,New,,' + VT + ',' + VT + '\n', 'product_backlog_done.csv': V.BACKLOG_HEADER }, folders: {} });
+}
+const boardIds = (board) => [].concat.apply([], V.J(board).columns.map((c) => c.cards.map((x) => x.id)));
+const V1_MSG = 'タイトルを（）だけで囲まないでください。雛形の行と見分けられなくなります。';
+
+test('BUG-V1: 全角括弧だけで囲んだタイトルで PBI を作ると invalid で断る（成功と返して盤面から消さない）', () => {
+  const e = vEnv();
+  const before = e.scrumSpec.files['product_backlog.csv'];
+  const r = V.J(e.ctx.apiCreatePbi({ title: ' （仮） ', priority: 'Low' }));
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'invalid');
+  assert.equal(r.message, V1_MSG);
+  assert.equal(e.scrumSpec.files['product_backlog.csv'], before, '書いていない');
+});
+
+test('BUG-V1b: 既存の PBI のタイトルを（…）だけで囲む保存は invalid で断る。PBI は盤面に残る', () => {
+  const e = vEnv();
+  const r = V.J(e.ctx.apiUpdatePbi('PBI-001', { title: '（旧）', priority: 'Low', status: 'New', size: '1' }, VT));
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'invalid');
+  assert.ok(boardIds(e.ctx.apiGetView('board').view).indexOf('PBI-001') !== -1);
+});
+
+test('BUG-V1: 括弧が途中にあるだけのタイトル・片側だけのタイトルは通す', () => {
+  const pv = require('../pure_pbi_validate.js');
+  ['（仮）の件', '件（仮）', '（', '）', 'A（B）C'].forEach((t) => assert.equal(pv.validatePbiFields({ title: t }, ['New']).ok, true, t));
+  assert.deepEqual(pv.validatePbiFields({ title: '（）' }, ['New']).errors, [V1_MSG]);
+});
