@@ -285,3 +285,68 @@ test('P4: 50 件の境目で同じ時刻・同じ人の更新が分かれても�
   assert.equal(heads.filter(function (t) { return t.indexOf('2026-01-02') === 0; }).length, 1);
   assert.equal(items(h), 52);
 });
+
+// ---------------------------------------------------------------------------
+// S1（画面側）: 解決の取り消しは行を送らない。通知 → { undoToken }、途中で止まった操作 → { pendingId }、
+// 途中で止まった取り消しの「完了する」は同じ引数で送り直す
+// ---------------------------------------------------------------------------
+
+const IROW = { id: 'IMP-002', title: '止まっている', description: '', reported_by: 'マヤ',
+  reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: '' };
+const IRESOLVED = Object.assign({}, IROW, { status: 'Resolved', resolved_at: '2026-10-02', resolution: '再起動した' });
+function impResp(open, resolved, pending) {
+  return { ok: true, name: 'impediment',
+    view: { columns: [{ field: 'id', label: 'ID' }, { field: 'title', label: 'タイトル' }], open: open, resolved: resolved || [], pending: pending || [] },
+    summary: { open: open.length, resolved: (resolved || []).length, pending: (pending || []).length }, sprintChoices: [], commentCounts: {} };
+}
+function onImp(resp) {
+  const h = createHarness(COLS);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(COLS), summary: null, commentCounts: {}, sprintChoices: [] });
+  h.clickTab('障害物');
+  pendingOf(h, 'apiGetView')[0].handlers.success(resp);
+  return h;
+}
+const argsOf = function (c) { return JSON.parse(JSON.stringify(c.args)); };
+
+test('S1: 解決の通知の「取り消す」は { undoToken } だけを送る。途中で止まったら「完了する」で同じ鍵を送り直す', () => {
+  const h = onImp(impResp([IROW]));
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', '再起動した');
+  h.click('imp-panel-resolve');
+  pendingOf(h, 'apiResolveImpediment')[0].handlers.success(Object.assign(impResp([], [IRESOLVED]),
+    { moved: IROW, resolvedRow: IRESOLVED, undoToken: 'tok-1' }));
+  h.click('toast-undo');
+  const undo = pendingOf(h, 'apiUnresolveImpediment')[0];
+  assert.deepEqual(argsOf(undo), [{ undoToken: 'tok-1' }]);
+  undo.handlers.success(Object.assign(impResp([IROW], [IRESOLVED], [{ id: 'IMP-002', open: IROW, resolved: IRESOLVED }]),
+    { ok: false, reason: 'partial', message: '途中で止まりました' }));
+  assert.equal(h.labelOf('toast-undo'), '完了する');
+  h.click('toast-undo');
+  assert.deepEqual(argsOf(pendingOf(h, 'apiUnresolveImpediment')[0]), [{ undoToken: 'tok-1' }]);
+});
+
+test('S1: 「途中で止まった操作」の「未解決に戻す」は { pendingId } だけを送り、途中で止まったら同じ引数で送り直す', () => {
+  const pending = [{ id: 'IMP-002', open: IROW, resolved: IRESOLVED }];
+  const h = onImp(impResp([], [IRESOLVED], pending));
+  h.clickPending('IMP-002', 'unresolve');
+  const c = pendingOf(h, 'apiUnresolveImpediment')[0];
+  assert.deepEqual(argsOf(c), [{ pendingId: 'IMP-002' }]);
+  c.handlers.success(Object.assign(impResp([], [IRESOLVED], pending), { ok: false, reason: 'partial', message: '途中で止まりました' }));
+  assert.equal(h.labelOf('toast-undo'), '完了する');
+  h.click('toast-undo');
+  assert.deepEqual(argsOf(pendingOf(h, 'apiUnresolveImpediment')[0]), [{ pendingId: 'IMP-002' }]);
+});
+
+test('S1: 解決の応答に undoToken が無い（預けられなかった）ときは、取り消しの通知を出さない', () => {
+  const h = onImp(impResp([IROW]));
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-resolve');
+  h.setValue('i-resolution', '再起動した');
+  h.click('imp-panel-resolve');
+  pendingOf(h, 'apiResolveImpediment')[0].handlers.success(Object.assign(impResp([], [IRESOLVED]),
+    { moved: IROW, resolvedRow: IRESOLVED, undoToken: null }));
+  assert.equal(h.hiddenOf('toast'), true);
+  assert.match(h.textOf('message'), /IMP-002「止まっている」を解決しました。/);
+});
