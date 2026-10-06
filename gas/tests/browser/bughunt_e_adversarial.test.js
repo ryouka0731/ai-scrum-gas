@@ -69,16 +69,6 @@ const INJECTION_AUDIT = [
   '};',
 ].join('\n');
 
-const TABBABLES = [
-  'var els = Array.from(document.querySelectorAll("a[href],button,input,select,textarea,summary,[tabindex]"))',
-  '  .filter(function (e) { return e.tabIndex >= 0 && !e.disabled; });',
-  'return els.map(function (e) {',
-  '  var cs = getComputedStyle(e);',
-  '  return { tag: e.tagName, id: e.id, cls: e.className && e.className.baseVal === undefined ? e.className : "",',
-  '    visible: e.getClientRects().length > 0 && cs.visibility !== "hidden" && !e.closest("[hidden]") };',
-  '});',
-].join('\n');
-
 /** 名前を持つべき操作部品の「アクセシブルな名前」を一覧にする。 */
 const NAME_AUDIT = [
   'function nameOf(e) {',
@@ -97,6 +87,13 @@ const NAME_AUDIT = [
 describe('bughunt E: 実ブラウザの敵対的入力・キーボード・アクセシビリティ', { skip: SKIP }, () => {
   let session = null;
   before(async () => { session = await launch(); });
+
+  /** 本物の Tab（Shift+Tab）を押す。ページの JS ではなくブラウザが焦点を動かす。 */
+  async function pressTab(shift) {
+    const key = { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9, modifiers: shift ? 8 : 0 };
+    await session.send('Input.dispatchKeyEvent', Object.assign({ type: 'rawKeyDown' }, key));
+    await session.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyUp' }, key));
+  }
   after(async () => { if (session) await session.close(); });
 
   async function openPage(html, width, scheme) {
@@ -413,13 +410,24 @@ describe('bughunt E: 実ブラウザの敵対的入力・キーボード・ア�
   test('a11y: 焦点が当たる全種類の部品に、輪郭を出す :focus / :focus-visible の規則が当たっている（ライト/ダーク）', async () => {
     // headless では programmatic focus が :focus-visible に当たらないため、計算値ではなく
     // 「その部品に当たる焦点の規則が outline を出す宣言を持つか」を CSSOM から見る。
+    // 輪郭として数えるのは、幅が 0 でなく色が透明でない outline か、影の輪（box-shadow）だけ。
+    // 宣言は var() を含むと CSSOM の個別のプロパティが空になるので、規則の宣言をそのまま
+    // 試し用の要素へ当て、計算値（--accent 等を解決した後）で確かめる。
     const AUDIT = [
+      'function visibleRing(rule) {',
+      '  var d = document.createElement("div"); d.style.cssText = rule.style.cssText; document.body.appendChild(d);',
+      '  var cs = getComputedStyle(d);',
+      '  var shadow = cs.boxShadow && cs.boxShadow !== "none";',
+      '  var c = cs.outlineColor; var clear = c === "transparent" || /^rgba\\(.*,\\s*0\\)$/.test(c);',
+      '  var line = cs.outlineStyle !== "none" && cs.outlineStyle !== "hidden" && parseFloat(cs.outlineWidth) > 0 && !clear;',
+      '  d.remove();',
+      '  return shadow || line;',
+      '}',
       'function covered(el) {',
       '  var ok = false;',
       '  Array.from(document.styleSheets).forEach(function (sh) { Array.from(sh.cssRules).forEach(function (r) {',
       '    if (!r.selectorText || r.selectorText.indexOf(":focus") === -1) return;',
-      '    var o = r.style.outlineStyle || r.style.outline || "";',
-      '    if (!o || o === "none") return;',
+      '    if (!visibleRing(r)) return;',
       '    r.selectorText.split(",").forEach(function (sel) {',
       '      if (sel.indexOf(":focus") === -1) return;',
       '      var base = sel.replace(/:focus-visible|:focus/g, "").trim() || "*";',
@@ -444,6 +452,18 @@ describe('bughunt E: 実ブラウザの敵対的入力・キーボード・ア�
       const a = await session.evaluate(AUDIT);
       assert.ok(a.n > 25, scheme + ': 検査した部品が ' + a.n + ' 個しか無い');
       assert.deepEqual(a.missing, [], scheme + ': 焦点の輪郭の規則が当たらない部品');
+      // 検査そのものの確認: 幅 0・透明の outline は輪郭に数えず、色付きの outline と影の輪は数える。
+      const self = await session.evaluate(
+        'var st = document.createElement("style"); st.id = "zz-style";'
+        + ' st.textContent = ".zz-w0:focus{outline:0 solid red} .zz-tr:focus{outline:2px solid transparent}'
+        + ' .zz-ok:focus{outline:2px solid var(--accent)} .zz-sh:focus{box-shadow:0 0 0 2px red}";'
+        + ' document.head.appendChild(st);'
+        + ' ["zz-w0","zz-tr","zz-ok","zz-sh"].forEach(function (c) { var e = document.createElement("span");'
+        + ' e.tabIndex = 0; e.className = c; e.textContent = c; document.body.appendChild(e); });'
+        + ' var r = (function () {' + AUDIT + '})();'
+        + ' document.querySelectorAll("[class^=zz-]").forEach(function (e) { e.remove(); }); st.remove();'
+        + ' return r.missing.filter(function (m) { return m.indexOf(".zz-") !== -1; }).map(function (m) { return m.split(".").pop(); });');
+      assert.deepEqual(self, ['zz-w0', 'zz-tr'], scheme + ': 見えない輪郭を数えている（または見える輪郭を数えない）');
       await gotoView('障害物', null);
       await session.waitFor('return document.querySelector("#table-view tr.clickable") ? 1 : 0', '障害物の行');
       const b2 = await session.evaluate(AUDIT);
@@ -457,19 +477,30 @@ describe('bughunt E: 実ブラウザの敵対的入力・キーボード・ア�
     await openPage(html, 1440, 'light');
     await session.evaluate(JS.click('#board .card'));
     await sleep(100);
-    // display: none の要素はブラウザが Tab の対象にしない。描かれている部品だけを順に見る。
-    const tabs = (await session.evaluate(TABBABLES)).filter(function (t) { return t.visible; });
-    const order = tabs.map(function (t) { return t.id || t.cls; });
+    // DOM の並びではなく、本物の Tab（CDP の Input.dispatchKeyEvent）で焦点が移る順を見る。
+    // tabindex で順番が変わっても、ブラウザが実際に辿る順で検査できる。
+    await session.evaluate('document.getElementById("panel-close").focus(); return 1;');
+    const WHO = 'var e = document.activeElement; return e ? (e.id || String(e.className) || e.tagName) : null;';
+    const order = [await session.evaluate(WHO)];
+    for (let k = 0; k < 40 && order[order.length - 1] !== 'comment-input'
+      && String(order[order.length - 1]).split(' ').indexOf('comment-input') === -1; k++) {
+      await pressTab(false);
+      order.push(await session.evaluate(WHO));
+    }
     const want = ['panel-close', 'f-title', 'f-description', 'f-acceptance', 'f-status', 'f-priority', 'f-size', 'f-sprint',
       'panel-save', 'panel-delete', 'history-toggle', 'comment-input'];   // 送信は欄が空の間は disabled（Tab の対象外）
     let at = -1;
     want.forEach(function (w) {
       const i = order.findIndex(function (o, k) { return k > at && String(o).split(' ').indexOf(w) !== -1; });
-      assert.ok(i !== -1, 'Tab 順に ' + w + ' が（前の部品より後ろに）見つからない: ' + JSON.stringify(order));
+      assert.ok(i !== -1, 'Tab で ' + w + ' に（前の部品より後に）届かない: ' + JSON.stringify(order));
       at = i;
     });
-    // 閉じているパネルの部品は Tab 順に居ない。
-    assert.equal(order.indexOf('i-title'), -1, '障害物パネル（hidden）の部品が Tab 順に居る');
+    // 閉じているパネルの部品には Tab で届かない。
+    assert.equal(order.indexOf('i-title'), -1, '障害物パネル（hidden）の部品に Tab で届いた: ' + JSON.stringify(order));
+    // Shift+Tab で1つ戻る（コメント欄 → 履歴）。
+    await pressTab(true);
+    const back = await session.evaluate(WHO);
+    assert.equal(order[order.length - 2], back, 'Shift+Tab で1つ前の部品へ戻らない');
   });
 
   test('キーボード: Escape は 補足 → 通知 → パネル の順に1枚ずつ閉じる', async () => {
