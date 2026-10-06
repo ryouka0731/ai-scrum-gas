@@ -1,5 +1,5 @@
 'use strict';
-// バグ探し C: 確認済みのバグの再現（失敗するテスト）。npm test に拾われないよう .txt にしてある。
+// バグ探しで見つかった応答の順序・途中で止まった操作の回復のバグ（G2）の再現テスト。直したので緑で守る。
 const test = require('node:test');
 const assert = require('node:assert/strict');
 // ---------------------------------------------------------------------------
@@ -146,17 +146,13 @@ const H = (function () {
   return { createCtx, baseFiles, plain, parse, rowsOf, toCsvText, rng, PBI_FIELDS, IMP_FIELDS, CMT_FIELDS, CHG_FIELDS, PBI_H, IMP_H, CMT_H, CHG_H };
 })();
 
-// 実行: cp gas/tests/bughunt_c_failing.test.js.txt /tmp/x.test.js では __dirname がずれるため、
-//       同じディレクトリに .test.js として複製して実行する:
-//   cp gas/tests/bughunt_c_failing.test.js.txt gas/tests/bughunt_c_failing_run.test.js && node --test gas/tests/bughunt_c_failing_run.test.js; rm gas/tests/bughunt_c_failing_run.test.js
-// ここにあるテストは、いずれも現在の製品コードで失敗する（＝バグの再現）。
-
+// ---- C-1: 途中で止まった解決・取り消しを逆向きに揃えたときの履歴 ----
 const { createCtx, baseFiles, plain, rowsOf, PBI_FIELDS, IMP_FIELDS, CMT_FIELDS, CHG_FIELDS } = H;
 const IMP2 = 'IMP-002,止まっている,,マヤ,2026-10-01,Open,,,sprint001\n';
 const IMP2_ROW = { id: 'IMP-002', title: '止まっている', description: '', reported_by: 'マヤ', reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: 'sprint001' };
 const full = (t) => ({ title: t, description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' });
 
-test('BUG C-1a: 解決が途中で止まり「未解決に戻す」で揃えると、履歴の最後が resolve のまま（実際は未解決）', () => {
+test('C-1a: 解決が途中で止まり「未解決に戻す」で揃えると、最新の履歴は unresolve になる', () => {
   const f = baseFiles();
   f['impediment_log.csv'] += IMP2;
   const h = createCtx(f, { setContentFailNames: ['impediment_log.csv'] });
@@ -171,7 +167,7 @@ test('BUG C-1a: 解決が途中で止まり「未解決に戻す」で揃える�
   assert.equal(last.action, 'unresolve', '最新の履歴が今の状態（未解決）と食い違う: ' + JSON.stringify(last));
 });
 
-test('BUG C-1b: 取り消しが途中で止まり「解決済として完了」で揃えると、履歴の最後が unresolve のまま（実際は解決済）', () => {
+test('C-1b: 取り消しが途中で止まり「解決済として完了」で揃えると、最新の履歴は resolve になる', () => {
   const f = baseFiles();
   f['impediment_log.csv'] += IMP2;
   const h = createCtx(f);
@@ -186,3 +182,15 @@ test('BUG C-1b: 取り消しが途中で止まり「解決済として完了」�
   assert.equal(last.action, 'resolve', '最新の履歴が今の状態（解決済）と食い違う: ' + JSON.stringify(last));
 });
 
+
+test('C-1: 解決が途中で止まり、そのまま「解決済として完了」で揃えたときは resolve を二重に記録しない', () => {
+  const f = baseFiles();
+  f['impediment_log.csv'] += IMP2;
+  const h = createCtx(f, { setContentFailNames: ['impediment_log.csv'] });
+  assert.equal(plain(h.ctx.apiResolveImpediment('IMP-002', '直した', IMP2_ROW)).reason, 'partial');
+  h.fault.setContentFailNames = [];
+  const p = plain(h.ctx.apiGetView('impediment')).view.pending[0];
+  assert.equal(plain(h.ctx.apiResolveImpediment(p.id, p.resolved.resolution, p.open)).ok, true);
+  const entries = plain(h.ctx.apiGetHistory('IMP-002')).entries;
+  assert.deepEqual(entries.map((e) => e.action), ['resolve']);
+});

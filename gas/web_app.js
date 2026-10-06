@@ -508,13 +508,21 @@ function withImpedimentWrite_(first, mutate) {
     writes.sort(function (a, b) { return (a.key === first ? 0 : 1) - (b.key === first ? 0 : 1); });
     const openBefore = open;
     const written = {};
+    let completed = false;
     // この呼び出しで書けたものだけを履歴にする。完了の再送で書かなかった側は記録しない。
+    // ただし途中で止まった操作を逆向きに揃えたとき（解決の途中を「未解決に戻す」で完了した等）は、
+    // 最新の履歴が最終の状態と食い違うので、完了した側の操作を記録する。
+    const moveEvent = function (action, wroteMain) {
+      if (wroteMain) return [{ target_id: result.historyId, action: action }];
+      if (completed && lastHistoryAction_(result.historyId) !== action) return [{ target_id: result.historyId, action: action }];
+      return [];
+    };
     const historyEvents = function () {
       if (result.historyKind === 'diff') {
         return written.open ? diffRows(openBefore, result.open, IMPEDIMENT_FIELDS, []) : [];
       }
-      if (result.historyKind === 'resolve') return written.resolved ? [{ target_id: result.historyId, action: 'resolve' }] : [];
-      if (result.historyKind === 'unresolve') return written.open ? [{ target_id: result.historyId, action: 'unresolve' }] : [];
+      if (result.historyKind === 'resolve') return moveEvent('resolve', written.resolved);
+      if (result.historyKind === 'unresolve') return moveEvent('unresolve', written.open);
       return [];
     };
     for (let i = 0; i < writes.length; i++) {
@@ -532,6 +540,7 @@ function withImpedimentWrite_(first, mutate) {
         }, impedimentPayload_(open, resolved), partialWarning ? { historyWarning: partialWarning } : {});
       }
     }
+    completed = true;
     if (result.open) open = result.open;
     if (result.resolved) resolved = result.resolved;
     const warning = appendHistory_(historyEvents);
@@ -543,6 +552,20 @@ function withImpedimentWrite_(first, mutate) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * 対象の最新の履歴の操作名（無ければ空文字）。途中で止まった操作を揃えたときだけ読む。
+ * 同じ時刻なら後に足された行を新しいとみなす。
+ */
+function lastHistoryAction_(targetId) {
+  const key = String(targetId || '').trim();
+  let best = null;
+  readCsvRowsBestEffort_(HISTORY_CSV_NAME).forEach(function (row) {
+    if (String(row.target_id || '').trim() !== key) return;
+    if (!best || String(row.at || '') >= String(best.at || '')) best = row;
+  });
+  return best ? String(best.action || '') : '';
 }
 
 /** 障害物の競合・不在の定型文。 */
