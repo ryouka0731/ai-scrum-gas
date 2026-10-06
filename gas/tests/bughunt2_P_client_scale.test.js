@@ -27,12 +27,21 @@ function cards(n) {
   return cols;
 }
 
-function boot(n, comments) {
+/** counts は { target_id: 件数 }（ビューの応答は件数だけを運ぶ。本文はパネルを開いたときに取る）。 */
+function boot(n, counts) {
   const cols = cards(n);
   const h = createHarness(cols);
   h.sandbox.load();
-  h.calls[0].handlers.success({ ok: true, name: 'board', view: { columns: cols }, summary: { byStatus: [], total: { count: n, points: 0 } }, comments: comments || {}, sprintChoices: [] });
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: { columns: cols }, summary: { byStatus: [], total: { count: n, points: 0 } }, commentCounts: counts || {}, sprintChoices: [] });
   return { h, cols };
+}
+
+/** カードを開き、その対象のコメントの取得（apiGetComments）に list で答える。 */
+function openWithComments(h, id, list) {
+  h.openCard(id);
+  const fetch = h.calls.filter((c) => c.method === 'apiGetComments' && c.args[0] === id);
+  assert.equal(fetch.length, 1, 'コメントの取得が出ていない');
+  fetch[0].handlers.success({ ok: true, comments: list });
 }
 
 function comments(n, target) {
@@ -83,23 +92,26 @@ test('C3. ドラッグ1回の描画回数: 楽観的更新と応答で、盤面�
 });
 
 test('C4. コメント1件の送信: 盤面の再構築は 2回以内。1,000枚・コメント 2,000件', () => {
-  const { h } = boot(1000, { [pid(1)]: comments(2000, pid(1)) });
-  h.openCard(pid(1));
+  const { h } = boot(1000, { [pid(1)]: 2000 });
+  openWithComments(h, pid(1), comments(2000, pid(1)));
+  assert.equal(h.commentsIn('panel-comments').length, 2000, '前提: 2,000 件を描いている');
   const renders = countCalls(h, 'render');
   h.setCommentInput('panel-comments', 'こんにちは');
   h.clickCommentSend('panel-comments');
   const call = h.calls[h.calls.length - 1];
   assert.equal(call.method, 'apiAddComment');
   const sent = { id: 'CMT-eeeeeeee', target_id: pid(1), author: 'a@example.com', created_at: '2026-02-01 00:00:00', body: 'こんにちは', mine: true };
-  const t = ms(() => call.handlers.success({ ok: true, comment: sent, comments: { [pid(1)]: comments(2000, pid(1)).concat([sent]) } }));
+  const t = ms(() => call.handlers.success({ ok: true, comment: sent, targetId: pid(1), comments: comments(2000, pid(1)).concat([sent]), count: 2001 }));
+  assert.equal(h.commentsIn('panel-comments').length, 2001, '応答の一覧を取り込んでいない');
   assert.ok(renders.n <= 2, '送信の応答で盤面を ' + renders.n + ' 回作り直した');
   assert.ok(t < 3000, '応答の処理 ' + t.toFixed(0) + 'ms');
 });
 
 test('C5. コメント節: 件数に線形のノード、1件あたり 10 ノード以内。何度描き直しても増えない', () => {
   const counts = [100, 500, 2000].map((n) => {
-    const { h } = boot(20, { [pid(1)]: comments(n, pid(1)) });
-    h.openCard(pid(1));
+    const { h } = boot(20, { [pid(1)]: n });
+    openWithComments(h, pid(1), comments(n, pid(1)));   // 取得に答えないと一覧は描かれない（PR #11 cubic）
+    assert.equal(h.commentsIn('panel-comments').length, n, '前提: ' + n + ' 件を描いている');
     const host = h.sandbox.document.getElementById('panel-comments');
     const first = countNodes(host);
     for (let i = 0; i < 5; i++) h.sandbox.refreshOpenComments();
@@ -162,14 +174,24 @@ function showHistory(entries) {
   };
   const call = h.calls[h.calls.length - 1];
   const t = ms(() => call.handlers.success({ ok: true, entries: entries }));
-  const nodes = countNodes(h.sandbox.document.getElementById('panel-history'));
-  return { nodes, t, lcs: lcsCells };
+  const host = h.sandbox.document.getElementById('panel-history');
+  const collect = (cls) => { const hit = []; (function w(e) { if (e.classList && e.classList.contains(cls)) hit.push(e); (e.children || []).forEach(w); })(host); return hit; };
+  // 1回の描画（最初のページ）で描いた件数。「さらに表示」で残りを足す前に数える。
+  const firstItems = collect('history-item').length;
+  const firstNodes = countNodes(host);
+  const firstLcs = { n: lcsCells.n, calls: lcsCells.calls };
+  // 1件あたりのノードは、すべてのページを足してから全件で割る（PR #11 cubic）。
+  let more;
+  while ((more = collect('history-more')).length) more[0].listeners.click.forEach((fn) => fn({}));
+  return { nodes: countNodes(host), items: collect('history-item').length, t, firstItems, firstNodes, lcs: firstLcs };
 }
 
 test('C8. 履歴: 200 件 × 短い値は 1件あたり 40 ノード以内、複数行（10行）でも 60 ノード以内', () => {
   const short = showHistory(histEntries(200, 1, { field: 'title' }));
+  assert.equal(short.items, 200, '前提: 全件を描いている');
   assert.ok(short.nodes / 200 <= 40, '1行の値 1件あたり ' + short.nodes / 200);
   const ten = showHistory(histEntries(200, 10));
+  assert.equal(ten.items, 200, '前提: 全件を描いている');
   assert.ok(ten.nodes / 200 <= 60, '10行の差分 1件あたり ' + ten.nodes / 200);
 });
 
@@ -177,8 +199,8 @@ test('C9. 履歴の行差分は、1回の描画で LCS の表を 200万セルま
   const r = showHistory(histEntries(200, 400));
   assert.ok(r.lcs.n <= 2000000, 'LCS のセル ' + r.lcs.n);
   assert.ok(r.lcs.n > 0, '予算の範囲では行差分を作っている');
-  // 予算が尽きた後の件は LCS を呼ばない（呼び出し 200 回より少ない）。
-  assert.ok(r.lcs.calls < 200, 'LCS を ' + r.lcs.calls + ' 回呼んだ');
+  // 予算が尽きた後の件は LCS を呼ばない（1回の描画で描いた件数より少ない）。
+  assert.ok(r.firstItems > 0 && r.lcs.calls < r.firstItems, 'LCS を ' + r.lcs.calls + ' 回呼んだ（描いた ' + r.firstItems + ' 件）');
   assert.ok(r.t < 10000, 'シムでの描画 ' + r.t.toFixed(0) + 'ms');
 });
 

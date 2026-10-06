@@ -360,8 +360,11 @@ test('P22. 書き込みの前後で件数が増えない・変わらない（100
 test('P23. 変更履歴の追記は、履歴が 1,000,000 文字を超えても成功し、警告だけを返す（本体は書ける）', () => {
   const files = S.standardFiles(20, null, { logChars: 1200000 });
   const c = S.createCtx(files);
+  assert.notEqual(pure.csv.csvToObjects(files['product_backlog.csv']).filter((x) => x.id === S.pid(1))[0].status, 'Done', '前提');
   const r = c.ctx.apiUpdateStatus(S.pid(1), 'Done', S.T0);
   assert.equal(r.ok, true);
   assert.match(r.historyWarning, /大きくなっています/);
-  assert.match(files['product_backlog.csv'], /PBI-00001,[\s\S]*?,Done,/);
+  const row = pure.csv.csvToObjects(files['product_backlog.csv']).filter((x) => x.id === S.pid(1));
+  assert.equal(row.length, 1);
+  assert.equal(row[0].status, 'Done', 'PBI-00001 の状態が変わっていない');
 });
