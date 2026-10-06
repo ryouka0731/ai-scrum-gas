@@ -1014,13 +1014,43 @@ function mergeOneCard(current, serverBoard, id) {
   var now = findCard(current, id);
   if (now && String(now.updated_at || '') > String(card.updated_at || '')) return current;
   // 削除が確定したカードは、それより前に出した書き込みの遅れた応答で戻さない。
-  if (deletedPbiIds[id]) return boardWithCardRemoved(current, id);
+  if (deletedPbiIds[id] !== undefined) return boardWithCardRemoved(current, id);
   return boardWithCardUpserted(current, card, to);
 }
 
-// この画面で削除が確定した PBI の id → true（戻す成功で外す）。ID は使い回されないので、
+// この画面で削除が確定した PBI の id → 確定した時点の boardWriteIssued。ID は使い回されないので、
 // この id への応答はそれより前に出した自分の書き込みのものだけになる。
+// 外すのは次のとき: 戻す成功、信じてよい盤面全体（読み込み・重なっていない応答）にその id が
+// 載っていた（別の経路で戻った）、確定した時点で送信中だった盤面の書き込みがすべて返った
+// （それより後に出した書き込みの写しは削除を含むので、もう守る必要が無い）。
 var deletedPbiIds = {};
+// 盤面の書き込みの発行番号と、送信中のもの（発行番号 → true）。
+var boardWriteIssued = 0;
+var boardPending = {};
+
+/** 盤面の書き込みを出す。発行番号を返す（応答・失敗のどちらでも settleBoardWrite に渡す）。 */
+function issueBoardWrite() {
+  boardWriteIssued++;
+  boardPending[boardWriteIssued] = true;
+  return boardWriteIssued;
+}
+
+/** 盤面の書き込みが返った。確定時点で送信中だった書き込みが無くなった削除の控えを捨てる。 */
+function settleBoardWrite(issued) {
+  delete boardPending[issued];
+  var oldest = oldestPending(boardPending);
+  Object.keys(deletedPbiIds).forEach(function (id) {
+    if (oldest > deletedPbiIds[id]) delete deletedPbiIds[id];
+  });
+}
+
+/** 信じてよい盤面全体を受け取る。そこに載っている id は削除の控えから外す（別の経路で戻った）。 */
+function trustBoard(b) {
+  ((b && b.columns) || []).forEach(function (col) {
+    (col.cards || []).forEach(function (c) { delete deletedPbiIds[c.id]; });
+  });
+  return b;
+}
 
 /** board を複製し、id のカードを newStatus の列へ移した新しい board を返す（元の board は変えない）。 */
 function boardWithCardMoved(b, id, newStatus) {
@@ -1069,7 +1099,7 @@ function settleOverlap() {
  * 開いて保存すると必ず一度 conflict する。mergeOneCard と同じ取り込み方にする。
  */
 function applyServerBoard(serverBoard, id, trustWholeBoard) {
-  if (trustWholeBoard) return serverBoard;
+  if (trustWholeBoard) return trustBoard(serverBoard);
   return mergeOneCard(board, serverBoard, id);
 }
 
@@ -1335,6 +1365,7 @@ function savePanel() {
   // としか照合しないので、このキーが表示に出ることはない）。
   var pendKey = id ? id : '(new)' + seq;
   pendingIds[pendKey] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
   render(board);   // 送信中のカードに pending の印を付ける（move() と対称にする）
@@ -1352,16 +1383,16 @@ function savePanel() {
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         var newId = id || res.id;
-        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, newId));
+        render(applyServerBoard(res.board, newId, trustWholeBoard));
         if (mine) closePanel(true);
         setMessage((id ? id + ' を保存しました。' : res.id + ' を作成しました。'), 'info');
         afterHistoryWrite(res, newId, msgMark);
       } else {
         // 検証エラーではパネルを閉じない。閉じると入力が消える。
-        if (res.board && id) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        if (res.board && id) render(applyServerBoard(res.board, id, trustWholeBoard));
         // 作成失敗はまだ id が無く、1枚だけ取り込む先が無いので、重なっている
         // ときは board に触らない（他の送信中の反映を巻き戻さないため）。
-        else if (res.board && trustWholeBoard) render(res.board);
+        else if (res.board && trustWholeBoard) render(trustBoard(res.board));
         // busy・error は board を運ばない。それでも描き直し、送信中の印を外してドラッグできるようにする。
         else render(board);
         // 競合だけは基準を進める。検証エラー等で進めると、次の保存が他の人の
@@ -1371,6 +1402,7 @@ function savePanel() {
         if (mine) setPanelMessage(res.message, 'error');
         else setMessage((id || '新規作成') + ': ' + res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[pendKey];
@@ -1385,6 +1417,7 @@ function savePanel() {
       } else {
         setMessage((id || '新規作成') + ': ' + verb + 'に失敗しました: ' + err.message, 'error');
       }
+      settleBoardWrite(bw);
     });
 
   if (id) runner.apiUpdatePbi(id, fields, panelState.expectedUpdatedAt);
@@ -1491,6 +1524,7 @@ function deletePbi() {
 
   setPanelBusy(true);
   pendingIds[id] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
   render(boardWithCardRemoved(board, id));   // 楽観的に消す
@@ -1506,13 +1540,13 @@ function deletePbi() {
       if (mine) setPanelBusy(false);
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
-        deletedPbiIds[id] = true;
-        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        deletedPbiIds[id] = boardWriteIssued;
+        render(applyServerBoard(res.board, id, trustWholeBoard));
         if (mine) closePanel(true);
         showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
         afterHistoryWrite(res, id, msgMark);
       } else {
-        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        if (res.board) render(applyServerBoard(res.board, id, trustWholeBoard));
         // パネルを開いたままの間にこのカードが board から消えていることがある
         // （別の応答が先に処理した等）。その場合 restore.card は null になるので、
         // 存在しないカードを元に戻そうとして例外にしない。
@@ -1524,6 +1558,7 @@ function deletePbi() {
         if (mine) setPanelMessage(res.message, 'error');
         else setMessage(id + ': ' + res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
@@ -1539,6 +1574,7 @@ function deletePbi() {
       } else {
         setMessage(id + ': 削除に失敗しました: ' + err.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .apiDeletePbi(id, expectedUpdatedAt);
 }
@@ -1553,6 +1589,7 @@ function restorePbi(row) {
   // （作成の (new) キーと同じく、会計側だけに載せるためのもの）。
   var pendKey = '(undo)' + row.id;
   pendingIds[pendKey] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
 
@@ -1565,19 +1602,21 @@ function restorePbi(row) {
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         delete deletedPbiIds[row.id];
-        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
+        render(applyServerBoard(res.board, row.id, trustWholeBoard));
         setMessage(row.id + ' を戻しました。', 'info');
         afterHistoryWrite(res, row.id, msgMark);
       } else {
-        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
+        if (res.board) render(applyServerBoard(res.board, row.id, trustWholeBoard));
         setMessage(res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[pendKey];
       inflight--;
       settleOverlap();
       setMessage('取り消せませんでした: ' + err.message, 'error');
+      settleBoardWrite(bw);
     })
     .apiRestorePbi(row);
 }
@@ -2969,7 +3008,7 @@ function loadView() {
           commentsByTarget = withoutDeletedComments(res.comments);
           lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
         }
-        if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
+        if (requestedView === 'board') { render(trustBoard(res.view)); } else { renderTable(res.view); }
         renderSummary(res.summary);
         if (takeComments) refreshOpenComments();
         // 障害物の読み直しは、出した時点で確定していた書き込みより新しい状態。それより古い応答で表を戻さない。
@@ -3214,6 +3253,7 @@ function move(id, newStatus) {
   var originalStatus = columnStatusOf(board, id);
 
   pendingIds[id] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
   render(boardWithCardMoved(board, id, newStatus));
@@ -3240,6 +3280,7 @@ function move(id, newStatus) {
           : rollbackCard(id, newStatus, originalStatus));
         setMessage(res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
@@ -3248,6 +3289,7 @@ function move(id, newStatus) {
       retargetDeleteRestore(id, null, newStatus, originalStatus);
       render(rollbackCard(id, newStatus, originalStatus));
       setMessage('更新に失敗しました: ' + err.message, 'error');
+      settleBoardWrite(bw);
     })
     .apiUpdateStatus(id, newStatus, expectedUpdatedAt);
 }
