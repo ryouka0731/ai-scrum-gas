@@ -4,3 +4,4 @@ gas/.clasp.json
 .clasprc.json
 .serena/
 .claude/terminal-state.json
+.claude/worktrees/
