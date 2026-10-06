@@ -9,7 +9,6 @@ const COMMENT_FIELDS = ['id', 'target_id', 'author', 'created_at', 'body'];
 const COMMENT_TARGET_RE = /^(PBI|IMP)-\d+$/;
 const COMMENT_ID_RE = /^CMT-[0-9a-f]{8}$/;
 const COMMENT_BODY_MAX = 2000;
-const COMMENT_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 function cmtText_(v) { return v === undefined || v === null ? '' : String(v); }
 
@@ -50,9 +49,18 @@ function deleteComment(rows, id, me) {
   return { ok: true, rows: list.filter(function (_, k) { return k !== i; }).map(cmtPick_), removed: removed };
 }
 
+/**
+ * 消したコメントを戻す。
+ *
+ * id・created_at は形を問わず、空でないことだけを見る。削除はどんな形の行も受け付ける
+ * （ローカルで書かれた大文字の ID や、別の書式の日時の行もある）ため、ここで正規形を
+ * 求めると、削除できるのに取り消せずコメントが失われる。target_id は appendComment と
+ * 同じく前後の空白を落として保存する。
+ */
 function restoreComment(rows, row) {
   const src = cmtPick_(row);
-  if (!row || !COMMENT_ID_RE.test(src.id) || !validateComment(src.target_id, src.body).ok || !COMMENT_TIME_RE.test(src.created_at)) {
+  src.target_id = src.target_id.trim();
+  if (!row || !src.id.trim() || !validateComment(src.target_id, src.body).ok || !src.created_at.trim()) {
     return { ok: false, reason: 'invalid' };
   }
   const list = (rows || []).map(cmtPick_);
@@ -75,7 +83,7 @@ function groupComments(rows, me) {
       return a.i - b.i;
     }).map(function (x) {
       const c = x.row;
-      return { id: c.id, target_id: c.target_id, author: c.author, created_at: c.created_at, body: c.body,
+      return { id: c.id, target_id: c.target_id.trim(), author: c.author, created_at: c.created_at, body: c.body,
         mine: !!who && c.author === who };
     });
   });

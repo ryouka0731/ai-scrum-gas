@@ -228,16 +228,6 @@ test('BUG C-4: 作成の書き込みが失敗しても高水位だけ進み、�
   assert.equal(ok.id, 'PBI-001', '失敗した作成が PBI-001 を消費した（高水位: ' + h.props.LAST_PBI_ID + '）');
 });
 
-test('BUG C-5: 自分のコメントでも ID・日時が正規形でない行（ローカルで書いたもの）は、削除できるのに取り消せず失われる', () => {
-  const f = baseFiles();
-  f['comments.csv'] += 'CMT-ABCDEF12,PBI-002,me@example.com,2026-10-06 10:00:00,ローカルで書いた\n';
-  const h = createCtx(f);
-  const d = plain(h.ctx.apiDeleteComment('CMT-ABCDEF12'));
-  assert.equal(d.ok, true, '前提: 削除はできる');
-  const u = plain(h.ctx.apiRestoreComment(d.removed));
-  assert.equal(u.ok, true, '削除の取り消しが拒否され、コメントが失われた: ' + u.message);
-});
-
 test('BUG C-6: 未解決に雛形 IMP-001 と本物の IMP-001 があると、本物の編集が履歴に残らず警告も出ない', () => {
   const f = baseFiles();
   f['impediment_log.csv'] += 'IMP-001,（障害物タイトル）,（詳細説明）,（報告者）,YYYY-MM-DD,Open,,（解決策）,sprint001\n' +

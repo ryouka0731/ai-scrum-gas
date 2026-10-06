@@ -46,3 +46,178 @@ test('B1: 高水位の比較・上限判定は 2^53 を超える番号でも正�
   assert.equal(PID.isPbiIdWithinHighWater('PBI-000', [], big), false);
   assert.equal(PID.comparePbiIds('PBI-10', 'PBI-009'), 1);
 });
+
+// --- B2: コメントの target_id の前後の空白 ---
+const CMT = require('../pure_comment.js');
+
+test('B2: restoreComment は appendComment と同じく target_id の前後の空白を落として保存する', () => {
+  const rs = CMT.restoreComment([], { id: 'CMT-00000003', target_id: ' PBI-1 ', author: 'a', created_at: '2026-10-01 00:00:00', body: 'x' });
+  assert.equal(rs.ok, true);
+  assert.equal(rs.rows[0].target_id, 'PBI-1');
+});
+
+test('B2: groupComments は前後に空白のある target_id を落として返す（キーと揃える）', () => {
+  const g = CMT.groupComments([{ id: 'CMT-00000001', target_id: ' PBI-1 ', author: 'a', created_at: 't', body: 'x' }], 'a');
+  assert.equal(g['PBI-1'][0].target_id, 'PBI-1');
+});
+
+// --- C: web_app 経由の再現（バグ探し C のフェイク） ---
+const H = (function () {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const GAS_DIR = path.join(__dirname, '..');
+  const PBI_FIELDS = ['id', 'title', 'description', 'acceptance_criteria', 'priority', 'size', 'status', 'sprint', 'created_at', 'updated_at'];
+  const IMP_FIELDS = ['id', 'title', 'description', 'reported_by', 'reported_at', 'status', 'resolved_at', 'resolution', 'sprint'];
+  const CMT_FIELDS = ['id', 'target_id', 'author', 'created_at', 'body'];
+  const CHG_FIELDS = ['id', 'at', 'actor', 'target_id', 'action', 'field', 'before', 'after'];
+  const PBI_H = PBI_FIELDS.join(',');
+  const IMP_H = IMP_FIELDS.join(',');
+  const CMT_H = CMT_FIELDS.join(',');
+  const CHG_H = CHG_FIELDS.join(',');
+
+  function createCtx(files, fault) {
+    fault = fault || {};
+    let setCalls = 0;
+    let uuidN = 0;
+    let clock = Date.UTC(2026, 9, 6, 9, 0, 0);
+    function it(arr) { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; }
+    function makeFile(name) {
+      return {
+        getBlob: () => ({ getDataAsString: () => files[name] }),
+        setContent: function (content) {
+          setCalls++;
+          if ((fault.setContentFailAt || []).indexOf(setCalls) !== -1 || (fault.setContentFailNames || []).indexOf(name) !== -1) {
+            throw new Error('injected setContent failure #' + setCalls + ' ' + name);
+          }
+          files[name] = content;
+        },
+      };
+    }
+    const scrum = {
+      getFilesByName: function (name) {
+        if ((fault.readThrowNames || []).indexOf(name) !== -1) throw new Error('injected read failure ' + name);
+        return Object.prototype.hasOwnProperty.call(files, name) ? it([makeFile(name)]) : it([]);
+      },
+      getFolders: () => it([]),
+    };
+    const root = { getFoldersByName: (n) => (n === 'scrum' ? it([scrum]) : it([])) };
+    const props = { SCRUM_FOLDER_ID: 'fake' };
+    const ctx = {
+      console,
+      DriveApp: { getFolderById: () => root },
+      LockService: { getScriptLock: () => ({ tryLock: () => !fault.lockBusy, releaseLock: () => {} }) },
+      PropertiesService: { getScriptProperties: () => ({
+        getProperty: (k) => (Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null),
+        setProperty: (k, v) => { if (fault.setPropFail) throw new Error('injected setProperty failure'); props[k] = v; },
+      }) },
+      Session: {
+        getScriptTimeZone: () => 'UTC',
+        getActiveUser: () => ({ getEmail: () => (fault.user === undefined ? 'me@example.com' : fault.user) }),
+      },
+      Utilities: {
+        getUuid: () => { uuidN++; return ('0000000' + uuidN.toString(16)).slice(-8) + '-0000-4000-8000-000000000000'; },
+        formatDate: (d) => {
+          const p = (n) => (n < 10 ? '0' + n : String(n));
+          return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+        },
+      },
+    };
+    vm.createContext(ctx);
+    // new Date() は呼ぶたびに1秒進む決定的な時計にする（引数付きはそのまま）。
+    const RealDate = Date;
+    ctx.Date = function (...a) { if (a.length) return new RealDate(...a); if (!fault.freezeClock) clock += 1000; return new RealDate(clock); };
+    ctx.Date.UTC = RealDate.UTC;
+    ctx.Date.now = () => clock;
+    ctx.Date.prototype = RealDate.prototype;
+    fs.readdirSync(GAS_DIR).filter((n) => n.slice(-3) === '.js').sort().forEach((n) => {
+      vm.runInContext(fs.readFileSync(path.join(GAS_DIR, n), 'utf8'), ctx, { filename: n });
+    });
+    return { ctx, files, props, fault, setCalls: () => setCalls };
+  }
+
+  function baseFiles() {
+    return {
+      'product_backlog.csv': PBI_H + '\n', 'product_backlog_done.csv': PBI_H + '\n',
+      'impediment_log.csv': IMP_H + '\n', 'impediment_log_resolved.csv': IMP_H + '\n',
+      'comments.csv': CMT_H + '\n', 'change_log.csv': CHG_H + '\n',
+    };
+  }
+
+  /** vm の値を native に直す（別レルムの配列・オブジェクトを deepEqual で比べるため）。 */
+  function plain(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
+
+  /** テスト側の独立した RFC4180 パーサ（製品の parseCsv は使わない）。 */
+  function parse(text) {
+    const src = String(text || '').replace(/^\uFEFF/, '');
+    const rows = [];
+    let row = [];
+    let field = '';
+    let q = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (q) {
+        if (ch === '"') { if (src[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += ch;
+        continue;
+      }
+      if (ch === '"') q = true;
+      else if (ch === ',') { row.push(field); field = ''; }
+      else if (ch === '\r' && src[i + 1] === '\n') { /* CRLF は次の \n で区切る */ }
+      else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else field += ch;
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.map((r) => r.map((c) => c.replace(/\r\n/g, '\n')));
+  }
+  function rowsOf(text, fields) {
+    return parse(text).slice(1).map((r) => { const o = {}; fields.forEach((f, i) => { o[f] = i < r.length ? r[i] : ''; }); return o; });
+  }
+  function cell(v) {
+    const s = v == null ? '' : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function toCsvText(rows, fields) {
+    return [fields.join(',')].concat(rows.map((r) => fields.map((f) => cell(r[f])).join(','))).join('\n') + '\n';
+  }
+
+  /** mulberry32 */
+  function rng(seed) {
+    let a = seed >>> 0;
+    const next = () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    return { next, int: (n) => Math.floor(next() * n), pick: (arr) => arr[Math.floor(next() * arr.length)], chance: (p) => next() < p };
+  }
+
+  return { createCtx, baseFiles, plain, parse, rowsOf, toCsvText, rng, PBI_FIELDS, IMP_FIELDS, CMT_FIELDS, CHG_FIELDS, PBI_H, IMP_H, CMT_H, CHG_H };
+})();
+
+const { createCtx, baseFiles, plain, rowsOf, PBI_FIELDS, IMP_FIELDS, CMT_FIELDS, CHG_FIELDS } = H;
+const IMP2 = 'IMP-002,止まっている,,マヤ,2026-10-01,Open,,,sprint001\n';
+const IMP2_ROW = { id: 'IMP-002', title: '止まっている', description: '', reported_by: 'マヤ', reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: 'sprint001' };
+const full = (t) => ({ title: t, description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' });
+
+test('BUG C-5: 自分のコメントでも ID・日時が正規形でない行（ローカルで書いたもの）は、削除できるのに取り消せず失われる', () => {
+  const f = baseFiles();
+  f['comments.csv'] += 'CMT-ABCDEF12,PBI-002,me@example.com,2026-10-06 10:00:00,ローカルで書いた\n';
+  const h = createCtx(f);
+  const d = plain(h.ctx.apiDeleteComment('CMT-ABCDEF12'));
+  assert.equal(d.ok, true, '前提: 削除はできる');
+  const u = plain(h.ctx.apiRestoreComment(d.removed));
+  assert.equal(u.ok, true, '削除の取り消しが拒否され、コメントが失われた: ' + u.message);
+});
+
+test('C-5: 日時が正規形でない自分のコメントも、削除を取り消せる（他人のものは戻せない）', () => {
+  const f = baseFiles();
+  f['comments.csv'] += 'CMT-0000000b,PBI-002,me@example.com,2026-10-06,日付だけ\n';
+  const h = createCtx(f);
+  const d = plain(h.ctx.apiDeleteComment('CMT-0000000b'));
+  assert.equal(d.ok, true);
+  assert.equal(plain(h.ctx.apiRestoreComment(Object.assign({}, d.removed, { author: 'you@example.com' }))).reason, 'forbidden');
+  assert.equal(plain(h.ctx.apiRestoreComment(d.removed)).ok, true);
+  assert.ok(f['comments.csv'].indexOf('CMT-0000000b,PBI-002,me@example.com,2026-10-06,日付だけ') !== -1);
+});

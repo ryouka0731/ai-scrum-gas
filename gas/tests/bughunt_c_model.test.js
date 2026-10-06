@@ -569,12 +569,14 @@ function runCommentSeed(seed, steps) {
       label = 'restore ' + JSON.stringify([row.id, row.author, me]);
       const exists = model.some((x) => x.id === row.id);
       if (!me || row.author !== me) expect = { ok: false, reason: 'forbidden' };
-      else if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(row.created_at)) expect = { ok: false, reason: 'invalid' };
+      // 日時は形を問わず、空だけを拒む（削除できた行は戻せる。G1 C-5 の修正）
+      else if (!String(row.created_at).trim()) expect = { ok: false, reason: 'invalid' };
       else expect = { ok: true, unchanged: exists };
       res = h.ctx.apiRestoreComment(row);
       apply = () => {
         if (expect.unchanged) return;
-        model.push(row);
+        // target_id は appendComment と同じく前後の空白を落として保存される（G1 B2 の修正）
+        model.push(Object.assign({}, row, { target_id: String(row.target_id).trim() }));
         histEvent = { target_id: row.target_id.trim(), action: 'comment_restore', field: '', before: '', after: '' };
       };
     }

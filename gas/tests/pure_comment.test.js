@@ -52,7 +52,8 @@ test('戻し: 元の id と日時のまま末尾へ。既にあれば変えな�
   assert.equal(again.ok, true);
   assert.equal(again.unchanged, true);
   assert.equal(again.rows.length, 1);
-  assert.equal(c.restoreComment([], row({ id: 'x' })).reason, 'invalid');
+  // id は形を問わず、空だけを拒む（削除はどんな形の id も受け付けるため。バグ探し C-5）
+  assert.equal(c.restoreComment([], row({ id: ' ' })).reason, 'invalid');
   assert.equal(c.restoreComment([], row({ target_id: 'x' })).reason, 'invalid');
   assert.equal(c.restoreComment([], row({ body: ' ' })).reason, 'invalid');
   assert.equal(c.restoreComment([], null).reason, 'invalid');
@@ -73,9 +74,10 @@ test('まとめ: 対象ごと・古い順・mine 付き・不正な対象は捨�
   assert.equal(c.groupComments([row()], '')['PBI-001'][0].mine, false, 'ログインが取れないときは誰のものでもない');
 });
 
-test('戻し: 2000字超と日時の形が不正なものは invalid', () => {
+test('戻し: 2000字超と日時が空のものは invalid（日時の形は問わない。バグ探し C-5）', () => {
   assert.equal(c.restoreComment([], row({ body: 'あ'.repeat(2001) })).reason, 'invalid');
   assert.equal(c.restoreComment([], row({ body: 'あ'.repeat(2000) })).ok, true);
   assert.equal(c.restoreComment([], row({ created_at: '' })).reason, 'invalid');
-  assert.equal(c.restoreComment([], row({ created_at: '昨日' })).reason, 'invalid');
+  assert.equal(c.restoreComment([], row({ created_at: ' ' })).reason, 'invalid');
+  assert.equal(c.restoreComment([], row({ created_at: '2026-10-06' })).ok, true);
 });
