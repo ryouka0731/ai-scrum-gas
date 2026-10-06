@@ -10,6 +10,11 @@ test('許可されたファイル名は通る', () => {
   assert.doesNotThrow(function () { assertWritableFileName('product_backlog.csv'); });
 });
 
+test('change_log.csv（変更履歴）も書ける', () => {
+  assert.ok(WRITABLE_FILES.indexOf('change_log.csv') !== -1);
+  assert.doesNotThrow(function () { assertWritableFileName('change_log.csv'); });
+});
+
 test('許可されていないファイル名は拒否する', () => {
   assert.throws(function () { assertWritableFileName('velocity.csv'); }, /書き込みが許可されていません/);
 });

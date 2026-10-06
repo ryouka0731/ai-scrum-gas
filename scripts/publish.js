@@ -40,6 +40,7 @@ const KEEP_IF_EXISTS = [
   'scrum/impediment_log.csv',
   'scrum/impediment_log_resolved.csv',
   'scrum/comments.csv',
+  'scrum/change_log.csv',
 ];
 
 /** git コマンドを実行し、標準出力（trim 済み）を返す。取得できなければ null。 */

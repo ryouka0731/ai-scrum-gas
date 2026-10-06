@@ -96,13 +96,13 @@ function captureLog(fn) {
   return lines;
 }
 
-const LIVE_FILES = ['product_backlog.csv', 'impediment_log.csv', 'impediment_log_resolved.csv', 'comments.csv'];
+const LIVE_FILES = ['product_backlog.csv', 'impediment_log.csv', 'impediment_log_resolved.csv', 'comments.csv', 'change_log.csv'];
 
-test('Web アプリが書き戻す4ファイルは一覧の定数にまとまっている', () => {
+test('Web アプリが書き戻す5ファイルは一覧の定数にまとまっている', () => {
   assert.deepEqual(KEEP_IF_EXISTS.slice().sort(), LIVE_FILES.map(function (n) { return 'scrum/' + n; }).sort());
 });
 
-test('Web アプリが書き戻す4ファイルは、配布先にあれば残し、1行ずつ知らせる', () => {
+test('Web アプリが書き戻す5ファイルは、配布先にあれば残し、1行ずつ知らせる', () => {
   const src = makeTmpDir();
   const dest = makeTmpDir();
   try {
@@ -128,7 +128,7 @@ test('Web アプリが書き戻す4ファイルは、配布先にあれば残し
   }
 });
 
-test('Web アプリが書き戻す4ファイルも、配布先に無ければ作る。他の scrum/ のファイルは従来どおり上書きする', () => {
+test('Web アプリが書き戻す5ファイルも、配布先に無ければ作る。他の scrum/ のファイルは従来どおり上書きする', () => {
   const src = makeTmpDir();
   const dest = makeTmpDir();
   try {

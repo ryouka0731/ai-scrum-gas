@@ -175,6 +175,31 @@ function apiGetView(name) {
   }
 }
 
+const HISTORY_CSV_NAME = 'change_log.csv';
+
+/** CHG- + UUID の先頭8桁。 */
+function newHistoryId_() {
+  return 'CHG-' + String(Utilities.getUuid()).replace(/-/g, '').slice(0, 8).toLowerCase();
+}
+
+/**
+ * 履歴を追記する。呼び出し側のロックの中で呼ぶこと。失敗しても例外を投げず、
+ * 画面に出す警告の文字列を返す（成功・記録なしは null）。本体の書き込みは既に済んでいる。
+ */
+function appendHistory_(events) {
+  if (!events || events.length === 0) return null;
+  try {
+    const text = readTextFile_(getScrumFolder_(), HISTORY_CSV_NAME);
+    if (text === null) return '変更履歴を記録できませんでした（scrum/' + HISTORY_CSV_NAME + ' が見つかりません。配布し直してください）';
+    assertHeaderMatches(text, HISTORY_FIELDS);
+    const rows = csvToObjects(text).concat(historyRows(events, { at: nowText_(), actor: currentUserEmail_(), newId: newHistoryId_ }));
+    writeScrumFile_(HISTORY_CSV_NAME, toCsv(rows, HISTORY_FIELDS));
+    return null;
+  } catch (e) {
+    return '変更履歴を記録できませんでした（' + e.message + '）';
+  }
+}
+
 /**
  * 書き戻しを伴う API の共通手順。
  *
@@ -210,12 +235,19 @@ function withBacklogWrite_(mutate) {
       };
     }
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
-    return {
+    // 本体は書けた。履歴は後追いで、失敗しても本体を失敗にしない。
+    const events = diffRows(rows, result.rows, BACKLOG_FIELDS, ['updated_at', 'created_at']).map(function (e) {
+      return (e.action === 'create' && result.historyAction) ? Object.assign({}, e, { action: result.historyAction }) : e;
+    });
+    const warning = appendHistory_(events);
+    const out = {
       ok: true,
       board: buildBoardData(result.rows),
       id: result.id || null,
       removed: result.removed || null
     };
+    if (warning) out.historyWarning = warning;
+    return out;
   } catch (e) {
     return { ok: false, reason: 'error', message: e.message, board: null };
   } finally {
@@ -377,7 +409,7 @@ function apiRestorePbi(row) {
         : 'この PBI は既に存在します。取り消しは要りません。';
       return { ok: false, reason: r.reason, message: message };
     }
-    return { ok: true, rows: r.rows };
+    return { ok: true, rows: r.rows, historyAction: 'restore' };
   });
 }
 
@@ -434,22 +466,36 @@ function withImpedimentWrite_(first, mutate) {
       { name: IMPEDIMENT_RESOLVED_CSV_NAME, key: 'resolved', rows: result.resolved },
     ].filter(function (w) { return w.rows; });
     writes.sort(function (a, b) { return (a.key === first ? 0 : 1) - (b.key === first ? 0 : 1); });
+    const openBefore = open;
+    const written = {};
+    // この呼び出しで書けたものだけを履歴にする。完了の再送で書かなかった側は記録しない。
+    const historyEvents = function () {
+      if (result.historyKind === 'diff') {
+        return written.open ? diffRows(openBefore, result.open, IMPEDIMENT_FIELDS, []) : [];
+      }
+      if (result.historyKind === 'resolve') return written.resolved ? [{ target_id: result.historyId, action: 'resolve' }] : [];
+      if (result.historyKind === 'unresolve') return written.open ? [{ target_id: result.historyId, action: 'unresolve' }] : [];
+      return [];
+    };
     for (let i = 0; i < writes.length; i++) {
       try {
         writeScrumFile_(writes[i].name, toCsv(writes[i].rows, IMPEDIMENT_FIELDS));
+        written[writes[i].key] = true;
       } catch (e) {
         if (i === 0) throw e;
         // 1つ目は書けている。画面には書けた側を反映して返す。
         if (writes[0].key === 'open') open = writes[0].rows; else resolved = writes[0].rows;
+        const partialWarning = appendHistory_(historyEvents());
         return Object.assign({
           ok: false, reason: 'partial',
           message: '途中で止まりました（scrum/' + writes[i].name + ' に書けませんでした）。通知の「完了する」を押すと完了します。',
-        }, impedimentPayload_(open, resolved));
+        }, impedimentPayload_(open, resolved), partialWarning ? { historyWarning: partialWarning } : {});
       }
     }
     if (result.open) open = result.open;
     if (result.resolved) resolved = result.resolved;
-    return Object.assign({ ok: true }, impedimentPayload_(open, resolved), result.extra || {});
+    const warning = appendHistory_(historyEvents());
+    return Object.assign({ ok: true }, impedimentPayload_(open, resolved), result.extra || {}, warning ? { historyWarning: warning } : {});
   } catch (e) {
     const out = { ok: false, reason: 'error', message: e.message };
     if (open && resolved) Object.assign(out, impedimentPayload_(open, resolved));
@@ -488,7 +534,7 @@ function apiCreateImpediment(fields) {
     const id = nextImpedimentId(open.concat(resolved));
     const r = appendImpediment(open, id, picked, todayText_());
     if (!r.ok) return { ok: false, reason: r.reason, message: 'ID が重複しました。もう一度お試しください。' };
-    return { ok: true, open: r.rows, resolved: null, extra: { id: id } };
+    return { ok: true, open: r.rows, resolved: null, extra: { id: id }, historyKind: 'diff' };
   });
 }
 
@@ -500,7 +546,7 @@ function apiUpdateImpediment(id, fields, expected) {
     if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
     const r = updateImpediment(open, id, picked, expected);
     if (!r.ok) return { ok: false, reason: r.reason, message: impedimentMessage_(r.reason, '内容を確認し、もう一度保存すると上書きします。') };
-    return { ok: true, open: r.rows, resolved: null };
+    return { ok: true, open: r.rows, resolved: null, historyKind: 'diff' };
   });
 }
 
@@ -521,7 +567,8 @@ function apiResolveImpediment(id, resolution, expected) {
           : impedimentMessage_(r.reason, '', id);
       return { ok: false, reason: r.reason, message: message };
     }
-    return { ok: true, open: r.open, resolved: r.resolved, extra: { moved: r.moved, resolvedRow: r.resolvedRow } };
+    return { ok: true, open: r.open, resolved: r.resolved, extra: { moved: r.moved, resolvedRow: r.resolvedRow },
+      historyKind: 'resolve', historyId: String(id || '').trim() };
   });
 }
 
@@ -535,7 +582,7 @@ function apiUnresolveImpediment(moved, resolvedRow) {
         : impedimentMessage_(r.reason, '', (moved || {}).id);
       return { ok: false, reason: r.reason, message: message };
     }
-    return { ok: true, open: r.open, resolved: r.resolved };
+    return { ok: true, open: r.open, resolved: r.resolved, historyKind: 'unresolve', historyId: String((moved || {}).id || '').trim() };
   });
 }
 
@@ -579,8 +626,13 @@ function withCommentWrite_(mutate) {
     const me = currentUserEmail_();
     const result = mutate(rows, me);
     if (!result.ok) return { ok: false, reason: result.reason, message: result.message, comments: groupComments(rows, me) };
-    if (result.rows) writeScrumFile_(COMMENT_CSV_NAME, toCsv(result.rows, COMMENT_FIELDS));
-    return Object.assign({ ok: true, comments: groupComments(result.rows || rows, me) }, result.extra || {});
+    let warning = null;
+    if (result.rows) {
+      writeScrumFile_(COMMENT_CSV_NAME, toCsv(result.rows, COMMENT_FIELDS));
+      warning = appendHistory_(result.history);
+    }
+    return Object.assign({ ok: true, comments: groupComments(result.rows || rows, me) }, result.extra || {},
+      warning ? { historyWarning: warning } : {});
   } catch (e) {
     return { ok: false, reason: 'error', message: e.message };
   } finally {
@@ -599,7 +651,8 @@ function apiAddComment(targetId, body) {
     for (let i = 0; i < 4 && taken(id); i++) id = newCommentId_();
     if (taken(id)) return { ok: false, reason: 'error', message: 'ID が重複しました。もう一度お試しください。' };
     const r = appendComment(rows, id, targetId, me, String(body), nowText_());
-    return { ok: true, rows: r.rows, extra: { comment: r.comment } };
+    return { ok: true, rows: r.rows, extra: { comment: r.comment },
+      history: [{ target_id: r.comment.target_id, action: 'comment_add' }] };
   });
 }
 
@@ -611,7 +664,8 @@ function apiDeleteComment(commentId) {
       return { ok: false, reason: r.reason,
         message: r.reason === 'forbidden' ? '自分のコメントだけ削除できます。' : 'このコメントが見つかりません。' };
     }
-    return { ok: true, rows: r.rows, extra: { removed: r.removed } };
+    return { ok: true, rows: r.rows, extra: { removed: r.removed },
+      history: [{ target_id: String((r.removed || {}).target_id || '').trim(), action: 'comment_delete' }] };
   });
 }
 
@@ -627,6 +681,23 @@ function apiRestoreComment(row) {
     }
     const r = restoreComment(rows, picked);
     if (!r.ok) return { ok: false, reason: 'invalid', message: '戻す内容が不正です。' };
-    return { ok: true, rows: r.unchanged ? null : r.rows };
+    return { ok: true, rows: r.unchanged ? null : r.rows,
+      history: [{ target_id: String(picked.target_id || '').trim(), action: 'comment_restore' }] };
   });
+}
+
+// ---------------------------------------------------------------------------
+// 変更履歴の読み取り（第6段階）
+// ---------------------------------------------------------------------------
+
+/**
+ * 対象（PBI / 障害物）の変更履歴を新しい順に返す。パネルの「履歴」を開いたときだけ呼ばれる。
+ * 読み取りのみなのでロックは取らない。ファイルが無い・壊れているときは空の一覧。
+ */
+function apiGetHistory(targetId) {
+  const id = String(targetId || '').trim();
+  if (!HISTORY_TARGET_RE.test(id)) {
+    return { ok: false, reason: 'invalid', message: '履歴の対象が不正です: ' + id };
+  }
+  return { ok: true, entries: historyFor(readCsvRowsBestEffort_(HISTORY_CSV_NAME), id, HISTORY_LIMIT) };
 }

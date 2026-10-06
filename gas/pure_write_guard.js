@@ -6,8 +6,8 @@
  * 明示的にこの配列へ足すこと。
  */
 
-// 障害物の2ファイルは第4段階、comments.csv は第5段階で足した。
-const WRITABLE_FILES = Object.freeze(['product_backlog.csv', 'impediment_log.csv', 'impediment_log_resolved.csv', 'comments.csv']);
+// 障害物の2ファイルは第4段階、comments.csv は第5段階、change_log.csv は第6段階で足した。
+const WRITABLE_FILES = Object.freeze(['product_backlog.csv', 'impediment_log.csv', 'impediment_log_resolved.csv', 'comments.csv', 'change_log.csv']);
 
 /** 書き込みを許さない名前なら例外を投げる。scrum/ 直下のファイル名のみ許す。 */
 function assertWritableFileName(name) {
