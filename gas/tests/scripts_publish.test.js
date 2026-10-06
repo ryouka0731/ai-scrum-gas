@@ -227,3 +227,33 @@ test('配布先のフォルダ自体がリンクなら、その下に書き込�
     outside.cleanup();
   }
 });
+
+test('配布先の（書き戻さない）ファイルがリンクなら、リンク先の権限も中身も変えずに残す', () => {
+  const src = makeTmpDir();
+  const dest = makeTmpDir();
+  const outside = makeTmpDir();
+  try {
+    const srcRoot = path.join(src.dir, 'scrum');
+    const destRoot = path.join(dest.dir, 'scrum');
+    fs.mkdirSync(srcRoot, { recursive: true });
+    fs.mkdirSync(destRoot, { recursive: true });
+    fs.writeFileSync(path.join(srcRoot, 'velocity.csv'), '雛形\n', 'utf8');
+    fs.writeFileSync(path.join(srcRoot, 'sprint.md'), '雛形\n', 'utf8');
+    // 配布フォルダの外の読み取り専用ファイルを、配布先からリンクで指す。
+    const victim = path.join(outside.dir, 'victim.csv');
+    fs.writeFileSync(victim, '外のファイル', 'utf8');
+    fs.chmodSync(victim, 0o444);
+    fs.symlinkSync(victim, path.join(destRoot, 'velocity.csv'));
+    const result = copyRecursive(srcRoot, destRoot, 'scrum');
+    assert.equal(fs.statSync(victim).mode & 0o777, 0o444, 'リンク先を書き込み可にした');
+    assert.equal(fs.readFileSync(victim, 'utf8'), '外のファイル', 'リンク先を上書きした');
+    assert.equal(fs.lstatSync(path.join(destRoot, 'velocity.csv')).isSymbolicLink(), true, 'リンクを置き換えた');
+    assert.equal(fs.readFileSync(path.join(destRoot, 'sprint.md'), 'utf8'), '雛形\n', '他のファイルは配る');
+    assert.deepEqual(result, { copiedCount: 1, skippedLinkCount: 1 });
+  } finally {
+    try { fs.chmodSync(path.join(outside.dir, 'victim.csv'), 0o644); } catch (e) { /* 無ければ無視 */ }
+    src.cleanup();
+    dest.cleanup();
+    outside.cleanup();
+  }
+});

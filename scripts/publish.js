@@ -124,15 +124,16 @@ function copyRecursive(src, dest, relPath, tracked) {
   }
   // 配布先は existsSync ではなく lstat で見る。existsSync はリンクを辿るため、配布先に
   // 置かれたリンク（壊れたリンクも含む）を通して、配布フォルダの外のファイルを読み書きしてしまう。
+  // 書き戻さないファイルも同じ。リンクを辿って chmod / copyFileSync すると、外のファイルの権限を変えて上書きする。
+  // （書き戻さないファイルの配布先がフォルダ等なら、従来どおり copyFileSync の失敗として報告する）
   let destStat = null;
-  if (relPath !== undefined && KEEP_IF_EXISTS.indexOf(relPath) !== -1) {
-    try { destStat = fs.lstatSync(dest); } catch (e) { destStat = null; }
-  }
-  if (destStat && !destStat.isFile()) {
-    console.warn(relPath + ' は配布先が通常のファイルではないため、触らずに残しました: ' + dest);
+  try { destStat = fs.lstatSync(dest); } catch (e) { destStat = null; }
+  const keep = relPath !== undefined && KEEP_IF_EXISTS.indexOf(relPath) !== -1;
+  if (destStat && (destStat.isSymbolicLink() || (keep && !destStat.isFile()))) {
+    console.warn((relPath || dest) + ' は配布先が通常のファイルではないため、触らずに残しました: ' + dest);
     return { copiedCount: 0, skippedLinkCount: 1 };
   }
-  if (destStat) {
+  if (destStat && keep) {
     // 空（0 バイト・空白のみ）のファイルは残す価値がない。雛形で置き直す。
     if (fs.readFileSync(dest, 'utf8').trim() !== '') {
       console.log(relPath + ' は配布先の内容を残しました（Web アプリが書き戻すファイルのため）');
@@ -143,7 +144,10 @@ function copyRecursive(src, dest, relPath, tracked) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   // 読み取り専用のファイルは、コピーで配布先も読み取り専用になり次回の上書きが EACCES で失敗する。
   // 先に書き込み可にする。失敗しても copyFileSync のエラーで、対象ファイル付きで報告される。
-  try { fs.chmodSync(dest, fs.statSync(dest).mode | 0o200); } catch (e) { /* 配布先に無い等は無視 */ }
+  // destStat は lstat で通常のファイルと確かめたもの（リンクではない）なので、chmod はリンクを辿らない。
+  if (destStat && destStat.isFile()) {
+    try { fs.chmodSync(dest, destStat.mode | 0o200); } catch (e) { /* 失敗は copyFileSync のエラーで報告される */ }
+  }
   fs.copyFileSync(src, dest);
   return { copiedCount: 1, skippedLinkCount: 0 };
 }
