@@ -277,6 +277,8 @@
   tr.clickable { cursor: pointer; }
   tr.clickable:hover td, tr.clickable:focus td { background: var(--card-2); }
   tr.clickable:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  tr.clickable.pending { opacity: .55; cursor: default; }
+  tr.clickable.pending:hover td { background: none; }
   .table-actions { margin: var(--sp-3) 0; }
 
   .tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--line); }
@@ -1437,14 +1439,19 @@ var activeToastText = null;
 var stickyToast = null;
 var shownIsSticky = false;
 
-function renderToast(text, onUndo, actionLabel, iconName) {
+// 表示中の通知が対象にしている障害物の id（無ければ null）。その id の書き込みの送信中はボタンを塞ぐ。
+var shownToastImpId = null;
+
+function renderToast(text, onUndo, actionLabel, iconName, impId) {
   var el = document.getElementById('toast');
+  shownToastImpId = impId || null;
   document.getElementById('toast-text').textContent = text;
   document.getElementById('toast-text').title = text;   // 3行で切れた分も全文を見られる
   var btn = document.getElementById('toast-undo');
   btn.innerHTML = '';
   fillButton(btn, iconName || 'undo', actionLabel || '取り消す');
   btn.onclick = onUndo;
+  btn.disabled = !!shownToastImpId && impBusyId(shownToastImpId);
   el.hidden = false;
 }
 
@@ -1455,8 +1462,9 @@ function renderToast(text, onUndo, actionLabel, iconName) {
  * sticky が真なら時間では消さず、別の通知が出ても、その通知が消えたあとに出し直す。
  * sticky に障害物の id（文字列）を渡すと、その id の途中で止まった操作が無くなった時点で
  * 通知を外す（releaseStickyIfDone。別の経路で完了したのに押せる通知を残さない）。
+ * impId は時間付きの通知が対象にする障害物の id（sticky の id と同じく、その id の送信中はボタンを塞ぐ）。
  */
-function showUndoToast(text, onUndo, actionLabel, iconName, sticky) {
+function showUndoToast(text, onUndo, actionLabel, iconName, sticky, impId) {
   // 取り消せなくなるのは、時間付きの通知が別の通知に上書きされるときだけ（sticky は戻ってくる）。
   if (toastTimer && activeToastText) {
     setMessage(activeToastText + '（もう取り消せません）', 'info');
@@ -1472,11 +1480,11 @@ function showUndoToast(text, onUndo, actionLabel, iconName, sticky) {
       if (stickyToast === self) stickyToast = null;   // 押したら手放す。再び止まれば、また sticky で出る
       hideToast();
       onUndo();
-    }, actionLabel, iconName);
+    }, actionLabel, iconName, self.impId);
     return;
   }
   shownIsSticky = false;
-  renderToast(text, function () { hideToast(); onUndo(); }, actionLabel, iconName);
+  renderToast(text, function () { hideToast(); onUndo(); }, actionLabel, iconName, impId);
   activeToastText = text;
   toastTimer = setTimeout(hideToast, UNDO_SECONDS * 1000);
 }
@@ -1659,12 +1667,14 @@ var impPanelBusy = false;
 
 /** 送信中は全部、解決策の入力中は解決策以外の欄を塞ぐ（送らない編集を黙って捨てないため）。 */
 function applyImpLocks() {
+  // 同じ障害物への別の書き込み（「完了する」等）が送信中なら、パネルからは送らせない。
+  var busy = impPanelBusy || (!!impPanelState.id && impBusyId(impPanelState.id));
   // 解決策の入力中は保存を押せない（保存して閉じると、打った解決策を黙って捨てるため）。
-  document.getElementById('imp-panel-save').disabled = impPanelBusy || impPanelState.resolving;
-  document.getElementById('imp-panel-resolve').disabled = impPanelBusy;
-  document.getElementById('imp-panel-cancel-resolve').disabled = impPanelBusy;
+  document.getElementById('imp-panel-save').disabled = busy || impPanelState.resolving;
+  document.getElementById('imp-panel-resolve').disabled = busy;
+  document.getElementById('imp-panel-cancel-resolve').disabled = busy;
   IMP_FORM_FIELD_IDS.forEach(function (id) {
-    document.getElementById(id).disabled = impPanelBusy || (impPanelState.resolving && id !== 'i-resolution');
+    document.getElementById(id).disabled = busy || (impPanelState.resolving && id !== 'i-resolution');
   });
 }
 
@@ -1692,6 +1702,7 @@ function setImpResolving(on) {
 function openImpPanel(id, opener) {
   var row = id ? findImpRow(id) : null;
   if (id && !row) return;
+  if (id && impBusyId(id)) return;   // その障害物への書き込みの送信中は開かない（行も送信中として出している）
   closePanel();   // PBI のパネルと同時には開かない
   impPanelSeq++;
   impPanelOpener = opener || impPanelOpener;
@@ -1868,11 +1879,16 @@ function sendImpWrite(method, args, label, after, onPartial) {
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
+  // 既存の障害物（更新・解決）は id を先頭の引数に持つ。応答まで、その id への他の書き込みを塞ぐ。
+  var busyId = typeof args[0] === 'string' ? args[0] : null;
+  if (busyId && impSettlingNow(busyId)) return;
   setImpPanelBusy(true);
+  if (busyId) markImpBusy(busyId, true);
   var runner = google.script.run
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
+      if (busyId) markImpBusy(busyId, false);
       var mine = (seq === impPanelSeq);
       if (mine) setImpPanelBusy(false);
       if (res.ok || res.reason === 'partial') writeSeq++;
@@ -1891,6 +1907,7 @@ function sendImpWrite(method, args, label, after, onPartial) {
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
+      if (busyId) markImpBusy(busyId, false);
       pruneImpOverlay();
       if (seq === impPanelSeq) {
         setImpPanelBusy(false);
@@ -1947,7 +1964,8 @@ function showResolveOutcome(id, resolution, expected, res) {
   if (res.ok) {
     // 通知の題は送った側の行から取る（編集欄の値ではない）。
     var title = (res.moved && res.moved.title) || (expected && expected.title) || '';
-    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); });
+    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); },
+      undefined, undefined, false, id);
     return;
   }
   setMessage(res.message, 'error');
@@ -1955,14 +1973,49 @@ function showResolveOutcome(id, resolution, expected, res) {
     function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check', id);
 }
 
-// 解決の完了・取り消しを送信中の障害物の id → true。途中で止まった操作は「完了する」の通知と
-// 「途中で止まった操作」の2つのボタンのどれからでも送れ、両方が成功しうる。同じ id へ重ねて送ると
-// サーバがどちらを後に処理したか画面では分からず、表が最終の状態と食い違うため、応答まで次を送らない。
+// 書き込み（保存・解決・完了・取り消し）を送信中の障害物の id → 送信中の数。途中で止まった操作は
+// 「完了する」の通知と「途中で止まった操作」の2つのボタンとパネルのどれからでも送れ、両方が成功しうる。
+// 同じ id へ重ねて送るとサーバがどちらを後に処理したか画面では分からず、表が最終の状態と食い違うため、
+// 応答まで次を送らせない（行は送信中として出し、その id のボタンは塞ぐ）。
 var impSettling = {};
 
-/** id の完了・取り消しを送信中なら知らせて true を返す。 */
+function impBusyId(id) { return !!impSettling[String(id || '').trim()]; }
+
+/** id の書き込みの送信を数える（on が偽なら応答・失敗で外す）。塞ぐ表示も直す。 */
+function markImpBusy(id, on) {
+  var key = String(id || '').trim();
+  if (!key) return;
+  if (on) impSettling[key] = (impSettling[key] || 0) + 1;
+  else if (impSettling[key] > 1) impSettling[key]--;
+  else delete impSettling[key];
+  refreshImpBusy();
+}
+
+/** 送信中の障害物に合わせて、パネル・表の行・途中で止まった操作のボタン・通知のボタンを塞ぐ（描き直さずに直す）。 */
+function refreshImpBusy() {
+  applyImpLocks();
+  document.querySelectorAll('#table-view tr.clickable').forEach(function (tr) { markImpRow(tr, tr.dataset.id); });
+  ['resolve', 'unresolve'].forEach(function (which) {
+    document.querySelectorAll('#table-view button').forEach(function (b) {
+      var prefix = 'imp-pending-' + which + '-';
+      if (String(b.id || '').indexOf(prefix) === 0) b.disabled = impBusyId(b.id.slice(prefix.length));
+    });
+  });
+  if (!document.getElementById('toast').hidden) {
+    document.getElementById('toast-undo').disabled = !!shownToastImpId && impBusyId(shownToastImpId);
+  }
+}
+
+/** 未解決の行に送信中の印を付ける・外す。 */
+function markImpRow(tr, id) {
+  var busy = impBusyId(id);
+  if (busy) tr.classList.add('pending'); else tr.classList.remove('pending');
+  if (busy) tr.setAttribute('aria-disabled', 'true'); else tr.removeAttribute('aria-disabled');
+}
+
+/** id の書き込みを送信中なら知らせて true を返す。 */
 function impSettlingNow(id) {
-  if (!impSettling[String(id || '').trim()]) return false;
+  if (!impBusyId(id)) return false;
   setMessage(id + ' の操作を送っています。応答を待ってから、もう一度お試しください。', 'error');
   return true;
 }
@@ -1971,7 +2024,7 @@ function impSettlingNow(id) {
 function retryResolveImp(id, resolution, expected) {
   if (impSettlingNow(id)) return;
   var key = String(id || '').trim();
-  impSettling[key] = true;
+  markImpBusy(key, true);
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
@@ -1980,7 +2033,7 @@ function retryResolveImp(id, resolution, expected) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
-      delete impSettling[key];
+      markImpBusy(key, false);
       if (res.ok || res.reason === 'partial') writeSeq++;
       applyImpResponse(res, issued, commentSeen, id);
       if (res.ok || res.reason === 'partial') {
@@ -1994,7 +2047,7 @@ function retryResolveImp(id, resolution, expected) {
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
-      delete impSettling[key];
+      markImpBusy(key, false);
       pruneImpOverlay();
       setMessage('解決に失敗しました: ' + err.message, 'error');
     })
@@ -2005,7 +2058,7 @@ function unresolveImp(moved, resolvedRow) {
   if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   if (impSettlingNow(moved.id)) return;
   var key = String(moved.id || '').trim();
-  impSettling[key] = true;
+  markImpBusy(key, true);
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
@@ -2014,7 +2067,7 @@ function unresolveImp(moved, resolvedRow) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
-      delete impSettling[key];
+      markImpBusy(key, false);
       if (res.ok || res.reason === 'partial') writeSeq++;
       applyImpResponse(res, issued, commentSeen, moved.id);
       setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
@@ -2027,7 +2080,7 @@ function unresolveImp(moved, resolvedRow) {
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
-      delete impSettling[key];
+      markImpBusy(key, false);
       pruneImpOverlay();
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
@@ -3111,9 +3164,10 @@ function objectTable(columns, rows, onRow, withCommentCount) {
       tr.setAttribute('tabindex', '0');
       tr.setAttribute('role', 'button');
       tr.setAttribute('aria-label', String(row.id) + ' ' + String(row.title || '') + ' を開く');
-      tr.addEventListener('click', function () { onRow(row); });
+      markImpRow(tr, row.id);   // その障害物への書き込みの送信中は、押せない行として出す
+      tr.addEventListener('click', function () { if (!impBusyId(row.id)) onRow(row); });
       tr.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter' || ev.key === ' ') { if (ev.preventDefault) ev.preventDefault(); onRow(row); }
+        if (ev.key === 'Enter' || ev.key === ' ') { if (ev.preventDefault) ev.preventDefault(); if (!impBusyId(row.id)) onRow(row); }
       });
     }
     tbody.appendChild(tr);
@@ -3161,11 +3215,13 @@ function pendingSection(pending) {
     done.id = 'imp-pending-resolve-' + p.id;
     done.type = 'button';
     fillButton(done, 'check', '解決済として完了');
+    done.disabled = impBusyId(p.id);
     done.addEventListener('click', function () { retryResolveImp(p.id, p.resolved.resolution, p.open); });
     var back = document.createElement('button');
     back.id = 'imp-pending-unresolve-' + p.id;
     back.type = 'button';
     fillButton(back, 'undo', '未解決に戻す');
+    back.disabled = impBusyId(p.id);
     back.addEventListener('click', function () { unresolveImp(p.open, p.resolved); });
     actionTd.appendChild(done);
     actionTd.appendChild(back);

@@ -115,7 +115,8 @@ function trueComments(server) { return server.call('apiGetView', ['board']).comm
 function trueImp(server) {
   const v = server.call('apiGetView', ['impediment']).view;
   return {
-    open: v.open.map(function (r) { return r.id + ':' + r.title; }),
+    // 画面は ID が重なっている行のタイトルに印を足す（押せない行）。サーバのビューの印もその文言で比べる。
+    open: v.open.map(function (r) { return r.id + ':' + r.title + (r.duplicate === 'true' ? '（ID が重複しています。CSV を直してください）' : ''); }),
     resolved: v.resolved.map(function (r) { return r.id + ':' + r.title; }),
     pending: v.pending.map(function (p) { return p.id; }),
   };

@@ -402,8 +402,11 @@ test('[D-1] 障害物: 途中で止まった解決を「完了する」と「途
   partialResolve(w, 'IMP-002');
   h.clickPending('IMP-002', 'resolve');    // 送信中
   const n = w.pendingNs().length;
-  h.click('toast-undo');                   // 「完了する」も押す
+  assert.equal(h.disabledOf('toast-undo'), true, '送信中の障害物の「完了する」を押せる');
+  h.click('toast-undo');                   // 「完了する」も押す（塞がっているので何も起きない）
   assert.equal(w.pendingNs().length, n, '同じ障害物の完了を重ねて送った');
+  h.clickPending('IMP-002', 'unresolve');  // 塞いだボタンを押せたとしても、送らずに知らせる
+  assert.equal(w.pendingNs().length, n, '同じ障害物の取り消しを重ねて送った');
   assert.match(h.textOf('message'), /IMP-002 の操作を送っています/);
   w.drain();
   h.flushTimers();

@@ -156,6 +156,7 @@ Element.prototype.appendChild = function (child) {
   return child;
 };
 Element.prototype.setAttribute = function (name, value) { this.attributes[name] = String(value); };
+Element.prototype.removeAttribute = function (name) { delete this.attributes[name]; };
 Element.prototype.getAttribute = function (name) {
   return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
 };

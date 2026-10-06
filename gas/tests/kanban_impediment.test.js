@@ -8,6 +8,7 @@ const INITIAL = [
 ];
 const ROW = { id: 'IMP-002', title: '止まっている', description: '', reported_by: 'マヤ',
   reported_at: '2026-10-01', status: 'Open', resolved_at: '', resolution: '', sprint: 'sprint001' };
+const ROW3 = Object.assign({}, ROW, { id: 'IMP-003', title: 'もう1件' });
 const COLUMNS = [{ field: 'id', label: 'ID' }, { field: 'title', label: 'タイトル' }];
 const CHOICES = [{ value: '', label: '（未割り当て）' }, { value: 'sprint001', label: 'sprint001' }];
 
@@ -175,19 +176,25 @@ test('新規の既定スプリントは、unknown でない最後のもの', () 
   assert.equal(h.valueOf('i-sprint'), 'sprint001');
 });
 
+// 同じ障害物への書き込みは応答まで重ねて送れない（I3）。2つ飛ばすときは別の障害物で確かめる。
+
 test('書き込みが2つ飛んでいて古い応答が後から届いても、表は新しい方のまま', () => {
-  const h = onImpediment();
+  const h = onImpediment({ rows: [ROW, ROW3] });
   h.clickImpRow('IMP-002');
+  h.setValue('i-title', '新2');
   h.click('imp-panel-save');
   const first = latest(h);
   h.pressKey('Escape');
-  h.clickImpRow('IMP-002');
+  h.clickImpRow('IMP-003');
+  h.setValue('i-title', '新3');
   h.click('imp-panel-save');
   const second = h.calls[h.calls.length - 1];
   assert.notEqual(first, second);
-  second.handlers.success(impResponse([Object.assign({}, ROW, { title: '新' })]));
-  first.handlers.success(impResponse([Object.assign({}, ROW, { title: '旧' })]));
-  assert.equal(h.tableRowsOf('table-view')[0][1].text, '新');
+  const t2 = Object.assign({}, ROW, { title: '新2' });
+  // サーバは first → second の順に処理した。first の応答（IMP-003 が古い写し）が後から届く。
+  second.handlers.success(impResponse([t2, Object.assign({}, ROW3, { title: '新3' })]));
+  first.handlers.success(impResponse([t2, ROW3]));
+  assert.deepEqual(h.tableRowsOf('table-view').map((r) => r[1].text), ['新2', '新3']);
 });
 
 test('障害物の応答は PBI パネルのスプリント選択肢を書き換えない', () => {
@@ -267,18 +274,29 @@ test('通常の通知のボタンは「取り消す」のまま', () => {
 });
 
 test('新しい書き込みがビュー無しで先に返り、古い成功が後から届いたら、表は古い成功の内容にする', () => {
-  const h = onImpediment();
+  const h = onImpediment({ rows: [ROW, ROW3] });
   h.clickImpRow('IMP-002');
   h.click('imp-panel-save');
   const first = latest(h);
   h.pressKey('Escape');
-  h.clickImpRow('IMP-002');
+  h.clickImpRow('IMP-003');
   h.click('imp-panel-save');
   const second = latest(h);
   assert.notEqual(first, second);
   second.handlers.success({ ok: false, reason: 'busy', message: '他の更新が実行中です。' });
-  first.handlers.success(impResponse([Object.assign({}, ROW, { title: '保存できた題' })]));
+  first.handlers.success(impResponse([Object.assign({}, ROW, { title: '保存できた題' }), ROW3]));
   assert.equal(h.tableRowsOf('table-view')[0][1].text, '保存できた題');
+});
+
+test('同じ障害物への保存の送信中は、その行を開き直せず、2つ目の保存を送れない（I3）', () => {
+  const h = onImpediment();
+  h.clickImpRow('IMP-002');
+  h.click('imp-panel-save');
+  const n = h.calls.length;
+  h.pressKey('Escape');
+  h.clickImpRow('IMP-002');
+  assert.equal(h.hiddenOf('imp-panel'), true);
+  assert.equal(h.calls.length, n);
 });
 
 test('解決ボタンの文言は積み重ならない。1回目で「解決を確定」、開き直すと「解決する」', () => {
@@ -332,7 +350,6 @@ test('「完了する」の通知はチェックのアイコン、「取り消�
 });
 
 // 「完了する」の通知は、時間・別の通知・Escape で消えない（未解決の行は隠れていて、他に完了させる手段が無い）。
-const ROW3 = Object.assign({}, ROW, { id: 'IMP-003', title: 'もう1件' });
 const RESOLVED_ROW3 = Object.assign({}, ROW3, { status: 'Resolved', resolution: '直した' });
 
 /** IMP-002 の解決を途中で止め、「完了する」の通知を出した状態にする（未解決には IMP-003 が残る）。 */
