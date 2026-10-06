@@ -535,3 +535,11 @@ test('新規作成のパネルでは「やめる」は出ない', () => {
   h.clickImpAdd();
   assert.equal(h.hiddenOf('imp-panel-cancel-resolve'), true);
 });
+
+test('選択肢に無いスプリントの行は、PBI パネルと同じ「（選択肢に無い値）」の名前で出て、選ばれている', () => {
+  const h = onImpediment({ rows: [Object.assign({}, ROW, { sprint: 'sprint077' })] });
+  h.clickImpRow('IMP-002');
+  assert.equal(h.valueOf('i-sprint'), 'sprint077');
+  assert.deepEqual(h.optionsOf('i-sprint').map((o) => o.label),
+    ['（未割り当て）', 'sprint001', 'sprint077（選択肢に無い値）']);
+});

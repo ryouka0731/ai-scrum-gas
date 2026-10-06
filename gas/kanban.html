@@ -1134,23 +1134,30 @@ function changedFields(initial) {
  * 意味が違う。同じ文言に揃えるとこの違いが潰れる。
  */
 function fillSprintSelect(value) {
-  var el = document.getElementById('f-sprint');
-  el.innerHTML = '';
+  fillSprintOptions(document.getElementById('f-sprint'), sprintChoices, value);
+}
+
+/**
+ * select に選択肢を並べ、value を選ぶ。PBI パネル・障害物パネルの共通部分。
+ * choices はパネルごとの供給元のまま（PBI は sprintChoices、障害物は impSprintChoices）。
+ * 今の値が choices に無いときだけ「（選択肢に無い値）」付きで1つ足す（理由は fillSprintSelect の説明）。
+ * value は trim 済みで渡す（揃えるのは呼び出し側の1か所）。
+ */
+function fillSprintOptions(el, choices, value) {
+  clearHost(el);
   var add = function (v, label) {
     var opt = document.createElement('option');
     opt.value = v;
     opt.textContent = label;
     el.appendChild(opt);
   };
-
-  // value は trim 済みで渡ってくる（揃えるのは writeForm の1か所だけにする。
-  // ここでも trim すると、どちらが効いているのか分からない行が増える）。
   var listed = false;
-  sprintChoices.forEach(function (o) {
+  choices.forEach(function (o) {
     if (o.value === value) listed = true;
     add(o.value, o.label);
   });
   if (value && !listed) add(value, value + '（選択肢に無い値）');
+  el.value = value;
 }
 
 function writeForm(card, status) {
@@ -1516,24 +1523,7 @@ function setImpPanelBusy(busy) {
 }
 
 function fillImpSprintSelect(value) {
-  var el = document.getElementById('i-sprint');
-  clearHost(el);
-  var seen = false;
-  impSprintChoices.forEach(function (c) {
-    var o = document.createElement('option');
-    o.value = c.value;
-    o.textContent = c.label;
-    if (c.value === value) seen = true;
-    el.appendChild(o);
-  });
-  // 今の値が選択肢に無くても失わない（PBI の fillSprintSelect と同じ考え方）。
-  if (!seen && value) {
-    var extra = document.createElement('option');
-    extra.value = value;
-    extra.textContent = value;
-    el.appendChild(extra);
-  }
-  el.value = value;
+  fillSprintOptions(document.getElementById('i-sprint'), impSprintChoices, value);
 }
 
 function setImpResolving(on) {
