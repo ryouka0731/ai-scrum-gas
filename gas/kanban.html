@@ -2719,6 +2719,8 @@ function objectTable(columns, rows, onRow, withCommentCount) {
       tr.className = 'clickable';
       tr.dataset.id = row.id;
       tr.setAttribute('tabindex', '0');
+      tr.setAttribute('role', 'button');
+      tr.setAttribute('aria-label', String(row.id) + ' ' + String(row.title || '') + ' を開く');
       tr.addEventListener('click', function () { onRow(row); });
       tr.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' || ev.key === ' ') { if (ev.preventDefault) ev.preventDefault(); onRow(row); }

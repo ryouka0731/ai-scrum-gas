@@ -665,6 +665,16 @@ function createHarness(initialColumns) {
       });
     },
 
+    /** #table-view などの下の全 tbody 行の、役割に関わる属性を読む（押せる行かどうかの見分け用）。 */
+    rowAttrsIn: function (hostId) {
+      return collect(el(hostId), function (e) { return e.tagName === 'tr'; })
+        .filter(function (tr) { return tr.parentNode && tr.parentNode.tagName === 'tbody'; })
+        .map(function (tr) {
+          return { role: tr.getAttribute('role'), label: tr.getAttribute('aria-label'),
+            tabindex: tr.getAttribute('tabindex'), clickable: tr.classList.contains('clickable') };
+        });
+    },
+
     /** その要素のタグ名を読む（input と select の取り違えを見分けるため）。 */
     tagOf: function (id) { return el(id).tagName; },
 

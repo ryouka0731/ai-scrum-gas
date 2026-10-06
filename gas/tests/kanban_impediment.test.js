@@ -481,3 +481,22 @@ test('要約に「途中で止まった操作: N件」が出る', () => {
   const h = reloaded();
   assert.ok(h.textTreeOf('summary').indexOf('途中で止まった操作: 1件') !== -1, h.textTreeOf('summary'));
 });
+
+test('未解決の押せる行には role="button" と aria-label が付き、解決済の行には付かない', () => {
+  const done = Object.assign({}, ROW, { id: 'IMP-001', title: '片付いた', status: 'Resolved' });
+  const h = createHarness(INITIAL);
+  h.sandbox.load();
+  h.calls[0].handlers.success({ ok: true, name: 'board', view: h.boardOf(INITIAL),
+    summary: { byStatus: [], total: { count: 0, points: 0 } }, sprintChoices: CHOICES });
+  h.clickTab('障害物');
+  latest(h).handlers.success(impResponse([ROW], [done]));
+  const rows = h.rowAttrsIn('table-view');
+  const open = rows.filter((r) => r.clickable);
+  const rest = rows.filter((r) => !r.clickable);
+  assert.equal(open.length, 1);
+  assert.equal(open[0].role, 'button');
+  assert.equal(open[0].label, 'IMP-002 止まっている を開く');
+  assert.equal(open[0].tabindex, '0');
+  assert.ok(rest.length >= 1);
+  rest.forEach((r) => { assert.equal(r.role, null); assert.equal(r.label, null); });
+});
