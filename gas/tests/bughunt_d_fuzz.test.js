@@ -28,7 +28,7 @@ function campaign(name, cfg, from, to) {
   return failures;
 }
 
-const BASE = { steps: 60, busy: 0.1, partial: 0.15, fail: 0.1, checkPendingMark: false };
+const BASE = { steps: 60, busy: 0.1, partial: 0.15, fail: 0.1, checkPendingMark: true };
 
 test('乱択（サーバの処理順も届く順も乱す）: 例外が無く、最新にした後は画面がサーバと一致し、塞がったままの操作も「読み込んでいます…」も残らない', () => {
   const f = campaign('全操作', Object.assign({}, BASE, { ops: ALL }), 1, 200)
