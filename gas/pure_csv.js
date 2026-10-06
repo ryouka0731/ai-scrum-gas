@@ -59,9 +59,10 @@ function parseCsvWithLines_(text) {
 }
 
 /**
- * 見出しよりセルの多いデータ行のうち最初のものを返す（無ければ null）。
- * { id: 1列目の値（trim）, line: ファイル上の行番号, cells, expected }
+ * 見出しよりセルが多く、余ったセルに中身（trim して空でない値）があるデータ行のうち
+ * 最初のものを返す（無ければ null）。{ id: 1列目の値（trim）, line: ファイル上の行番号, cells, expected }
  * そのまま書き戻すと、見出しに無いセルが黙って消える（csvToObjects は見出しの列だけを拾う）。
+ * 余ったセルが空だけなら失うものは無いので見逃す（書き戻しで末尾の空セルが落ちるだけ）。
  */
 function findOverlongCsvRow(text) {
   const parsed = parseCsvWithLines_(text);
@@ -69,7 +70,8 @@ function findOverlongCsvRow(text) {
   const expected = parsed.rows[0].length;
   for (let i = 1; i < parsed.rows.length; i++) {
     const r = parsed.rows[i];
-    if (r.length > expected) return { id: String(r[0]).trim(), line: parsed.lines[i], cells: r.length, expected: expected };
+    const extraFilled = r.slice(expected).some(function (c) { return String(c).trim() !== ''; });
+    if (extraFilled) return { id: String(r[0]).trim(), line: parsed.lines[i], cells: r.length, expected: expected };
   }
   return null;
 }

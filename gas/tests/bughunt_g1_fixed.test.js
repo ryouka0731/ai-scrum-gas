@@ -392,3 +392,34 @@ test('C-8: findOverlongCsvRow は引用の中のカンマ・改行を数えず�
   assert.deepEqual(findOverlongCsvRow('a,b\n"x","1\n2"\n3,4,5\n'), { id: '3', line: 4, cells: 3, expected: 2 });
   assert.deepEqual(findOverlongCsvRow('a,b\r\n1,2\r\n,2,3\r\n'), { id: '', line: 3, cells: 3, expected: 2 });
 });
+
+test('C-8: 見出しより多いセルが空（空白だけ）なら列が多い行とみなさない。中身のあるセルがあれば見つける', () => {
+  const { findOverlongCsvRow } = require('../pure_csv.js');
+  assert.equal(findOverlongCsvRow('id,title\nPBI-1,a,\n'), null);
+  assert.equal(findOverlongCsvRow('id,title\nPBI-1,a,, \n'), null);
+  assert.deepEqual(findOverlongCsvRow('id,title\nPBI-1,a,x\n'), { id: 'PBI-1', line: 2, cells: 3, expected: 2 });
+  assert.deepEqual(findOverlongCsvRow('id,title\nPBI-1,a,,x\n'), { id: 'PBI-1', line: 2, cells: 4, expected: 2 });
+});
+
+test('C-8: 末尾に空のセルが余った行は書き戻せ、書き戻したファイルからその空のセルは消える', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,題,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00,\n' +
+    'PBI-003,別,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const res = plain(h.ctx.apiUpdateStatus('PBI-003', 'Ready', '2026-10-01 00:00:00'));
+  assert.equal(res.ok, true, JSON.stringify(res).slice(0, 200));
+  const line = f['product_backlog.csv'].split(/\r?\n/).find((l) => l.indexOf('PBI-002') === 0);
+  assert.equal(line, 'PBI-002,題,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00');
+});
+
+test('C-8: 余ったセルに中身があれば、今までどおり行を名指しして止める', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,題,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00,x\n' +
+    'PBI-003,別,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const snapshot = f['product_backlog.csv'];
+  const h = createCtx(f);
+  const res = plain(h.ctx.apiUpdateStatus('PBI-003', 'Ready', '2026-10-01 00:00:00'));
+  assert.equal(res.reason, 'error');
+  assert.equal(res.message, 'scrum/product_backlog.csv の PBI-002 の行（2行目）に列が多すぎます。CSV を直してから操作してください');
+  assert.equal(f['product_backlog.csv'], snapshot);
+});

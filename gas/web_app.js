@@ -218,7 +218,7 @@ function appendHistory_(eventsOrThunk) {
 }
 
 /**
- * 見出しよりセルの多い行があれば例外にする。書き戻しの前に呼ぶ。
+ * 見出しより多いセルに中身のある行があれば例外にする（余りが空セルだけなら通す）。書き戻しの前に呼ぶ。
  * そのまま書き戻すと、見出しに無いセル（引用されていないカンマの後ろ等）が黙って消える。
  */
 function assertNoOverlongRows_(text, name) {
