@@ -711,5 +711,7 @@ function apiGetHistory(targetId) {
   if (!HISTORY_TARGET_RE.test(id)) {
     return { ok: false, reason: 'invalid', message: '履歴の対象が不正です: ' + id };
   }
-  return { ok: true, entries: historyFor(readCsvRowsBestEffort_(HISTORY_CSV_NAME), id, HISTORY_LIMIT) };
+  const entries = historyFor(readCsvRowsBestEffort_(HISTORY_CSV_NAME), id, HISTORY_LIMIT);
+  // ちょうど上限件なら、それより前が切り捨てられている可能性がある。
+  return entries.length === HISTORY_LIMIT ? { ok: true, entries: entries, truncated: true } : { ok: true, entries: entries };
 }

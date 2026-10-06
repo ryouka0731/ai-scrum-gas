@@ -72,8 +72,10 @@ PBI や障害物が「いつ・誰に・どう」変えられたかを、画面�
 履歴は増え続けるので、ビューの応答には載せない。**パネルを開いて「履歴」を押したときだけ取りに行く。**
 
 ```
-apiGetHistory(targetId) → { ok, entries: [{ at, actor, action, field, before, after }] }   // 新しい順、最大200件
+apiGetHistory(targetId) → { ok, entries: [{ at, actor, action, field, before, after }], truncated? }   // 新しい順、最大200件
 ```
+
+- ちょうど200件のときは `truncated: true` を付け、画面は一覧の最後に「これより前の履歴は省略しています」と出す
 
 - `targetId` は `^(PBI|IMP)-\d+$` だけ受け付ける
 - ファイルが無い・壊れているときは空の一覧（`ok: true`）と、画面に「まだ履歴がありません」

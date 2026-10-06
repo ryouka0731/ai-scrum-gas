@@ -2288,7 +2288,7 @@ function fetchHistory(hostId) {
           setHistoryStatus(ui.content, '履歴を読み込めませんでした: ' + ((res && res.message) || ''), 'error');
           return;
         }
-        fillHistory(ui.content, res.entries || []);
+        fillHistory(ui.content, res.entries || [], !!res.truncated);
       });
     })
     .withFailureHandler(function (err) {
@@ -2305,8 +2305,11 @@ function historyValue(v) {
   return t === '' ? '（空）' : t;
 }
 
-/** 一覧を描く。文字はすべて textContent で入れる（値に <b> 等があっても文字のまま）。 */
-function fillHistory(content, entries) {
+/**
+ * 一覧を描く。文字はすべて textContent で入れる（値に <b> 等があっても文字のまま）。
+ * truncated（サーバが上限件で切った）なら、最後に省略した旨を出す。
+ */
+function fillHistory(content, entries, truncated) {
   clearHost(content);
   if (entries.length === 0) {
     setHistoryStatus(content, 'まだ履歴がありません', 'info');
@@ -2353,6 +2356,12 @@ function fillHistory(content, entries) {
     if (ul.children.length) box.appendChild(ul);
     content.appendChild(box);
   });
+  if (truncated) {
+    var more = document.createElement('div');
+    more.className = 'history-status info';
+    more.textContent = 'これより前の履歴は省略しています';
+    content.appendChild(more);
+  }
 }
 
 /**

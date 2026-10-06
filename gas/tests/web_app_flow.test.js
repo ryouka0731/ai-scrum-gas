@@ -1138,3 +1138,19 @@ test('取り消し: 2つ目（解決済から消す）で失敗しても unresol
   assert.equal(retry.ctx.apiUnresolveImpediment(moved, resolvedRow).ok, true);
   assert.equal(histRows(retry.ctx, f).length, 2, '完了の再送で増えた');
 });
+
+test('apiGetHistory: ちょうど上限件なら truncated を付け、それ未満なら付けない', () => {
+  function log(n) {
+    let s = CHG_HEADER;
+    for (let i = 0; i < n; i++) s += 'CHG-' + ('0000000' + i).slice(-8) + ',2026-10-07 09:00:00,a@x.jp,PBI-001,update,title,A,B\n';
+    return s;
+  }
+  const limit = vm.runInContext('HISTORY_LIMIT', createTestContext({ 'product_backlog.csv': headerOnlyCsv() }).ctx);
+  assert.equal(limit, 200);
+  const over = plain(createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': log(limit + 5) }).ctx.apiGetHistory('PBI-001'));
+  assert.equal(over.entries.length, limit);
+  assert.equal(over.truncated, true);
+  const under = plain(createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': log(limit - 1) }).ctx.apiGetHistory('PBI-001'));
+  assert.equal(under.entries.length, limit - 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(under, 'truncated'), false);
+});

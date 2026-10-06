@@ -303,6 +303,22 @@ test('10. 障害物のパネルにも同じ節があり、IMP の履歴を出す
   assert.equal(h.hiddenOf('imp-panel-history'), true, '新規作成中に履歴の節が出ている');
 });
 
+test('12. 上限で切った応答（truncated）なら、一覧の最後に省略した旨を出す。そうでなければ出さない', () => {
+  const h = ready();
+  h.openCard('PBI-001');
+  h.historyToggle('panel-history');
+  latest(h).handlers.success({ ok: true, entries: ENTRIES, truncated: true });
+  assert.equal(h.historyGroupsIn('panel-history').length, 2);
+  const body = h.historyStateOf('panel-history');
+  assert.equal(body.status, 'これより前の履歴は省略しています');
+  assert.equal(h.historyTailOf('panel-history'), 'これより前の履歴は省略しています', '一覧の最後に出ていない');
+  // 取り直して truncated が無ければ消える。
+  h.drag('PBI-001', 'Ready');
+  latest(h).handlers.success({ ok: true, board: h.boardOf(INITIAL) });
+  latest(h).handlers.success({ ok: true, entries: ENTRIES });
+  assert.equal(h.historyStateOf('panel-history').status, null);
+});
+
 // --- 規則が1つであること -----------------------------------------------------
 // 画面の写し（historyLineDiff / historyGroups）を、実際に読み込んだ <script> から取り出して比べる。
 function pageFns() {
