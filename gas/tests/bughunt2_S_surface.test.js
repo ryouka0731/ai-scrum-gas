@@ -161,7 +161,7 @@ function valuePool(rand) {
 const API_ARITY = {
   apiGetView: 1, apiUpdateStatus: 3, apiCreatePbi: 1, apiUpdatePbi: 3, apiDeletePbi: 2, apiRestorePbi: 1,
   apiCreateImpediment: 1, apiUpdateImpediment: 3, apiResolveImpediment: 3, apiUnresolveImpediment: 2,
-  apiAddComment: 2, apiDeleteComment: 1, apiRestoreComment: 1, apiGetHistory: 1,
+  apiAddComment: 2, apiDeleteComment: 1, apiRestoreComment: 1, apiGetHistory: 1, apiGetComments: 1,
 };
 
 function resetFiles(h) {
@@ -199,10 +199,12 @@ test('S-6: api* に敵対的な引数を送っても、ロックは必ず解放�
         failures.push('ロックが解放されていない: ' + where);
       }
       if (threw) {
-        // 例外が許されるのは、ロックの外で String() が TypeError を投げる apiGetView / apiGetHistory だけ
-        // （呼んだ本人の失敗で終わり、何も書かない）。
-        if (!/^apiGet(View|History)$/.test(name)) failures.push('例外が漏れた: ' + where + ' -> ' + threw.message);
+        // 例外が許されるのは、ロックの外で String() が TypeError を投げる読み出し（apiGetView / apiGetHistory /
+        // apiGetComments）だけ（呼んだ本人の失敗で終わり、何も書かない）。
+        if (!/^apiGet(View|History|Comments)$/.test(name)) failures.push('例外が漏れた: ' + where + ' -> ' + threw.message);
         if (JSON.stringify(h.files) !== filesBefore) failures.push('例外なのに書いた: ' + where);
+        if (JSON.stringify(h.props) !== propsBefore) failures.push('例外なのにプロパティを書いた: ' + where);
+        if (JSON.stringify(h.cache) !== cacheBefore) failures.push('例外なのにキャッシュを書いた: ' + where);
         continue;
       }
       if (!res || typeof res.ok !== 'boolean') { failures.push('応答の形が不正: ' + where + ' -> ' + describe(res)); continue; }
@@ -261,7 +263,8 @@ test('S-8: 閲覧者（Drive に書けない人）が書き込み API を呼ん�
 test('S-9: ロックが取れないとき、書き込み API は何も読まず何も書かない', () => {
   const h = H.createCtx(H.baseFiles(), { lockBusy: true });
   const before = JSON.stringify(h.files);
-  ['apiUpdateStatus', 'apiCreatePbi', 'apiDeletePbi', 'apiRestorePbi', 'apiCreateImpediment', 'apiAddComment', 'apiDeleteComment', 'apiRestoreComment']
+  ['apiUpdateStatus', 'apiCreatePbi', 'apiUpdatePbi', 'apiDeletePbi', 'apiRestorePbi', 'apiCreateImpediment', 'apiUpdateImpediment',
+    'apiResolveImpediment', 'apiUnresolveImpediment', 'apiAddComment', 'apiDeleteComment', 'apiRestoreComment']
     .forEach((n) => assert.equal(plain(h.ctx[n]('PBI-001', 'x', 'y')).reason, 'busy', n));
   assert.equal(JSON.stringify(h.files), before);
   assert.ok(h.log.every((x) => x === 'Lock.tryLock'), h.log.join(','));

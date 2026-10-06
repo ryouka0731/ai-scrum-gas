@@ -2,7 +2,7 @@
 // 2巡目 S（ブラウザから呼べる面の認可・悪用）の共通フェイク。
 // web_app_flow.test.js の createTestContext を写し、次を足したもの:
 // - ロックの取得・解放を数える（解放漏れの検出）
-// - 各 GAS サービスへのアクセスを記録する（副作用の検出）
+// - 各 GAS サービスへのアクセス（読み出しも）を記録する（副作用・ロック前の読み出しの検出）
 // - SpreadsheetApp / ScriptApp のフェイク（getUi は Web アプリ文脈と同じく例外）
 // - opts.failCacheRemove: CacheService.remove を失敗させる
 // - opts.onTryLock / opts.onRelease: ロックの取得直前・解放直後に1回だけ呼ぶ（別の実行が割り込む再現）
@@ -51,7 +51,7 @@ function createCtx(files, opts) {
   function it(arr) { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; }
   function makeFile(name) {
     return {
-      getBlob: () => ({ getDataAsString: () => files[name] }),
+      getBlob: () => { log.push('Drive.read:' + name); return { getDataAsString: () => files[name] }; },
       setContent: function (content) {
         log.push('Drive.setContent:' + name);
         if (opts.readOnly) throw new Error('Access denied: DriveApp.');
@@ -60,7 +60,7 @@ function createCtx(files, opts) {
     };
   }
   const scrum = {
-    getFilesByName: (name) => (Object.prototype.hasOwnProperty.call(files, name) ? it([makeFile(name)]) : it([])),
+    getFilesByName: (name) => { log.push('Drive.find:' + name); return Object.prototype.hasOwnProperty.call(files, name) ? it([makeFile(name)]) : it([]); },
     getFolders: () => it([]),
     getName: () => 'scrum',
   };
@@ -91,13 +91,14 @@ function createCtx(files, opts) {
     },
     PropertiesService: {
       getScriptProperties: () => ({
-        getProperty: (k) => (Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null),
+        getProperty: (k) => { log.push('Props.get:' + k); return Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null; },
         setProperty: (k, v) => { log.push('Props.set:' + k); props[k] = v; },
       }),
     },
     CacheService: {
       getScriptCache: () => ({
         get: (k) => {
+          log.push('Cache.get');
           if (!Object.prototype.hasOwnProperty.call(cache, k)) return null;
           if (clock.now >= cache[k].expiresAt) { delete cache[k]; return null; }
           return cache[k].value;
