@@ -99,3 +99,51 @@ test('BUG-V1: 括弧が途中にあるだけのタイトル・片側だけのタ
   ['（仮）の件', '件（仮）', '（', '）', 'A（B）C'].forEach((t) => assert.equal(pv.validatePbiFields({ title: t }, ['New']).ok, true, t));
   assert.deepEqual(pv.validatePbiFields({ title: '（）' }, ['New']).errors, [V1_MSG]);
 });
+
+// --- V2: 配布（scripts/publish.js）は、配布記録 .published.json をリンク越しに書かない ---------------------------
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const ROOT = path.join(__dirname, '..', '..');
+const SCRIPT = path.join(ROOT, 'scripts', 'publish.js');
+function vTmp() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt2-V-publish-'));
+  return { dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+function runPublish(arg) {
+  const r = spawnSync(process.execPath, [SCRIPT, arg], { cwd: ROOT, encoding: 'utf8' });
+  return { code: r.status, out: String(r.stdout), err: String(r.stderr) };
+}
+
+test('BUG-V2: 配布先の scrum/ がリンクのとき、配布記録（.published.json）をリンク先（配布フォルダの外）へ書かない', () => {
+  const t = vTmp();
+  const outside = vTmp();
+  try {
+    fs.symlinkSync(outside.dir, path.join(t.dir, 'scrum'));
+    const r = runPublish(t.dir);
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(fs.readdirSync(outside.dir), [], 'リンク先に書き込んだ');
+    assert.match(r.err, /通常のフォルダではないため/);
+    assert.match(r.out, /リンク・通常でないファイルをスキップ/);
+    assert.match(r.err, /配布記録（\.published\.json）を書きませんでした/);
+    assert.doesNotMatch(r.out, /配布記録: /);
+  } finally { t.cleanup(); outside.cleanup(); }
+});
+
+test('BUG-V2b: 配布先の scrum/.published.json がリンクのとき、リンク先の既存ファイル（配布フォルダの外）を上書きしない', () => {
+  const t = vTmp();
+  const outside = vTmp();
+  try {
+    fs.mkdirSync(path.join(t.dir, 'scrum'));
+    const victim = path.join(outside.dir, 'victim.txt');
+    fs.writeFileSync(victim, '大事な内容');
+    fs.symlinkSync(victim, path.join(t.dir, 'scrum', '.published.json'));
+    const r = runPublish(t.dir);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(fs.readFileSync(victim, 'utf8'), '大事な内容', 'リンク先の外部ファイルが上書きされた');
+    assert.ok(fs.lstatSync(path.join(t.dir, 'scrum', '.published.json')).isSymbolicLink(), 'リンク自体も触らない');
+    assert.match(r.err, /配布記録（\.published\.json）を書きませんでした/);
+  } finally { t.cleanup(); outside.cleanup(); }
+});
