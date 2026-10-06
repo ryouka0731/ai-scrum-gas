@@ -1056,3 +1056,13 @@ test('apiGetHistory: 新しい順の entries。不正な対象は invalid。フ�
   const none = createTestContext({ 'product_backlog.csv': headerOnlyCsv() }).ctx;
   assert.deepEqual(plain(none.apiGetHistory('PBI-001')), { ok: true, entries: [] });
 });
+
+test('履歴: 差分の組み立てが例外でも本体は成功し、historyWarning を返す', () => {
+  const { ctx, files } = createTestContext(histPbiFiles());
+  vm.runInContext('diffRows = function () { throw new Error("組み立て失敗"); };', ctx);
+  const res = ctx.apiCreatePbi(fullFields('A'));
+  assert.equal(res.ok, true, res.message);
+  assert.ok(files['product_backlog.csv'].indexOf('PBI-001') !== -1);
+  assert.ok(res.historyWarning.indexOf('組み立て失敗') !== -1, res.historyWarning);
+  assert.equal(files['change_log.csv'], CHG_HEADER);
+});

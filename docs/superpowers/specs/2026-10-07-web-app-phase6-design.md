@@ -75,6 +75,7 @@ apiGetHistory(targetId) → { ok, entries: [{ at, actor, action, field, before, 
 
 - `targetId` は `^(PBI|IMP)-\d+$` だけ受け付ける
 - ファイルが無い・壊れているときは空の一覧（`ok: true`）と、画面に「まだ履歴がありません」
+- 削除した PBI の過去の値も、履歴からは読める（同じドメインの閲覧者に限る）
 
 ## 差分の見せ方
 
@@ -122,3 +123,4 @@ apiGetHistory(targetId) → { ok, entries: [{ at, actor, action, field, before, 
 - 履歴からの巻き戻し（「この版に戻す」）
 - 履歴の検索・絞り込み・書き出し
 - 古い履歴の削除・ローテーション（行数が問題になってから考える）
+- `change_log.csv` は書き込みのたびに全体を読み書きする。1〜2MB を超えたら分割・ローテーションを検討する

@@ -183,12 +183,14 @@ function newHistoryId_() {
 }
 
 /**
- * 履歴を追記する。呼び出し側のロックの中で呼ぶこと。失敗しても例外を投げず、
+ * 履歴を追記する。events は配列か、配列を返す関数。呼び出し側のロックの中で呼ぶこと。失敗しても例外を投げず、
  * 画面に出す警告の文字列を返す（成功・記録なしは null）。本体の書き込みは既に済んでいる。
  */
-function appendHistory_(events) {
-  if (!events || events.length === 0) return null;
+function appendHistory_(eventsOrThunk) {
   try {
+    // 組み立ての失敗も本体を巻き込まないよう、関数で渡された場合はここ（try の中）で呼ぶ。
+    const events = typeof eventsOrThunk === 'function' ? eventsOrThunk() : eventsOrThunk;
+    if (!events || events.length === 0) return null;
     const text = readTextFile_(getScrumFolder_(), HISTORY_CSV_NAME);
     if (text === null) return '変更履歴を記録できませんでした（scrum/' + HISTORY_CSV_NAME + ' が見つかりません。配布し直してください）';
     assertHeaderMatches(text, HISTORY_FIELDS);
@@ -236,10 +238,11 @@ function withBacklogWrite_(mutate) {
     }
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
     // 本体は書けた。履歴は後追いで、失敗しても本体を失敗にしない。
-    const events = diffRows(rows, result.rows, BACKLOG_FIELDS, ['updated_at', 'created_at']).map(function (e) {
-      return (e.action === 'create' && result.historyAction) ? Object.assign({}, e, { action: result.historyAction }) : e;
+    const warning = appendHistory_(function () {
+      return diffRows(rows, result.rows, BACKLOG_FIELDS, ['updated_at', 'created_at']).map(function (e) {
+        return (e.action === 'create' && result.historyAction) ? Object.assign({}, e, { action: result.historyAction }) : e;
+      });
     });
-    const warning = appendHistory_(events);
     const out = {
       ok: true,
       board: buildBoardData(result.rows),
@@ -485,7 +488,7 @@ function withImpedimentWrite_(first, mutate) {
         if (i === 0) throw e;
         // 1つ目は書けている。画面には書けた側を反映して返す。
         if (writes[0].key === 'open') open = writes[0].rows; else resolved = writes[0].rows;
-        const partialWarning = appendHistory_(historyEvents());
+        const partialWarning = appendHistory_(historyEvents);
         return Object.assign({
           ok: false, reason: 'partial',
           message: '途中で止まりました（scrum/' + writes[i].name + ' に書けませんでした）。通知の「完了する」を押すと完了します。',
@@ -494,7 +497,7 @@ function withImpedimentWrite_(first, mutate) {
     }
     if (result.open) open = result.open;
     if (result.resolved) resolved = result.resolved;
-    const warning = appendHistory_(historyEvents());
+    const warning = appendHistory_(historyEvents);
     return Object.assign({ ok: true }, impedimentPayload_(open, resolved), result.extra || {}, warning ? { historyWarning: warning } : {});
   } catch (e) {
     const out = { ok: false, reason: 'error', message: e.message };
