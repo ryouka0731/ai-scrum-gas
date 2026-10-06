@@ -14,10 +14,57 @@
 
 const PBI_ID_NUM_RE = /^PBI-(\d+)$/;
 
-/** id 文字列の番号を返す。PBI-\d+ 形式でなければ null。 */
-function pbiIdNumber(idText) {
+/*
+ * 番号は数値にせず、10進の数字列のまま比べ・足す。Number にすると 2^53 を超える番号で
+ * n+1 が n と同じになり（既存 ID の再利用）、さらに大きいと指数表記（1e+25）になって
+ * 以後の採番が壊れる。手で CSV に書かれた桁の多い ID でも正しく扱うため。
+ */
+
+/** 数字列の先頭の 0 を落とす（全部 0 なら '0'）。 */
+function idDigitsNormalize_(digits) {
+  const s = String(digits).replace(/^0+/, '');
+  return s === '' ? '0' : s;
+}
+
+/** 数字列どうしを数として比べる（-1 / 0 / 1）。 */
+function idDigitsCompare_(a, b) {
+  const x = idDigitsNormalize_(a);
+  const y = idDigitsNormalize_(b);
+  if (x.length !== y.length) return x.length < y.length ? -1 : 1;
+  return x === y ? 0 : (x < y ? -1 : 1);
+}
+
+/** 数字列に 1 を足した数字列を返す（先頭の 0 は落とす）。 */
+function idDigitsIncrement_(digits) {
+  const d = idDigitsNormalize_(digits).split('');
+  let i = d.length - 1;
+  while (i >= 0 && d[i] === '9') { d[i] = '0'; i--; }
+  if (i < 0) return '1' + d.join('');
+  d[i] = String(Number(d[i]) + 1);
+  return d.join('');
+}
+
+/** id 文字列の番号の数字列（元の桁のまま）を返す。PBI-\d+ 形式でなければ null。 */
+function pbiIdDigits_(idText) {
   const m = PBI_ID_NUM_RE.exec(String(idText || '').trim());
-  return m ? parseInt(m[1], 10) : null;
+  return m ? m[1] : null;
+}
+
+/**
+ * id 文字列の番号を返す。PBI-\d+ 形式でなければ null。
+ * 2^53 を超える番号は正確でないため、大小の判断には comparePbiIds を使う。
+ */
+function pbiIdNumber(idText) {
+  const d = pbiIdDigits_(idText);
+  return d === null ? null : parseInt(d, 10);
+}
+
+/** 2つの PBI ID の番号を比べる（-1 / 0 / 1）。PBI-\d+ 形式でない方を小さいとみなす。 */
+function comparePbiIds(a, b) {
+  const x = pbiIdDigits_(a);
+  const y = pbiIdDigits_(b);
+  if (x === null || y === null) return x === y ? 0 : (x === null ? -1 : 1);
+  return idDigitsCompare_(x, y);
 }
 
 /**
@@ -26,12 +73,11 @@ function pbiIdNumber(idText) {
  * 呼び出し側が高水位として記録する値の桁を保てる。
  */
 function maxPbiId(rows) {
-  let max = -1;
   let best = null;
   (rows || []).forEach(function (item) {
     const raw = String((item && typeof item === 'object' ? item.id : item) || '').trim();
-    const n = pbiIdNumber(raw);
-    if (n !== null && n > max) { max = n; best = raw; }
+    if (pbiIdDigits_(raw) === null) return;
+    if (best === null || comparePbiIds(raw, best) > 0) best = raw;
   });
   return best;
 }
@@ -44,10 +90,9 @@ function highWaterPbiId(rows, highWaterId) {
 /** rows と記録済みの高水位 ID から次の PBI ID を返す。 */
 function nextPbiId(rows, highWaterId) {
   const maxId = highWaterPbiId(rows, highWaterId);
-  const n = maxId === null ? 0 : pbiIdNumber(maxId);
-  const width = maxId === null ? 3 : PBI_ID_NUM_RE.exec(maxId)[1].length;
-  const s = String(n + 1);
-  let padded = s;
+  const digits = maxId === null ? '0' : pbiIdDigits_(maxId);
+  const width = maxId === null ? 3 : digits.length;
+  let padded = idDigitsIncrement_(digits);
   while (padded.length < width) padded = '0' + padded;
   return 'PBI-' + padded;
 }
@@ -68,14 +113,14 @@ function nextPbiId(rows, highWaterId) {
  * なら false。
  */
 function isPbiIdWithinHighWater(id, rows, highWaterId) {
-  const n = pbiIdNumber(id);
-  if (n === null || n <= 0) return false;
+  const d = pbiIdDigits_(id);
+  if (d === null || idDigitsNormalize_(d) === '0') return false;
   const maxId = highWaterPbiId(rows, highWaterId);
   if (maxId === null) return true;
-  const maxN = pbiIdNumber(maxId);
-  return n <= maxN;
+  return comparePbiIds(id, maxId) <= 0;
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { nextPbiId, pbiIdNumber, maxPbiId, highWaterPbiId, isPbiIdWithinHighWater };
+  module.exports = { nextPbiId, pbiIdNumber, comparePbiIds, maxPbiId, highWaterPbiId, isPbiIdWithinHighWater,
+    idDigitsCompare_, idDigitsIncrement_ };
 }

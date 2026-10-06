@@ -67,8 +67,8 @@ function advanceLastPbiIdWatermark_(rows) {
     const recorded = getLastPbiId_();
     const scannedMax = highWaterPbiId(scanRows, '');
     if (scannedMax === null) return;
-    const recordedN = recorded ? pbiIdNumber(recorded) : null;
-    if (recordedN === null || pbiIdNumber(scannedMax) > recordedN) setLastPbiId_(scannedMax);
+    // 番号は数字列のまま比べる（2^53 を超える番号でも大小を誤らない）。
+    if (!recorded || pbiIdNumber(recorded) === null || comparePbiIds(scannedMax, recorded) > 0) setLastPbiId_(scannedMax);
   } catch (e) {
     // best-effort: 記録できなくても書き戻し本体は続行する。
   }
