@@ -446,3 +446,35 @@ test('取り消しが通信失敗したら、開いているコメント節に�
   assert.equal(form.message, '取り消せませんでした: 切れた');
   assert.match(form.messageClass, /error/);
 });
+
+test('追加(#1)の応答が遅れ、その間に新しい写しで現れ、利用者が削除(#3)した。遅れた #1 の応答でも消したものは戻らない', () => {
+  const h = ready();
+  h.openCard('PBI-002');
+  h.setCommentInput('panel-comments', '一つ目');
+  h.clickCommentSend('panel-comments');
+  const first = callOf(h, 'apiAddComment');
+  const a1 = { id: 'CMT-00000003', target_id: 'PBI-002', author: 'me@example.com',
+    created_at: '2026-10-06 11:00:00', body: '一つ目' };
+  const mine1 = Object.assign({ mine: true }, a1);
+  // 別の書き込み(#2)の応答が、#1 を含む新しい写しを運ぶ。
+  h.openCard('PBI-001');
+  h.setCommentInput('panel-comments', '二つ目');
+  h.clickCommentSend('panel-comments');
+  const second = h.calls.filter(function (c) { return c.method === 'apiAddComment'; })[1];
+  const a2 = { id: 'CMT-00000004', target_id: 'PBI-001', author: 'me@example.com',
+    created_at: '2026-10-06 11:00:01', body: '二つ目' };
+  second.handlers.success({ ok: true, comment: a2,
+    comments: { 'PBI-001': [C1, C2, Object.assign({ mine: true }, a2)], 'PBI-002': [mine1] } });
+  h.openCard('PBI-002');
+  assert.deepEqual(ids(h, 'panel-comments'), ['CMT-00000003']);
+  // 利用者が #1 を削除(#3)。成功。
+  h.clickCommentDelete('panel-comments', 'CMT-00000003');
+  callOf(h, 'apiDeleteComment').handlers.success({ ok: true, removed: mine1,
+    comments: { 'PBI-001': [C1, C2, Object.assign({ mine: true }, a2)], 'PBI-002': [] } });
+  assert.deepEqual(ids(h, 'panel-comments'), []);
+  // 非常に遅れた #1 の応答（古い写し）が今届く。
+  first.handlers.success({ ok: true, comment: a1,
+    comments: { 'PBI-001': [C1, C2], 'PBI-002': [mine1] } });
+  assert.deepEqual(ids(h, 'panel-comments'), [], '消したコメントが遅れた追加の応答で戻った');
+  assert.equal(h.cardCommentCountOf('PBI-002'), null, '件数にも戻っている');
+});

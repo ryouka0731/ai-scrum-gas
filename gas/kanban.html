@@ -1784,6 +1784,7 @@ var commentPending = {};      // 送信中のコメントの書き込みの発�
 // （コメントは盤面・表の中身を変えないので、writeSeq は進めず読み込みそのものは捨てさせない）。
 var commentWritesDone = 0;
 var commentSending = {};      // target_id → 送信中の本文（送信中は入力を塞ぎ、その本文を出し続ける）
+var commentDeletedIds = {};   // この画面で削除に成功したコメントの id → true（遅れた追加の応答で戻さないため。戻す成功で外す）
 var commentDeleting = {};     // コメントの id → true（削除の送信中は削除ボタンを塞ぐ）
 var commentUi = {};           // 節の id → { targetId, input, send, message }（最後に描いたもの）
 
@@ -1984,7 +1985,7 @@ function applyOwnComment(add, removeId) {
       if (kept.length !== list.length) { next[k] = kept; changed = true; }
     });
   }
-  if (add && add.id && add.target_id) {
+  if (add && add.id && add.target_id && !commentDeletedIds[add.id]) {
     var cur = Array.isArray(next[add.target_id]) ? next[add.target_id] : [];
     var exists = cur.some(function (c) { return c.id === add.id; });
     if (!exists) {
@@ -2073,6 +2074,7 @@ function deleteComment(hostId, targetId, commentId) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       settle();
       if (res.ok) commentWritesDone++;
+      if (res.ok && res.removed && res.removed.id) commentDeletedIds[res.removed.id] = true;
       if (!applyComments(res.comments, issued)) {
         if (res.ok) applyOwnComment(null, res.removed && res.removed.id);
         refreshOpenComments();
@@ -2107,6 +2109,7 @@ function restoreComment(row) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete commentPending[issued];
       if (res.ok) commentWritesDone++;
+      if (res.ok && row.id) delete commentDeletedIds[row.id];
       // 戻す応答は戻した行を運ばない。送った行（row）を使う。
       if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
       if (res.ok) setMessage('コメントを戻しました。', 'info');
