@@ -725,7 +725,10 @@ test('BUG-P6. diffRows: 結果は直す前の版と同じ（乱択 3000 通り�
 
 const impView = require('../pure_view_impediment.js');
 
-/** 直す前の buildImpedimentView（2乗の版）。新しい版と結果が同じことを乱択で確かめる参照。 */
+/**
+ * 直す前の buildImpedimentView（2乗の版）。新しい版と結果が同じことを乱択で確かめる参照。
+ * 解決済に同じ ID が複数ある行は、PR #11 cubic で「重複」に揃えた（pending にせず、未解決に duplicate で出す）。
+ */
 function buildImpedimentViewReference(openRows, resolvedRows) {
   const { isImpedimentPlaceholder, IMPEDIMENT_FIELDS } = require('../pure_grid_report.js');
   const { impedimentSameIdentity } = require('../pure_impediment_merge.js');
@@ -736,14 +739,15 @@ function buildImpedimentViewReference(openRows, resolvedRows) {
   const countOf = (rows) => { const c = Object.create(null); (rows || []).forEach((r) => { if (!isImpedimentPlaceholder(r)) c[key(r)] = (c[key(r)] || 0) + 1; }); return c; };
   const done = (resolvedRows || []).filter((r) => !isImpedimentPlaceholder(r));
   const count = countOf(openRows);
+  const rcount = countOf(resolvedRows);
   const shown = (openRows || []).filter((r) => {
     if (isImpedimentPlaceholder(r)) return false;
-    if (count[key(r)] > 1) return true;
+    if (count[key(r)] > 1 || rcount[key(r)] > 1) return true;
     return !done.some((d) => key(d) === key(r) && impedimentSameIdentity(d, r));
   });
   const real = (openRows || []).filter((r) => !isImpedimentPlaceholder(r));
   const dups = real.filter((r) => {
-    if (count[key(r)] > 1) return true;
+    if (count[key(r)] > 1 || rcount[key(r)] > 1) return true;
     const same = done.filter((d) => key(d) === key(r));
     return same.length > 0 && !same.some((d) => impedimentSameIdentity(d, r));
   });
@@ -754,7 +758,7 @@ function buildImpedimentViewReference(openRows, resolvedRows) {
   (openRows || []).forEach((o) => {
     if (isImpedimentPlaceholder(o)) return;
     const k = key(o);
-    if (seen[k] || count[k] > 1) return;
+    if (seen[k] || count[k] > 1 || rcount[k] > 1) return;
     for (let i = 0; i < done.length; i++) {
       if (key(done[i]) === k && impedimentSameIdentity(done[i], o)) { seen[k] = true; pend.push({ id: k, open: rowsOut([o])[0], resolved: rowsOut([done[i]])[0] }); return; }
     }

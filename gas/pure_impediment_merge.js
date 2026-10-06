@@ -52,6 +52,14 @@ function impRealIndex_(rows, id) {
   return -1;
 }
 
+/** 雛形を除き、ID（trim）が一致する行の数。 */
+function impRealCount_(rows, id) {
+  const key = String(id || '').trim();
+  let n = 0;
+  rows.forEach(function (r) { if (!isImpedimentPlaceholder(r) && String(r.id || '').trim() === key) n++; });
+  return n;
+}
+
 /**
  * 解決・取り消しで変わらない列（status / resolved_at / resolution 以外）が同じか。
  * 同じなら「同じ障害物が途中まで移った」とみなす。違えば別の行なので触らない。
@@ -104,7 +112,9 @@ function impedimentHalfResolved(openRows, resolvedRows, id) {
   const resolved = resolvedRows || [];
   const oi = impRealIndex_(open, id);
   const ri = impRealIndex_(resolved, id);
-  return oi !== -1 && ri !== -1 && impedimentSameIdentity(open[oi], resolved[ri]);
+  // どちらかに同じ ID が複数あれば対を決められない（重複として扱い、途中で止まった状態とみなさない）
+  if (oi === -1 || ri === -1 || impRealCount_(open, id) !== 1 || impRealCount_(resolved, id) !== 1) return false;
+  return impedimentSameIdentity(open[oi], resolved[ri]);
 }
 
 function updateImpediment(rows, id, fields, expected) {
@@ -127,6 +137,8 @@ function planResolve(openRows, resolvedRows, id, resolution, expected, todayText
   if (oi === -1) return { ok: false, reason: ri === -1 ? 'not_found' : 'conflict' };
   if (!impedimentRowsEqual(open[oi], expected)) return { ok: false, reason: 'conflict' };
   const moved = impPick_(open[oi]);
+  // 解決済に同じ ID が複数あれば、どれが対か決められない。消しも足しもしない。
+  if (impRealCount_(resolved, id) > 1) return { ok: false, reason: 'duplicate_id' };
   if (ri !== -1) {
     // 同じ ID でも中身が違えば別の行。消すと解決策ごと失われるため触らない。
     if (!impedimentSameIdentity(resolved[ri], open[oi])) return { ok: false, reason: 'duplicate_id' };
@@ -183,20 +195,21 @@ function planUnresolve(openRows, resolvedRows, moved, resolvedRow) {
  *
  * 戻すのは、同じ障害物（impedimentSameIdentity）が未解決と解決済の両方にあるときだけ。未解決側の行を正とし、
  * 解決済から消す。未解決にだけある（既に揃っている）なら何も書かずに成功する（送り直しの冪等）。
- * 解決済にだけある・未解決に同じ ID が複数ある・中身が違うときは 'not_pending'（途中で止まった状態ではない）。
+ * 解決済にだけある・どちらかに同じ ID が複数ある・中身が違うときは 'not_pending'（途中で止まった状態ではない）。
  */
 function planUnresolvePending(openRows, resolvedRows, id) {
   const open = openRows || [];
   const resolved = resolvedRows || [];
   const key = String(id === undefined || id === null ? '' : id).trim();
   if (!IMPEDIMENT_ID_NUM_RE.test(key)) return { ok: false, reason: 'invalid' };
-  let openCount = 0;
-  open.forEach(function (r) { if (!isImpedimentPlaceholder(r) && String(r.id || '').trim() === key) openCount++; });
+  const openCount = impRealCount_(open, key);
+  const resolvedCount = impRealCount_(resolved, key);
   const oi = impRealIndex_(open, key);
   const ri = impRealIndex_(resolved, key);
   if (oi === -1 && ri === -1) return { ok: false, reason: 'not_found' };
   if (oi !== -1 && ri === -1 && openCount === 1) return { ok: true, open: null, resolved: null };
-  if (openCount !== 1 || ri === -1 || !impedimentSameIdentity(open[oi], resolved[ri])) return { ok: false, reason: 'not_pending' };
+  // 両方にちょうど1行ずつ、同じ障害物があるときだけ揃える（画面の pending と同じ条件）
+  if (openCount !== 1 || resolvedCount !== 1 || !impedimentSameIdentity(open[oi], resolved[ri])) return { ok: false, reason: 'not_pending' };
   return planUnresolve(open, resolved, impPick_(open[oi]), impPick_(resolved[ri]));
 }
 

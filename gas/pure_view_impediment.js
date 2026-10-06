@@ -66,8 +66,8 @@ function openImpedimentsShown(openRows, resolvedRows) {
 function impShown_(openRows, resolvedById, count) {
   return (openRows || []).filter(function (r) {
     if (isImpedimentPlaceholder(r)) return false;
-    // 同じ ID が未解決に複数あれば、どれが対か決められない。隠さず、重複として全部出す。
-    if (count[impIdKey_(r)] > 1) return true;
+    // 同じ ID が未解決か解決済に複数あれば、どれが対か決められない。隠さず、重複として全部出す。
+    if (count[impIdKey_(r)] > 1 || (resolvedById[impIdKey_(r)] || []).length > 1) return true;
     // 同じ ID でも中身が違えば別の行。隠すと画面から触れなくなるため未解決に出す。
     return !(resolvedById[impIdKey_(r)] || []).some(function (d) { return impedimentSameIdentity(d, r); });
   });
@@ -97,8 +97,9 @@ function impPendingList_(openRows, resolvedById, count) {
   (openRows || []).forEach(function (o) {
     if (isImpedimentPlaceholder(o)) return;
     const key = impIdKey_(o);
-    if (seen[key] || count[key] > 1) return;   // 未解決に複数ある ID は重複として扱い、pending にしない
     const same = resolvedById[key] || [];
+    // 未解決か解決済に複数ある ID は重複として扱い、pending にしない（planUnresolvePending と同じ条件）
+    if (seen[key] || count[key] > 1 || same.length > 1) return;
     for (let i = 0; i < same.length; i++) {
       if (impedimentSameIdentity(same[i], o)) {
         seen[key] = true;
@@ -115,8 +116,8 @@ function impDuplicateOpenRows_(openRows, resolvedById, count) {
   return (openRows || []).filter(function (r) {
     if (isImpedimentPlaceholder(r)) return false;
     const key = impIdKey_(r);
-    if (count[key] > 1) return true;
     const same = resolvedById[key] || [];
+    if (count[key] > 1 || same.length > 1) return true;
     return same.length > 0 && !same.some(function (d) { return impedimentSameIdentity(d, r); });
   });
 }

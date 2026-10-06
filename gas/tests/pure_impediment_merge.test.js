@@ -167,3 +167,13 @@ test('impedimentHalfResolved: 未解決と解決済に同じ障害物（ID と�
   assert.equal(m.impedimentHalfResolved([], [done], 'IMP-002'), false);
   assert.equal(m.impedimentHalfResolved([tpl], [Object.assign({}, tpl, { status: 'Resolved' })], 'IMP-001'), false, '雛形は数えない');
 });
+
+test('解決済に同じ ID が複数あれば、途中で止まった状態とみなさず、解決も揃えもしない（PR #11 cubic）', () => {
+  const done = imp({ status: 'Resolved', resolution: '直した' });
+  const other = imp({ title: '別の', status: 'Resolved', resolution: '別' });
+  [[done, done], [done, other], [other, done]].forEach((resolved) => {
+    assert.equal(m.planUnresolvePending([imp()], resolved, 'IMP-002').reason, 'not_pending');
+    assert.equal(m.planResolve([imp()], resolved, 'IMP-002', 'r', imp(), '2026-10-07').reason, 'duplicate_id');
+    assert.equal(m.impedimentHalfResolved([imp()], resolved, 'IMP-002'), false);
+  });
+});
