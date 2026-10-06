@@ -481,3 +481,44 @@ test('S1（画面の最小の追随）: 解決の応答に undoToken が無け�
   assert.equal(h.hiddenOf('toast'), true, '押しても断られる取り消しを出した');
   assert.ok(h.textOf('message').indexOf('IMP-002「回線が遅い」を解決しました。') !== -1, h.textOf('message'));
 });
+
+// --- P1: ID を発番・復元しない書き込みは、完了バックログ（product_backlog_done.csv）を読まない ----------------
+
+const P = require('./bughunt2_P_support.js');
+const csvPure = require('../pure_csv.js');
+
+test('BUG-P1. 状態変更・編集・削除のたびに product_backlog_done.csv（20,000件・約2MB）を読まない', () => {
+  const files = P.standardFiles(100, null);
+  files['product_backlog_done.csv'] = P.pbiCsv(20000).replace(/PBI-0/g, 'PBI-1');
+  const c = P.createCtx(files);
+  [
+    () => c.ctx.apiUpdateStatus(P.pid(1), 'Done', P.T0),
+    () => c.ctx.apiUpdatePbi(P.pid(2), { title: '変えた' }, P.T0),
+    () => c.ctx.apiDeletePbi(P.pid(3), P.T0),
+  ].forEach((call, i) => {
+    c.resetStats();
+    const r = call();
+    assert.equal(r.ok, true, JSON.stringify(r).slice(0, 200));
+    const read = c.stats.readChars['product_backlog_done.csv'] || 0;
+    assert.equal(read, 0, '操作 ' + i + ' で完了バックログを ' + read + ' 文字読んだ');
+    assert.ok(c.stats.parsedChars < 4 * files['product_backlog.csv'].length, '解釈量 ' + c.stats.parsedChars);
+  });
+});
+
+test('BUG-P1. 作成と削除の取り消しは、今までどおり完了バックログの ID を見て採番・判定する', () => {
+  const files = P.standardFiles(3, null);
+  files['product_backlog_done.csv'] = P.pbiCsv(1).replace('PBI-00001', 'PBI-00050');
+  const c = P.createCtx(files);
+  const r = c.ctx.apiCreatePbi({ title: '新しい', priority: 'Low' });
+  assert.equal(r.ok, true, JSON.stringify(r).slice(0, 200));
+  assert.equal(r.id, 'PBI-00051', '完了バックログの最大より大きい ID を採番する');
+  // 削除の取り消し: 預かった ID が完了バックログの最大以下なら（記録が無くても）戻せる。
+  const c2 = P.createCtx(Object.assign(P.standardFiles(3, null), { 'product_backlog_done.csv': files['product_backlog_done.csv'] }));
+  const d = c2.ctx.apiDeletePbi(P.pid(3), P.T0);
+  assert.equal(d.ok, true);
+  delete c2.props.LAST_PBI_ID;
+  c2.resetStats();
+  assert.equal(c2.ctx.apiRestorePbi(d.undoToken).ok, true);
+  assert.ok((c2.stats.readChars['product_backlog_done.csv'] || 0) > 0, '復元は完了バックログを見る');
+  assert.equal(c2.props.LAST_PBI_ID, 'PBI-00050', '復元で読んだ完了バックログの最大まで記録を進める');
+});

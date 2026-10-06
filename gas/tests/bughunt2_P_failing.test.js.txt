@@ -16,27 +16,6 @@ const impView = require('../pure_view_impediment.js');
 const NEW_PBI = { title: 'n', description: '', acceptance_criteria: '', status: 'New', priority: 'Medium', size: '', sprint: '' };
 
 // ---------------------------------------------------------------------------
-// BUG-P1 (medium/low): 状態変更・編集のたびに、完了バックログ全体を Drive から読んで解釈する
-// ---------------------------------------------------------------------------
-// withBacklogWrite_ は mutate の前に必ず advanceLastPbiIdWatermark_ を呼び、その中で
-// readDoneBacklogRowsBestEffort_（product_backlog_done.csv の全文を読み、CSV 全体を解釈）を行う。
-// 完了バックログは増える一方（完了した PBI がすべて入る）なので、ドラッグ1回が
-// 「生きている本体の数十倍」のファイルの読み取りになる。ID を発番しない操作（状態変更・編集）には要らない。
-// 期待: ID を発番しない・消さない書き込み（apiUpdateStatus / apiUpdatePbi）は完了バックログを読まない。
-test('BUG-P1. 状態変更のたびに product_backlog_done.csv（20,000件・約2MB）を読んで解釈している', () => {
-  const files = S.standardFiles(100, null);
-  files['product_backlog_done.csv'] = S.pbiCsv(20000).replace(/PBI-0/g, 'PBI-1');
-  const doneChars = files['product_backlog_done.csv'].length;
-  const c = S.createCtx(files);
-  c.resetStats();
-  const r = c.ctx.apiUpdateStatus(S.pid(1), 'Done', S.T0);
-  assert.equal(r.ok, true, JSON.stringify(r).slice(0, 200));
-  const read = c.stats.readChars['product_backlog_done.csv'] || 0;
-  assert.ok(read === 0, '完了バックログを ' + read + ' 文字（' + (read / files['product_backlog.csv'].length).toFixed(0) + ' 倍の本体）読み、解釈量は ' + c.stats.parsedChars + ' 文字');
-  assert.ok(c.stats.parsedChars < 4 * files['product_backlog.csv'].length, '解釈量 ' + c.stats.parsedChars + '（完了 ' + doneChars + '）');
-});
-
-// ---------------------------------------------------------------------------
 // BUG-P2 (medium): コメントが「全部」すべてのビュー応答とコメント書き込みの応答に載る
 // ---------------------------------------------------------------------------
 // spec 第6段階は「履歴は増え続けるので、ビューの応答には載せない」とした。コメントも増え続けるのに

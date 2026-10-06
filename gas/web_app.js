@@ -48,10 +48,12 @@ function readDoneBacklogRowsBestEffort_() {
 }
 
 /**
- * rows（+ 完了バックログ）の最大 ID が記録済みの高水位を上回っていれば、
- * 記録をその値まで進める。
+ * scanRows の最大 ID が記録済みの高水位を上回っていれば、記録をその値まで進める。
  *
- * withBacklogWrite_ が書き戻しのたびに（読み直した rows で）呼ぶ。ローカルの
+ * withBacklogWrite_ が書き戻しのたびに（読み直した rows で）呼ぶ。完了バックログはここでは読まない
+ * （増える一方のファイルで、ドラッグ1回ごとに全文を読むと本体の数十倍の読み取りになる）。
+ * 完了バックログの ID は、それを使う作成（採番）と削除の取り消し（範囲の判定）が読み、
+ * 取り消しはその行も含めて記録を進める。ローカルの
  * Claude Code が直接 CSV に書いた ID（記録より大きい）は、その行が delete 等で
  * rows から消える前に一度でも書き戻しが起きれば、ここで必ず捕捉される。
  * 記録は一方向にしか進めない（大きい方を採るだけ）ので、逆行はしない。
@@ -61,9 +63,8 @@ function readDoneBacklogRowsBestEffort_() {
  * 諦める（最悪でも「記録が古いままで、でっち上げ ID の復元が1回誤って拒否される」
  * だけで済み、ドラッグ・編集・削除まで巻き添えにしない）。
  */
-function advanceLastPbiIdWatermark_(rows) {
+function advanceLastPbiIdWatermark_(scanRows) {
   try {
-    const scanRows = rows.concat(readDoneBacklogRowsBestEffort_());
     const recorded = getLastPbiId_();
     const scannedMax = highWaterPbiId(scanRows, '');
     if (scannedMax === null) return;
@@ -493,6 +494,7 @@ function apiRestorePbi(token) {
       return { ok: false, reason: 'invalid', message: 'PBI ID の形式が不正です: ' + id };
     }
     const scanRows = rows.concat(readDoneBacklogRowsBestEffort_());
+    advanceLastPbiIdWatermark_(scanRows);   // 読んだ完了バックログの ID も記録に入れる（best-effort）
     if (!isPbiIdWithinHighWater(id, scanRows, getLastPbiId_())) {
       return { ok: false, reason: 'invalid', message: 'PBI ID が採番済みの範囲を超えています: ' + id };
     }
