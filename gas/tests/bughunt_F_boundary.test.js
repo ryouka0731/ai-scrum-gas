@@ -425,20 +425,21 @@ test('publish: 空白・日本語のファイル名、空ディレクトリ、�
 });
 
 test('publish: 配布先にだけあるファイル（メンバーが作った成果物）は消えず、再実行しても同じ結果', () => {
+  // Web アプリが書き戻すファイル（KEEP_IF_EXISTS）は上書きしない仕様なので、ここでは書き戻さないファイルで見る。
   const root = makeFakeRepo();
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'bughunt-f-dest-'));
   try {
     fs.mkdirSync(path.join(root, 'scrum'));
     fs.mkdirSync(path.join(root, '.claude'));
-    fs.writeFileSync(path.join(root, 'scrum', 'product_backlog.csv'), 'v1');
+    fs.writeFileSync(path.join(root, 'scrum', 'velocity.csv'), 'v1');
     fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'c');
     fs.mkdirSync(path.join(dest, 'scrum', 'sprint009'), { recursive: true });
     fs.writeFileSync(path.join(dest, 'scrum', 'sprint009', 'mine.md'), 'keep');
     assert.equal(runPublish(root, dest).status, 0);
-    fs.writeFileSync(path.join(root, 'scrum', 'product_backlog.csv'), 'v2');
+    fs.writeFileSync(path.join(root, 'scrum', 'velocity.csv'), 'v2');
     assert.equal(runPublish(root, dest).status, 0);
     assert.equal(fs.readFileSync(path.join(dest, 'scrum', 'sprint009', 'mine.md'), 'utf8'), 'keep');
-    assert.equal(fs.readFileSync(path.join(dest, 'scrum', 'product_backlog.csv'), 'utf8'), 'v2');
+    assert.equal(fs.readFileSync(path.join(dest, 'scrum', 'velocity.csv'), 'utf8'), 'v2');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(dest, { recursive: true, force: true });
