@@ -186,12 +186,3 @@ test('BUG C-1b: 取り消しが途中で止まり「解決済として完了」�
   assert.equal(last.action, 'resolve', '最新の履歴が今の状態（解決済）と食い違う: ' + JSON.stringify(last));
 });
 
-test('BUG C-8: 見出しより列が多い行（引用されていないカンマ）は、別の行の書き込みで黙って末尾のセルが消える', () => {
-  const f = baseFiles();
-  f['product_backlog.csv'] += 'PBI-002,題,説明, カンマ入り,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
-    'PBI-003,別,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
-  const h = createCtx(f);
-  const res = plain(h.ctx.apiUpdateStatus('PBI-003', 'Ready', '2026-10-01 00:00:00'));
-  const line = f['product_backlog.csv'].split('\n').find((l) => l.indexOf('PBI-002') === 0);
-  assert.ok(!res.ok || line.split(',').length === 11, '書き戻しで PBI-002 の行の11個目のセルが消えた: ' + line);
-});

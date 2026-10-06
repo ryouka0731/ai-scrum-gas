@@ -218,6 +218,17 @@ function appendHistory_(eventsOrThunk) {
 }
 
 /**
+ * 見出しよりセルの多い行があれば例外にする。書き戻しの前に呼ぶ。
+ * そのまま書き戻すと、見出しに無いセル（引用されていないカンマの後ろ等）が黙って消える。
+ */
+function assertNoOverlongRows_(text, name) {
+  const bad = findOverlongCsvRow(text);
+  if (!bad) return;
+  const where = bad.id ? bad.id + ' の行（' + bad.line + '行目）' : bad.line + '行目';
+  throw new Error('scrum/' + name + ' の ' + where + 'に列が多すぎます。CSV を直してから操作してください');
+}
+
+/**
  * 書き戻しを伴う API の共通手順。
  *
  * mutate(rows) は { ok:true, rows, id?, removed? } か { ok:false, reason, message } を返すこと。
@@ -234,6 +245,7 @@ function withBacklogWrite_(mutate) {
     // 未知の列を持つ CSV へ書き戻すと列が消えるため、読み直した直後・
     // 書き戻しより前に必ずヘッダーを検査する。
     assertHeaderMatches(text, BACKLOG_FIELDS);
+    assertNoOverlongRows_(text, BACKLOG_CSV_NAME);
     const rows = csvToObjects(text);
     // mutate の前に必ず高水位を進める。今の pure 層（pure_merge.js）は rows を
     // 直接書き換えず新しい配列を返すので mutate の後でも安全なはずだが、
@@ -462,6 +474,7 @@ function readImpedimentRows_(name) {
   }
   // 未知の列を持つ CSV へ書き戻すと列が消えるため、書く前に必ず検査する。
   assertHeaderMatches(text, IMPEDIMENT_FIELDS);
+  assertNoOverlongRows_(text, name);
   return csvToObjects(text);
 }
 
@@ -649,6 +662,7 @@ function withCommentWrite_(mutate) {
       return { ok: false, reason: 'error', message: 'scrum/' + COMMENT_CSV_NAME + ' が見つかりません。配布し直してください。' };
     }
     assertHeaderMatches(text, COMMENT_FIELDS);
+    assertNoOverlongRows_(text, COMMENT_CSV_NAME);
     const rows = csvToObjects(text);
     const me = currentUserEmail_();
     const result = mutate(rows, me);

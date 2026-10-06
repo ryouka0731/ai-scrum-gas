@@ -10,16 +10,25 @@
  * 1つのセルに飲み込まれ、書き戻しでそれらの行が失われるため。
  */
 function parseCsv(text) {
-  if (!text) return [];
+  return parseCsvWithLines_(text).rows;
+}
+
+/** parseCsv と同じ。各行が始まるファイル上の行番号（1始まり）も lines に返す。 */
+function parseCsvWithLines_(text) {
+  if (!text) return { rows: [], lines: [] };
   const src = String(text).replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const rows = [];
+  const lines = [];
   let row = [];
   let field = '';
   let inQuotes = false;
   let atFieldStart = true;
+  let line = 1;
+  let rowStart = 1;
 
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
+    if (ch === '\n') line++;
     if (inQuotes) {
       if (ch === '"') {
         if (src[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; }
@@ -30,19 +39,39 @@ function parseCsv(text) {
     }
     if (ch === '"' && atFieldStart) { inQuotes = true; atFieldStart = false; continue; }
     if (ch === ',') { row.push(field); field = ''; atFieldStart = true; continue; }
-    if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; atFieldStart = true; continue; }
+    if (ch === '\n') {
+      row.push(field); rows.push(row); lines.push(rowStart);
+      row = []; field = ''; atFieldStart = true; rowStart = line; continue;
+    }
     field += ch;
     atFieldStart = false;
   }
   row.push(field);
   rows.push(row);
+  lines.push(rowStart);
 
   // 末尾の空行（空セル1個だけの行）を落とす
   while (rows.length > 0) {
     const last = rows[rows.length - 1];
-    if (last.length === 1 && last[0] === '') rows.pop(); else break;
+    if (last.length === 1 && last[0] === '') { rows.pop(); lines.pop(); } else break;
   }
-  return rows;
+  return { rows: rows, lines: lines };
+}
+
+/**
+ * 見出しよりセルの多いデータ行のうち最初のものを返す（無ければ null）。
+ * { id: 1列目の値（trim）, line: ファイル上の行番号, cells, expected }
+ * そのまま書き戻すと、見出しに無いセルが黙って消える（csvToObjects は見出しの列だけを拾う）。
+ */
+function findOverlongCsvRow(text) {
+  const parsed = parseCsvWithLines_(text);
+  if (parsed.rows.length < 2) return null;
+  const expected = parsed.rows[0].length;
+  for (let i = 1; i < parsed.rows.length; i++) {
+    const r = parsed.rows[i];
+    if (r.length > expected) return { id: String(r[0]).trim(), line: parsed.lines[i], cells: r.length, expected: expected };
+  }
+  return null;
 }
 
 /** 空行か（区切りの無い、空セル1個だけの行）。 */
@@ -93,4 +122,4 @@ function csvEndsInsideQuotes(text) {
   return inQuotes;
 }
 
-if (typeof module !== 'undefined') { module.exports = { parseCsv, csvToObjects, csvEndsInsideQuotes }; }
+if (typeof module !== 'undefined') { module.exports = { parseCsv, csvToObjects, csvEndsInsideQuotes, findOverlongCsvRow }; }

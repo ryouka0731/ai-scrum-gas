@@ -355,3 +355,40 @@ test('C-7: csvEndsInsideQuotes は parseCsv と同じ読み方で、閉じてい
   assert.equal(csvEndsInsideQuotes('a,b\r\n"x\r\ny",z\r\n'), false);
   assert.equal(csvEndsInsideQuotes(''), false);
 });
+
+test('BUG C-8: 見出しより列が多い行（引用されていないカンマ）は、別の行の書き込みで黙って末尾のセルが消える', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-002,題,説明, カンマ入り,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-003,別,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const res = plain(h.ctx.apiUpdateStatus('PBI-003', 'Ready', '2026-10-01 00:00:00'));
+  const line = f['product_backlog.csv'].split('\n').find((l) => l.indexOf('PBI-002') === 0);
+  assert.ok(!res.ok || line.split(',').length === 11, '書き戻しで PBI-002 の行の11個目のセルが消えた: ' + line);
+});
+
+test('C-8: 列の多い行があると、PBI・障害物・コメントのどの書き戻しも error で止まり、ファイルは変わらない', () => {
+  const f = baseFiles();
+  f['product_backlog.csv'] += 'PBI-003,別,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +
+    'PBI-002,題,説明, カンマ入り,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  f['impediment_log.csv'] += 'IMP-002,止まっている,,マヤ,2026-10-01,Open,,,sprint001,余分\n';
+  f['comments.csv'] += 'CMT-0000000c,PBI-003,me@example.com,2026-10-06 10:00:00,本文,余分\n';
+  const snapshot = Object.assign({}, f);
+  const h = createCtx(f);
+  const pbi = plain(h.ctx.apiUpdateStatus('PBI-003', 'Ready', '2026-10-01 00:00:00'));
+  assert.equal(pbi.reason, 'error');
+  assert.equal(pbi.message, 'scrum/product_backlog.csv の PBI-002 の行（3行目）に列が多すぎます。CSV を直してから操作してください');
+  const imp = plain(h.ctx.apiCreateImpediment({ title: '新しい', description: '', reported_by: 'マヤ', sprint: '' }));
+  assert.equal(imp.reason, 'error');
+  assert.match(imp.message, /scrum\/impediment_log\.csv の IMP-002 の行（2行目）に列が多すぎます/);
+  const cmt = plain(h.ctx.apiAddComment('PBI-003', 'x'));
+  assert.equal(cmt.reason, 'error');
+  assert.match(cmt.message, /scrum\/comments\.csv の CMT-0000000c の行（2行目）に列が多すぎます/);
+  assert.deepEqual(f, snapshot);
+});
+
+test('C-8: findOverlongCsvRow は引用の中のカンマ・改行を数えず、行番号はファイル上の行', () => {
+  const { findOverlongCsvRow } = require('../pure_csv.js');
+  assert.equal(findOverlongCsvRow('a,b\n"x,y","1\n2"\n3,4\n'), null);
+  assert.deepEqual(findOverlongCsvRow('a,b\n"x","1\n2"\n3,4,5\n'), { id: '3', line: 4, cells: 3, expected: 2 });
+  assert.deepEqual(findOverlongCsvRow('a,b\r\n1,2\r\n,2,3\r\n'), { id: '', line: 3, cells: 3, expected: 2 });
+});
