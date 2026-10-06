@@ -1,0 +1,23 @@
+'use strict';
+// bughunt B: 確認済みバグ（失敗する）。実行: このファイルを bughunt_B_failing.test.js にコピーして
+//   node --test gas/tests/bughunt_B_failing.test.js
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const PID = require('../pure_pbi_id.js');
+const IID = require('../pure_impediment_id.js');
+
+test('nextPbiId: 2^53 を超える番号でも既存の ID を再利用しない', () => {
+  const next = PID.nextPbiId([{ id: 'PBI-9007199254740992' }], null);
+  assert.notEqual(next, 'PBI-9007199254740992');
+});
+
+test('nextPbiId: 巨大な番号でも PBI-\\d+ 形式の ID を返す（指数表記・桁埋めの暴走をしない）', () => {
+  const next = PID.nextPbiId([{ id: 'PBI-' + '9'.repeat(25) }], null);
+  assert.match(next, /^PBI-\d+$/);
+  assert.ok(next.length <= 'PBI-'.length + 26, next);
+});
+
+test('nextImpedimentId: 巨大な番号でも IMP-\\d+ 形式の ID を返す', () => {
+  const next = IID.nextImpedimentId([{ id: 'IMP-' + '9'.repeat(25) }]);
+  assert.match(next, /^IMP-\d+$/);
+});
