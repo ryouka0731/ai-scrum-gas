@@ -69,4 +69,28 @@ function csvToObjects(text) {
   });
 }
 
-if (typeof module !== 'undefined') { module.exports = { parseCsv, csvToObjects }; }
+/**
+ * CSV の文字列が、閉じていない引用符の中で終わっているか（parseCsv と同じ読み方で）。
+ * そうなら、末尾に行を足しても前のセルの続きとして飲み込まれる。
+ */
+function csvEndsInsideQuotes(text) {
+  const src = String(text || '');
+  let inQuotes = false;
+  let atFieldStart = true;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') i++; else inQuotes = false;
+      }
+      continue;
+    }
+    if (ch === '"' && atFieldStart) { inQuotes = true; atFieldStart = false; continue; }
+    if (ch === ',' || ch === '\n' || ch === '\r') { atFieldStart = true; continue; }
+    if (ch === '﻿' && i === 0) continue;
+    atFieldStart = false;
+  }
+  return inQuotes;
+}
+
+if (typeof module !== 'undefined') { module.exports = { parseCsv, csvToObjects, csvEndsInsideQuotes }; }

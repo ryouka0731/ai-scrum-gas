@@ -200,6 +200,11 @@ function appendHistory_(eventsOrThunk) {
     // 既存の行は解釈し直さない。ファイルが大きくなってもロック中の処理が増えないよう、
     // 見出し行だけを検査し、新しい行を文字列のまま末尾へ足す。
     if (!blank) assertHeaderMatches(text.split(/\r?\n/, 1)[0], HISTORY_FIELDS);
+    // 末尾が閉じていない引用符の中で終わっていると、足した行はそのセルの続きとして
+    // 飲み込まれ、黙って読めなくなる。足さずに警告する（文字の走査だけで、行は解釈しない）。
+    if (!blank && csvEndsInsideQuotes(text)) {
+      return '変更履歴のファイルが壊れています（引用符が閉じていません）。docs/setup.md の手順で切り替えてください';
+    }
     const added = toCsv(historyRows(events, { at: nowText_(), actor: currentUserEmail_(), newId: newHistoryId_ }), HISTORY_FIELDS);
     const next = blank ? added : (/\n$/.test(text) ? text : text + '\n') + added.slice(added.indexOf('\n') + 1);
     writeScrumFile_(HISTORY_CSV_NAME, next);

@@ -186,18 +186,6 @@ test('BUG C-1b: 取り消しが途中で止まり「解決済として完了」�
   assert.equal(last.action, 'resolve', '最新の履歴が今の状態（解決済）と食い違う: ' + JSON.stringify(last));
 });
 
-test('BUG C-7: change_log.csv の末尾が閉じていない引用符で終わると、以後の履歴が黙って既存セルに飲み込まれる', () => {
-  const f = baseFiles();
-  f['change_log.csv'] += 'CHG-0000000a,2026-10-01 00:00:00,a,PBI-002,update,title,"途中で切れた\n';
-  f['product_backlog.csv'] += 'PBI-002,t,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
-  const h = createCtx(f);
-  const res = plain(h.ctx.apiUpdateStatus('PBI-002', 'Ready', '2026-10-01 00:00:00'));
-  assert.equal(res.ok, true);
-  const entries = plain(h.ctx.apiGetHistory('PBI-002')).entries;
-  assert.ok(res.historyWarning || entries.some((e) => e.field === 'status' && e.after === 'Ready'),
-    '記録が読めないのに historyWarning も無い: ' + JSON.stringify(entries).slice(0, 200));
-});
-
 test('BUG C-8: 見出しより列が多い行（引用されていないカンマ）は、別の行の書き込みで黙って末尾のセルが消える', () => {
   const f = baseFiles();
   f['product_backlog.csv'] += 'PBI-002,題,説明, カンマ入り,,High,3,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n' +

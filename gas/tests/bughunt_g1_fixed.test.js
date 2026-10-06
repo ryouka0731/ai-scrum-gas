@@ -321,3 +321,37 @@ test('C-3: sharedId の無い取り消しは、同じ ID の別の行があれ�
   const row = { id: 'PBI-002', title: 'first', status: 'New', created_at: '2026-10-01 00:00:00', updated_at: 't' };
   assert.equal(plain(h.ctx.apiRestorePbi(row)).reason, 'duplicate_id');
 });
+
+test('BUG C-7: change_log.csv の末尾が閉じていない引用符で終わると、以後の履歴が黙って既存セルに飲み込まれる', () => {
+  const f = baseFiles();
+  f['change_log.csv'] += 'CHG-0000000a,2026-10-01 00:00:00,a,PBI-002,update,title,"途中で切れた\n';
+  f['product_backlog.csv'] += 'PBI-002,t,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const res = plain(h.ctx.apiUpdateStatus('PBI-002', 'Ready', '2026-10-01 00:00:00'));
+  assert.equal(res.ok, true);
+  const entries = plain(h.ctx.apiGetHistory('PBI-002')).entries;
+  assert.ok(res.historyWarning || entries.some((e) => e.field === 'status' && e.after === 'Ready'),
+    '記録が読めないのに historyWarning も無い: ' + JSON.stringify(entries).slice(0, 200));
+});
+
+test('C-7: 末尾が閉じていない change_log には足さず、決まった警告を返す（本体は書ける）', () => {
+  const f = baseFiles();
+  const broken = f['change_log.csv'] + 'CHG-0000000a,2026-10-01 00:00:00,a,PBI-002,update,title,"途中で切れた\n';
+  f['change_log.csv'] = broken;
+  f['product_backlog.csv'] += 'PBI-002,t,,,,,New,,2026-10-01 00:00:00,2026-10-01 00:00:00\n';
+  const h = createCtx(f);
+  const res = plain(h.ctx.apiUpdateStatus('PBI-002', 'Ready', '2026-10-01 00:00:00'));
+  assert.equal(res.ok, true);
+  assert.equal(res.historyWarning, '変更履歴のファイルが壊れています（引用符が閉じていません）。docs/setup.md の手順で切り替えてください');
+  assert.equal(f['change_log.csv'], broken, '壊れたファイルに足していない');
+});
+
+test('C-7: csvEndsInsideQuotes は parseCsv と同じ読み方で、閉じていない引用符だけを見つける', () => {
+  const { csvEndsInsideQuotes } = require('../pure_csv.js');
+  assert.equal(csvEndsInsideQuotes('a,b\n"x\n'), true);
+  assert.equal(csvEndsInsideQuotes('a,b\n"x""y\n'), true);
+  assert.equal(csvEndsInsideQuotes('a,b\n"x""y",z\n'), false);
+  assert.equal(csvEndsInsideQuotes('a,b\n5" monitor,x\n'), false, 'セルの途中の " は引用の始まりではない');
+  assert.equal(csvEndsInsideQuotes('a,b\r\n"x\r\ny",z\r\n'), false);
+  assert.equal(csvEndsInsideQuotes(''), false);
+});
