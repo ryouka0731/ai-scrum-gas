@@ -268,20 +268,28 @@ async function main() {
   const rng = mulberry32(o.seed);
   let mutants = [];
   const stats = {};
+  // --ids-from: 前回の生き残り・時間切れを、種や上限に関係なくすべて走らせ直す（抜き取りの前に絞る）
+  let want = null;
+  if (o.idsFrom) {
+    const prev = JSON.parse(fs.readFileSync(o.idsFrom, 'utf8'));
+    want = new Set(prev.results.filter((r) => r.status === 'survived' || r.status === 'timeout').map((r) => r.id));
+  }
   for (const rel of o.targets) {
     const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
     let all = generateMutants(rel, src).filter((m) => validSyntax(rel, applyMutant(src, m)));
+    stats[rel] = { candidates: all.length };
+    if (want) {
+      mutants = mutants.concat(all.filter((m) => want.has(m.id)));
+      continue;
+    }
     // 決まった種で並べ替えて上限まで取る
     for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
     const cap = o.cap[path.basename(rel)] || o.cap.default;
-    stats[rel] = { candidates: all.length };
     all = all.slice(0, cap);
     mutants = mutants.concat(all);
   }
-  if (o.idsFrom) {
-    const prev = JSON.parse(fs.readFileSync(o.idsFrom, 'utf8'));
-    const want = new Set(prev.results.filter((r) => r.status === 'survived' || r.status === 'timeout').map((r) => r.id));
-    mutants = mutants.filter((m) => want.has(m.id));
+  if (want && mutants.length !== want.size) {
+    console.error('前回の ID のうち ' + (want.size - mutants.length) + ' 件は、今のソースから作れませんでした（行が変わった等）');
   }
   const testsFor = {};
   o.targets.forEach((rel) => { testsFor[rel] = o.full ? allTests(o.baseline) : relevantTests(rel, o.baseline, o.withSlow); });
@@ -328,13 +336,15 @@ async function main() {
     cleanup();
   }
   results.sort((a, b) => (a.file + String(a.line).padStart(5, '0')).localeCompare(b.file + String(b.line).padStart(5, '0')));
-  const killed = results.filter((r) => r.status !== 'survived').length;
-  const summary = { total: results.length, killed, survived: results.length - killed,
+  // 時間切れは殺したことにしない（終わらなかっただけ）。点数は殺した数 / 全数で、時間切れは別に数える
+  const killed = results.filter((r) => r.status === 'killed').length;
+  const timeout = results.filter((r) => r.status === 'timeout').length;
+  const summary = { total: results.length, killed, survived: results.length - killed - timeout, timeout,
     score: results.length ? +(killed / results.length * 100).toFixed(1) : null,
     seconds: Math.round((Date.now() - started) / 1000), byFile: {} };
   results.forEach((r) => {
-    const b = summary.byFile[r.file] || (summary.byFile[r.file] = { total: 0, survived: 0 });
-    b.total++; if (r.status === 'survived') b.survived++;
+    const b = summary.byFile[r.file] || (summary.byFile[r.file] = { total: 0, survived: 0, timeout: 0 });
+    b.total++; if (r.status === 'survived') b.survived++; if (r.status === 'timeout') b.timeout++;
   });
   const report = { summary, stats, results };
   if (o.out) fs.writeFileSync(o.out, JSON.stringify(report, null, 1));
