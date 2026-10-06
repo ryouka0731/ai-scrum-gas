@@ -1009,6 +1009,22 @@ function applyServerBoard(serverBoard, id, trustWholeBoard) {
  * 楽観的に動かした位置に今もカードが居るときだけ元の列へ戻す。
  * 応答を待つ間に別の応答がこのカードを動かしていたら、そちらが新しい。
  */
+// 削除の送信中のカード id → { card, status }（削除が失敗したときの戻し先）。
+// 先に出した移動の応答がその間に届いたら、戻し先をその結果に合わせる（楽観的な移動先へ戻さない）。
+var deleteRestore = {};
+
+/** 移動の応答で、削除の送信中のカードの戻し先を直す。serverBoard が無ければ移動前の列へ戻す。 */
+function retargetDeleteRestore(id, serverBoard, newStatus, originalStatus) {
+  var r = deleteRestore[id];
+  if (!r) return;
+  if (serverBoard) {
+    var card = findCard(serverBoard, id);
+    if (card) { r.card = card; r.status = columnStatusOf(serverBoard, id); }
+  } else if (r.status === newStatus) {
+    r.status = originalStatus;
+  }
+}
+
 function rollbackCard(id, newStatus, originalStatus) {
   if (columnStatusOf(board, id) !== newStatus) return board;
   return boardWithCardMoved(board, id, originalStatus);
@@ -1268,12 +1284,12 @@ function savePanel() {
         afterHistoryWrite(res, newId, msgMark);
       } else {
         // 検証エラーではパネルを閉じない。閉じると入力が消える。
-        if (res.board) {
-          if (id) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
-          // 作成失敗はまだ id が無く、1枚だけ取り込む先が無いので、重なっている
-          // ときは board に触らない（他の送信中の反映を巻き戻さないため）。
-          else if (trustWholeBoard) render(res.board);
-        }
+        if (res.board && id) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        // 作成失敗はまだ id が無く、1枚だけ取り込む先が無いので、重なっている
+        // ときは board に触らない（他の送信中の反映を巻き戻さないため）。
+        else if (res.board && trustWholeBoard) render(res.board);
+        // busy・error は board を運ばない。それでも描き直し、送信中の印を外してドラッグできるようにする。
+        else render(board);
         // 競合だけは基準を進める。検証エラー等で進めると、次の保存が他の人の
         // 変更を一度も見せないまま黙って上書きしてしまう。
         if (mine && id && res.reason === 'conflict') syncPanelExpectedUpdatedAt(id);
@@ -1378,8 +1394,9 @@ function deletePbi() {
   var title = document.getElementById('f-title').value;
   var expectedUpdatedAt = panelState.expectedUpdatedAt;
   // 失敗したときにこの1枚だけを元へ戻すため、消す前の位置を控えておく。
-  var originalCard = findCard(board, id);
-  var originalStatus = columnStatusOf(board, id);
+  var restore = { card: findCard(board, id), status: columnStatusOf(board, id) };
+  deleteRestore[id] = restore;
+  var forget = function () { if (deleteRestore[id] === restore) delete deleteRestore[id]; };
 
   setPanelBusy(true);
   pendingIds[id] = true;
@@ -1391,6 +1408,7 @@ function deletePbi() {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete pendingIds[id];
+      forget();
       inflight--;
       var trustWholeBoard = settleOverlap();
       var mine = (seq === panelSeq);
@@ -1404,9 +1422,9 @@ function deletePbi() {
       } else {
         if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
         // パネルを開いたままの間にこのカードが board から消えていることがある
-        // （別の応答が先に処理した等）。その場合 originalCard は null になるので、
+        // （別の応答が先に処理した等）。その場合 restore.card は null になるので、
         // 存在しないカードを元に戻そうとして例外にしない。
-        else if (originalCard) render(boardWithCardUpserted(board, originalCard, originalStatus));
+        else if (restore.card) render(boardWithCardUpserted(board, restore.card, restore.status));
         else render(board);
         // 保存と同じく、競合のあとは基準を進めないと二度と削除できない。
         if (mine && res.reason === 'conflict') syncPanelExpectedUpdatedAt(id);
@@ -1417,9 +1435,10 @@ function deletePbi() {
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
+      forget();
       inflight--;
       settleOverlap();
-      if (originalCard) render(boardWithCardUpserted(board, originalCard, originalStatus));
+      if (restore.card) render(boardWithCardUpserted(board, restore.card, restore.status));
       else render(board);
       var mine = (seq === panelSeq);
       if (mine) {
@@ -2873,12 +2892,14 @@ function move(id, newStatus) {
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
+        retargetDeleteRestore(id, res.board, newStatus, originalStatus);
         render(applyServerBoard(res.board, id, trustWholeBoard));
         setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
         afterHistoryWrite(res, id, msgMark);
       } else {
         // res.board があれば競合等でサーバが返した最新の内容、無ければ
         // 今の画面からこのカードだけを元の列へ戻す。
+        retargetDeleteRestore(id, res.board, newStatus, originalStatus);
         render(res.board
           ? applyServerBoard(res.board, id, trustWholeBoard)
           : rollbackCard(id, newStatus, originalStatus));
@@ -2889,6 +2910,7 @@ function move(id, newStatus) {
       delete pendingIds[id];
       inflight--;
       settleOverlap();
+      retargetDeleteRestore(id, null, newStatus, originalStatus);
       render(rollbackCard(id, newStatus, originalStatus));
       setMessage('更新に失敗しました: ' + err.message, 'error');
     })

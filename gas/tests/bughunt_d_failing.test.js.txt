@@ -89,36 +89,6 @@ test('[D-1] 盤面: 作成の応答が遅れて届くと、その後に移して
   assert.equal(statusOf(h.screen(), 'PBI-005'), 'Review', '確定した移動が、遅れて届いた作成の応答で巻き戻った');
 });
 
-// --- 2. 盤面の後始末の漏れ ------------------------------------------------------------
-
-test('[D-2] パネルの保存が busy（board: null）で返ると、カードに送信中の印が残り、ドラッグできないままになる', () => {
-  const w = boot();
-  const h = w.h;
-  h.openCard('PBI-004');
-  h.setValue('f-title', 'renamed');
-  h.click('panel-save');
-  const n = w.pendingNs()[0];
-  w.process(n, 'busy');
-  w.deliver(n);
-  const card = W.collect(w.el('board'), (e) => e.dataset && e.dataset.id === 'PBI-004')[0];
-  assert.doesNotMatch(h.cardClassOf('PBI-004'), /\bpending\b/, '送信が終わったのに送信中の印が残っている');
-  assert.equal(card.draggable, true, '送信が終わったのにドラッグできない');
-});
-
-test('[D-3] パネルを開いたままカードを移し、続けて削除し、両方が通信の失敗で（移動→削除の順に）返ると、カードが失敗した移動先に残る', () => {
-  const w = boot();
-  const h = w.h;
-  h.openCard('PBI-003');                   // In Progress
-  h.drag('PBI-003', 'New');
-  const move = w.pendingNs()[0];
-  h.click('panel-delete');
-  const del = w.pendingNs()[1];
-  w.deliver(move);                         // 未処理のまま失敗
-  w.deliver(del);
-  assert.equal(statusOf(W.trueBoard(w.server), 'PBI-003'), 'In Progress');
-  assert.equal(statusOf(h.screen(), 'PBI-003'), 'In Progress', '両方失敗したのに、移動先の列に出ている');
-});
-
 // --- 3. 「完了する」の通知が、別の経路で完了した後も残る ------------------------------------
 
 function partialResolve(w, id) {

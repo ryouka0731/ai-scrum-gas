@@ -194,3 +194,37 @@ test('C-1: 解決が途中で止まり、そのまま「解決済として完了
   const entries = plain(h.ctx.apiGetHistory('IMP-002')).entries;
   assert.deepEqual(entries.map((e) => e.action), ['resolve']);
 });
+
+// ---- D: 応答の順序・後始末（実サーバ ＋ 実クライアントの世界で再現する） ----
+const W = require('./bughunt_d_world.js');
+const F = require('./bughunt_d_fuzzer.js');
+function boot() { const w = W.createWorld(); w.boot(); return w; }
+const statusOf = (screen, id) => { const c = screen.find((x) => x.cards.includes(id)); return c ? c.status : null; };
+
+test('[D-2] パネルの保存が busy（board: null）で返っても、カードの送信中の印が外れ、ドラッグできる', () => {
+  const w = boot();
+  const h = w.h;
+  h.openCard('PBI-004');
+  h.setValue('f-title', 'renamed');
+  h.click('panel-save');
+  const n = w.pendingNs()[0];
+  w.process(n, 'busy');
+  w.deliver(n);
+  const card = W.collect(w.el('board'), (e) => e.dataset && e.dataset.id === 'PBI-004')[0];
+  assert.doesNotMatch(h.cardClassOf('PBI-004'), /\bpending\b/, '送信が終わったのに送信中の印が残っている');
+  assert.equal(card.draggable, true, '送信が終わったのにドラッグできない');
+});
+
+test('[D-3] パネルを開いたままカードを移し、続けて削除し、両方が通信の失敗で（移動→削除の順に）返ると、カードは移す前の列に戻る', () => {
+  const w = boot();
+  const h = w.h;
+  h.openCard('PBI-003');                   // In Progress
+  h.drag('PBI-003', 'New');
+  const move = w.pendingNs()[0];
+  h.click('panel-delete');
+  const del = w.pendingNs()[1];
+  w.deliver(move);                         // 未処理のまま失敗
+  w.deliver(del);
+  assert.equal(statusOf(W.trueBoard(w.server), 'PBI-003'), 'In Progress');
+  assert.equal(statusOf(h.screen(), 'PBI-003'), 'In Progress', '両方失敗したのに、移動先の列に出ている');
+});
