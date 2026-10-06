@@ -81,3 +81,11 @@ test('戻し: 2000字超と日時が空のものは invalid（日時の形は問
   assert.equal(c.restoreComment([], row({ created_at: ' ' })).reason, 'invalid');
   assert.equal(c.restoreComment([], row({ created_at: '2026-10-06' })).ok, true);
 });
+
+test('restoreComment: 戻す行の id は、検査と同じく前後の空白を落として保存する', () => {
+  const r = c.restoreComment([], row({ id: ' ' + row().id + ' ' }));
+  assert.equal(r.ok, true);
+  assert.equal(r.rows[0].id, row().id);
+  const again = c.restoreComment(r.rows, row({ id: row().id + ' ' }));
+  assert.equal(again.unchanged, true, '空白違いの同じ id を2回足した');
+});

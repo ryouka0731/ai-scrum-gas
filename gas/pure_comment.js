@@ -60,7 +60,8 @@ function deleteComment(rows, id, me) {
 function restoreComment(rows, row) {
   const src = cmtPick_(row);
   src.target_id = src.target_id.trim();
-  if (!row || !src.id.trim() || !validateComment(src.target_id, src.body).ok || !src.created_at.trim()) {
+  src.id = src.id.trim();   // 検査と同じ形で保存する（空白付きの id を残すと、照合や削除で別の id になる）
+  if (!row || !src.id || !validateComment(src.target_id, src.body).ok || !src.created_at.trim()) {
     return { ok: false, reason: 'invalid' };
   }
   const list = (rows || []).map(cmtPick_);
