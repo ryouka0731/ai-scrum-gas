@@ -44,7 +44,15 @@ function realSprints(velocityRows) {
 
 /** ロードマップシート用の2次元配列と、帯を塗るセル位置を返す。 */
 function buildRoadmapGrid(rows, velocityRows) {
-  const sprints = realSprints(velocityRows);
+  // 表記違いの同一スプリントは最初の1行だけ残す（■ と帯の塗り位置を一致させる）。
+  const seen = Object.create(null);   // 'constructor' 等のスプリント名を既に見たと取り違えない
+  const sprints = realSprints(velocityRows).filter(function (v) {
+    const k = normalizeSprint(v.sprint);
+    if (k === '') return true;
+    if (seen[k]) return false;
+    seen[k] = true;
+    return true;
+  });
   const header = ['ID', 'タイトル'].concat(sprints.map(function (v) {
     return String(v.sprint).trim() + '\n' + String(v.sprint_start).trim() + '〜' + String(v.sprint_end).trim();
   }));

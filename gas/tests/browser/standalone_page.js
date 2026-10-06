@@ -63,13 +63,13 @@ function stubScript(delayMs) {
     + '          } else if (m === "apiGetHistory") {\n'
     + '            ok(String(args[0]) === HISTORY_PBI ? HISTORY : { ok: true, entries: [] });\n'
     + '          } else if (m === "apiDeletePbi") {\n'
-    // 本物の apiDeletePbi は「消した行そのもの」を返す（取り消しに使う）。ここで
+    // 本物の apiDeletePbi は「消した行そのもの」（表示用）と取り消しの鍵を返す。ここで
     // null を返すと、「取り消す」を押した先が必ず restorePbi の
     // 「取り消せませんでした」の枝になる。落ちはしないが、取り消しを試す検査が
     // 「押せた」だけで通る空振りになるため、見本でも行を返す。
     + '            var removed = null;\n'
     + '            ROWS.forEach(function (r) { if (String(r.id) === String(args[0])) removed = r; });\n'
-    + '            ok({ ok: true, board: RESPONSES.board.view, id: null, removed: removed });\n'
+    + '            ok({ ok: true, board: RESPONSES.board.view, id: null, undoToken: "tok-" + args[0], removed: removed });\n'
     + '          } else {\n'
     + '            ok({ ok: true, board: RESPONSES.board.view, id: null, removed: null });\n'
     + '          }\n'

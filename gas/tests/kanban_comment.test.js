@@ -123,6 +123,22 @@ test('削除は apiDeleteComment を呼び、成功で通知が出る。取り�
   assert.throws(function () { h.clickCommentDelete('panel-comments', 'CMT-00000001'); }, /削除/);
 });
 
+test('空白付き ID のコメントを取り消すと、サーバが揃えた行で重ね、一時的にも二重に出さない', () => {
+  const spaced = Object.assign({}, C2, { id: ' CMT-00000002 ' });
+  const h = ready({ 'PBI-001': [C1, spaced] });
+  h.openCard('PBI-001');
+  h.clickCommentDelete('panel-comments', ' CMT-00000002 ');
+  const removed = { id: spaced.id, target_id: C2.target_id, author: C2.author, created_at: C2.created_at, body: C2.body };
+  latest(h).handlers.success({ ok: true, removed: removed, comments: { 'PBI-001': [C1] } });
+  h.click('toast-undo');
+  const r = latest(h);
+  assert.equal(r.method, 'apiRestoreComment');
+  const restored = Object.assign({}, removed, { id: 'CMT-00000002' });
+  r.handlers.success({ ok: true, restored: restored, comments: { 'PBI-001': [C1, Object.assign({}, C2)] } });
+  assert.deepEqual(h.commentsIn('panel-comments').map(function (x) { return x.id; }), ['CMT-00000001', 'CMT-00000002'],
+    '送った行（空白付き）とサーバの行が二重に出た');
+});
+
 test('書き込みが2つ飛び、新しい応答→古い応答の順に届くと、新しい方の一覧のまま', () => {
   const h = ready();
   h.openCard('PBI-001');

@@ -51,6 +51,31 @@ function gitOutput(args) {
   return out || null;
 }
 
+/**
+ * 配布対象（PUBLISH_ITEMS）のうち git で追跡されているファイルの相対パス集合を返す。
+ * 未追跡・無視されたファイル（settings.local.json、worktrees、.DS_Store 等）を配らないため。
+ * git が使えない・リポジトリでないときは null。
+ */
+function trackedFiles() {
+  const result = spawnSync('git', ['ls-files', '-z', '--'].concat(PUBLISH_ITEMS), { cwd: ROOT_DIR, encoding: 'utf8' });
+  if (result.error || result.status !== 0) return null;
+  const set = new Set();
+  String(result.stdout || '').split('\0').forEach(function (f) { if (f) set.add(f); });
+  return set;
+}
+
+/**
+ * 配布対象のうち、未追跡で .gitignore 等にも無視されていないファイルの相対パス（並び順）を返す。
+ * これらは配らない（trackedFiles）。git add を忘れた新しい成果物に気づけるよう、1件ずつ知らせるために使う。
+ * 取得できなければ空配列（配布そのものは止めない）。
+ */
+function untrackedFiles() {
+  const result = spawnSync('git', ['ls-files', '-z', '--others', '--exclude-standard', '--'].concat(PUBLISH_ITEMS),
+    { cwd: ROOT_DIR, encoding: 'utf8' });
+  if (result.error || result.status !== 0) return [];
+  return String(result.stdout || '').split('\0').filter(Boolean).sort();
+}
+
 /** 現在時刻を YYYY-MM-DD HH:mm:ss で返す。 */
 function nowText() {
   const d = new Date();
@@ -72,8 +97,19 @@ function nowText() {
  *
  * 戻り値: このコール（src 配下全体）分の集計 { copiedCount, skippedLinkCount }。
  */
-function copyRecursive(src, dest, relPath) {
+function copyRecursive(src, dest, relPath, tracked) {
   const stat = fs.lstatSync(src);
+  // tracked（追跡ファイルの集合）が渡されたときは、追跡されていないものを配らない。
+  if (tracked && relPath !== undefined) {
+    if (stat.isDirectory()) {
+      const prefix = relPath + '/';
+      let any = false;
+      tracked.forEach(function (f) { if (f.indexOf(prefix) === 0) any = true; });
+      if (!any) return { copiedCount: 0, skippedLinkCount: 0 };
+    } else if (!tracked.has(relPath)) {
+      return { copiedCount: 0, skippedLinkCount: 0 };
+    }
+  }
   if (stat.isSymbolicLink()) {
     console.warn('シンボリックリンクのためコピーをスキップしました: ' + src);
     return { copiedCount: 0, skippedLinkCount: 1 };
@@ -92,7 +128,7 @@ function copyRecursive(src, dest, relPath) {
     let skippedLinkCount = 0;
     fs.readdirSync(src).forEach(function (name) {
       const childRel = relPath === undefined ? undefined : relPath + '/' + name;
-      const result = copyRecursive(path.join(src, name), path.join(dest, name), childRel);
+      const result = copyRecursive(path.join(src, name), path.join(dest, name), childRel, tracked);
       copiedCount += result.copiedCount;
       skippedLinkCount += result.skippedLinkCount;
     });
@@ -100,15 +136,16 @@ function copyRecursive(src, dest, relPath) {
   }
   // 配布先は existsSync ではなく lstat で見る。existsSync はリンクを辿るため、配布先に
   // 置かれたリンク（壊れたリンクも含む）を通して、配布フォルダの外のファイルを読み書きしてしまう。
+  // 書き戻さないファイルも同じ。リンクを辿って chmod / copyFileSync すると、外のファイルの権限を変えて上書きする。
+  // （書き戻さないファイルの配布先がフォルダ等なら、従来どおり copyFileSync の失敗として報告する）
   let destStat = null;
-  if (relPath !== undefined && KEEP_IF_EXISTS.indexOf(relPath) !== -1) {
-    try { destStat = fs.lstatSync(dest); } catch (e) { destStat = null; }
-  }
-  if (destStat && !destStat.isFile()) {
-    console.warn(relPath + ' は配布先が通常のファイルではないため、触らずに残しました: ' + dest);
+  try { destStat = fs.lstatSync(dest); } catch (e) { destStat = null; }
+  const keep = relPath !== undefined && KEEP_IF_EXISTS.indexOf(relPath) !== -1;
+  if (destStat && (destStat.isSymbolicLink() || (keep && !destStat.isFile()))) {
+    console.warn((relPath || dest) + ' は配布先が通常のファイルではないため、触らずに残しました: ' + dest);
     return { copiedCount: 0, skippedLinkCount: 1 };
   }
-  if (destStat) {
+  if (destStat && keep) {
     // 空（0 バイト・空白のみ）のファイルは残す価値がない。雛形で置き直す。
     if (fs.readFileSync(dest, 'utf8').trim() !== '') {
       console.log(relPath + ' は配布先の内容を残しました（Web アプリが書き戻すファイルのため）');
@@ -117,6 +154,12 @@ function copyRecursive(src, dest, relPath) {
     console.log(relPath + ' は空だったので雛形で置き直しました');
   }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
+  // 読み取り専用のファイルは、コピーで配布先も読み取り専用になり次回の上書きが EACCES で失敗する。
+  // 先に書き込み可にする。失敗しても copyFileSync のエラーで、対象ファイル付きで報告される。
+  // destStat は lstat で通常のファイルと確かめたもの（リンクではない）なので、chmod はリンクを辿らない。
+  if (destStat && destStat.isFile()) {
+    try { fs.chmodSync(dest, destStat.mode | 0o200); } catch (e) { /* 失敗は copyFileSync のエラーで報告される */ }
+  }
   fs.copyFileSync(src, dest);
   return { copiedCount: 1, skippedLinkCount: 0 };
 }
@@ -135,10 +178,21 @@ function main(destArg) {
     process.exit(1);
   }
 
+  const tracked = trackedFiles();
+  if (!tracked) {
+    console.error('git の追跡ファイル一覧を取得できません。git リポジトリ内で実行してください（未追跡・個人用ファイルを配らないため）。');
+    process.exit(1);
+  }
+
   let copiedCount = 0;
   let skippedLinkCount = 0;
+  // 未追跡のファイルは配らない。黙って落とすと、git add を忘れた成果物が配られないまま「完了」に見える。
+  const untracked = untrackedFiles();
 
   console.log('==> 配布します: ' + DEST_DIR);
+  untracked.forEach(function (f) {
+    console.warn('git で追跡されていないため配布しません（git add を忘れていませんか）: ' + f);
+  });
   try {
     PUBLISH_ITEMS.forEach(function (item) {
       const src = path.join(ROOT_DIR, item);
@@ -146,7 +200,7 @@ function main(destArg) {
         console.error('リポジトリに ' + item + ' が見つかりません。スキップします。');
         return;
       }
-      const result = copyRecursive(src, path.join(DEST_DIR, item), item);
+      const result = copyRecursive(src, path.join(DEST_DIR, item), item, tracked);
       copiedCount += result.copiedCount;
       skippedLinkCount += result.skippedLinkCount;
     });
@@ -168,7 +222,8 @@ function main(destArg) {
   fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n', 'utf8');
 
   console.log('==> 完了しました（' + copiedCount + ' ファイルをコピー'
-    + (skippedLinkCount > 0 ? '、' + skippedLinkCount + ' 件のリンク・通常でないファイルをスキップ' : '') + '）');
+    + (skippedLinkCount > 0 ? '、' + skippedLinkCount + ' 件のリンク・通常でないファイルをスキップ' : '')
+    + (untracked.length > 0 ? '、' + untracked.length + ' 件の未追跡ファイルを配布せず' : '') + '）');
   console.log('配布記録: ' + recordPath + '（' + record.publishedAt + ' / ' + record.commit + ' / ' + record.branch + '）');
 }
 

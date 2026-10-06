@@ -92,7 +92,7 @@ test('削除の応答が、送信中の別カードの移動を巻き戻さな�
   const del = h.calls[h.calls.length - 1];
   assert.equal(del.method, 'apiDeletePbi');
 
-  del.handlers.success({ ok: true, id: null, removed: { id: 'PBI-002', title: 'B' },
+  del.handlers.success({ ok: true, id: null, undoToken: 'tok-del', removed: { id: 'PBI-002', title: 'B' },
     board: h.boardOf(cols({ New: [CARD_A] })) });
 
   const screen = h.screen();
@@ -115,7 +115,7 @@ test('削除のあと通知から取り消せ、元の ID のまま戻る', () =
   h.openCard('PBI-002');
   h.click('panel-delete');
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
-  h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null, removed: removed,
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null, undoToken: 'tok-del', removed: removed,
     board: h.boardOf(cols({ New: [CARD_A] })) });
 
   assert.equal(h.hiddenOf('toast'), false, '取り消しの通知が出ていない');
@@ -126,8 +126,46 @@ test('削除のあと通知から取り消せ、元の ID のまま戻る', () =
   assert.equal(h.calls.length, before + 1);
   const restore = h.calls[before];
   assert.equal(restore.method, 'apiRestorePbi', 'apiCreatePbi では ID が変わってしまう');
-  assert.equal(restore.args[0].id, 'PBI-002');
-  assert.equal(restore.args[0].created_at, '2026-09-01', '作成日が失われている');
+  // 送るのは鍵だけ。戻す行（元の ID・作成日）はサーバが預かっている。
+  assert.deepEqual(restore.args, ['tok-del'], '削除の応答の鍵ではなく行の中身を送っている');
+  assert.ok(h.textOf('message').indexOf('PBI-002') !== -1, '戻す ID が表示されていない');
+});
+
+test('削除の応答に鍵（undoToken）が無ければ、押しても失敗する取り消しの通知は出さない', () => {
+  const h = ready();
+  h.openCard('PBI-002');
+  h.click('panel-delete');
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null, undoToken: null,
+    removed: { id: 'PBI-002', title: 'B' }, board: h.boardOf(cols({ New: [CARD_A] })) });
+  assert.equal(h.hiddenOf('toast'), true, '取り消せない通知が出ている');
+  assert.ok(h.textOf('message').indexOf('取り消しはできません') !== -1, h.textOf('message'));
+});
+
+test('取り消しで戻したカードは、取り消しより前に出した書き込みの遅れた応答（そのカードの無い写し）で消えない', () => {
+  const h = ready();
+  h.openCard('PBI-002');
+  h.drag('PBI-002', 'Ready');                       // 移動 M（送信中のまま）
+  const move = h.calls[h.calls.length - 1];
+  assert.equal(move.method, 'apiUpdateStatus');
+  h.click('panel-delete');                          // 削除 D（サーバは M より先に処理した）
+  const del = h.calls[h.calls.length - 1];
+  assert.equal(del.method, 'apiDeletePbi');
+  del.handlers.success({ ok: true, id: null, undoToken: 'tok-del', removed: { id: 'PBI-002', title: 'B' },
+    board: h.boardOf(cols({ New: [CARD_A] })) });
+  h.click('toast-undo');                            // 取り消し R
+  const restore = h.calls[h.calls.length - 1];
+  assert.equal(restore.method, 'apiRestorePbi');
+  restore.handlers.success({ ok: true, id: null, board: h.boardOf(cols({
+    New: [CARD_A, { id: 'PBI-002', title: 'B', updated_at: 'T9' }] })) });
+  assert.ok(h.screen()[0].cards.indexOf('PBI-002') !== -1, '前提: 戻した');
+  // M は D の後に処理され not_found。運ぶ写しには PBI-002 が無い（R より前の写し）。
+  move.handlers.success({ ok: false, reason: 'not_found', message: 'この PBI が見つかりません。最新の内容に更新しました。',
+    board: h.boardOf(cols({ New: [CARD_A] })) });
+  assert.ok(h.screen()[0].cards.indexOf('PBI-002') !== -1, '戻したカードが古い応答で画面から消えた');
+  // 取り消しより後の、信じてよい読み込みに無ければ消える（守り続けない）。
+  h.click('reload');
+  h.calls[h.calls.length - 1].handlers.success({ ok: true, view: h.boardOf(cols({ New: [CARD_A] })), sprintChoices: CHOICES });
+  assert.equal(h.screen()[0].cards.indexOf('PBI-002'), -1, '読み込みの写しより戻したカードを優先し続けた');
 });
 
 test('検証エラーではパネルが閉じず、入力が残る', () => {
@@ -396,7 +434,7 @@ test('取り消しの応答が、送信中の別カードの移動を巻き戻�
 
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
   h.calls[h.calls.length - 1].handlers.success({
-    ok: true, id: null, removed: removed, board: h.boardOf(cols({ New: [CARD_A] }))
+    ok: true, id: null, undoToken: 'tok-del', removed: removed, board: h.boardOf(cols({ New: [CARD_A] }))
   });
 
   h.click('toast-undo');
@@ -418,7 +456,7 @@ test('取り消しの失敗応答が、送信中の別カードの移動を巻�
 
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
   h.calls[h.calls.length - 1].handlers.success({
-    ok: true, id: null, removed: removed, board: h.boardOf(cols({ New: [CARD_A] }))
+    ok: true, id: null, undoToken: 'tok-del', removed: removed, board: h.boardOf(cols({ New: [CARD_A] }))
   });
 
   h.click('toast-undo');
@@ -438,7 +476,7 @@ test('取り消し自身が重なりの起点になる（削除の応答で一�
   h.click('panel-delete');
   const removed = { id: 'PBI-002', title: 'B', created_at: '2026-09-01', updated_at: 'T1' };
   h.calls[h.calls.length - 1].handlers.success({
-    ok: true, id: null, removed: removed, board: h.boardOf(cols({ New: [CARD_A] }))
+    ok: true, id: null, undoToken: 'tok-del', removed: removed, board: h.boardOf(cols({ New: [CARD_A] }))
   });
   assert.equal(h.sandbox.inflight, 0, '重なりが解けた状態から始めたい');
   assert.equal(h.sandbox.overlapped, false);
@@ -507,7 +545,7 @@ const FLOWS = {
     method: 'apiDeletePbi',
     send: (h) => { h.openCard('PBI-002'); h.click('panel-delete'); },
     outcomes: {
-      '成功': (h) => ({ ok: true, id: null, removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) }),
+      '成功': (h) => ({ ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) }),
       '競合': (h) => ({ ok: false, reason: 'conflict', message: CONFLICT_MSG, board: h.boardOf(INITIAL) }),
       '不在': (h) => ({ ok: false, reason: 'not_found', message: 'この PBI が見つかりません。最新の内容に更新しました。',
         board: h.boardOf(cols({ New: [CARD_A] })) }),
@@ -520,7 +558,7 @@ const FLOWS = {
       h.openCard('PBI-002');
       h.click('panel-delete');
       h.calls[h.calls.length - 1].handlers.success(
-        { ok: true, id: null, removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
+        { ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
       h.click('toast-undo');
     },
     outcomes: {
@@ -654,7 +692,7 @@ test('取り消しの送信中に最新にしても、戻ってきたカード�
   h.openCard('PBI-002');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success(
-    { ok: true, id: null, removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
+    { ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
 
   h.click('toast-undo');                 // 取り消しは送信中のまま置く
   assert.equal(h.calls[h.calls.length - 1].method, 'apiRestorePbi');
@@ -690,7 +728,7 @@ test('削除が成功するとパネルが閉じる', () => {
   const h = ready();
   h.openCard('PBI-002');
   h.click('panel-delete');
-  h.calls[0].handlers.success({ ok: true, id: null, removed: REMOVED,
+  h.calls[0].handlers.success({ ok: true, id: null, undoToken: 'tok-del', removed: REMOVED,
     board: h.boardOf(cols({ New: [CARD_A] })) });
   assert.equal(h.hiddenOf('panel'), true, '削除後もパネルが開いたまま');
 });
@@ -748,7 +786,7 @@ test('送信中に別のカードを開いていると、削除の応答でそ�
   h.openCard('PBI-002');
   h.setValue('f-title', '書きかけ');
   del.handlers.success({ ok: true, id: null,
-    removed: { id: 'PBI-001', title: 'A', created_at: '2026-09-01', updated_at: 'T1' },
+    undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A', created_at: '2026-09-01', updated_at: 'T1' },
     board: h.boardOf(cols({ New: [CARD_B] })) });
 
   assert.equal(h.hiddenOf('panel'), false, '別のカードのパネルが閉じられた');
@@ -793,7 +831,7 @@ function deleted() {
   h.openCard('PBI-002');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success(
-    { ok: true, id: null, removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
+    { ok: true, id: null, undoToken: 'tok-del', removed: REMOVED, board: h.boardOf(cols({ New: [CARD_A] })) });
   return h;
 }
 
@@ -823,7 +861,7 @@ test('続けて削除すると、前の取り消しがもう押せないこと�
   h.openCard('PBI-001');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success({ ok: true, id: null,
-    removed: { id: 'PBI-001', title: 'A', created_at: '2026-09-01', updated_at: 'T1' },
+    undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A', created_at: '2026-09-01', updated_at: 'T1' },
     board: h.boardOf(cols({})) });
 
   assert.ok(h.textOf('toast-text').indexOf('PBI-001') !== -1, '新しい通知になっていない');

@@ -12,6 +12,31 @@
  * updated_at は常に直前の値より大きくする（単調増加の担保）。
  */
 
+if (typeof require !== 'undefined' && typeof isPlaceholderRow === 'undefined') {
+  var { isPlaceholderRow } = require('./pure_filter.js');
+}
+
+/**
+ * id の行の位置を返す（無ければ -1）。雛形でない最初の行を優先し、無ければ雛形も含めた
+ * 最初の行にする。
+ *
+ * 配布の雛形 PBI-001 と同じ ID の本物の行があると、最初の一致だけを見る探し方では、
+ * 盤面に出ている本物の行ではなく雛形を照合してしまい、永久に conflict になる。
+ * 同じ ID の本物の行が複数あるときも、更新・削除・削除した行の返却がすべて同じ行
+ * （最初の本物の行）を指すよう、探し方をここに1つにまとめる。
+ */
+function rowIndexById_(rows, id) {
+  const key = String(id || '').trim();
+  if (!key) return -1;
+  let first = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i].id || '').trim() !== key) continue;
+    if (!isPlaceholderRow(rows[i])) return i;
+    if (first === -1) first = i;
+  }
+  return first;
+}
+
 /**
  * yyyy-MM-dd HH:mm:ss 形式の文字列を1秒進める。解析できなければ null を返す。
  * タイムゾーンには依存しない（文字列の各要素を UTC 基準の Date として計算し、
@@ -68,10 +93,7 @@ function applyRowUpdate(rows, id, changes, expectedUpdatedAt, nowText) {
   if (!String(id || '').trim()) return { ok: false, reason: 'not_found', current: null };
 
   const list = rows || [];
-  let index = -1;
-  for (let i = 0; i < list.length; i++) {
-    if (String(list[i].id || '').trim() === String(id || '').trim()) { index = i; break; }
-  }
+  const index = rowIndexById_(list, id);
   if (index === -1) return { ok: false, reason: 'not_found', current: null };
 
   const current = list[index];
@@ -124,16 +146,11 @@ function appendRow(rows, id, fields, allFields, nowText) {
 
 /**
  * 行を1つ消す。updated_at を照合し、見ていない変更がある行は消させない。
+ * 成功: { ok: true, rows, removed }（removed は実際に消した行の写し。取り消しに使う）
  */
 function deleteRow(rows, id, expectedUpdatedAt) {
   const list = rows || [];
-  const key = String(id || '').trim();
-  if (!key) return { ok: false, reason: 'not_found', current: null };
-
-  let index = -1;
-  for (let i = 0; i < list.length; i++) {
-    if (String(list[i].id || '').trim() === key) { index = i; break; }
-  }
+  const index = rowIndexById_(list, id);
   if (index === -1) return { ok: false, reason: 'not_found', current: null };
 
   const current = list[index];
@@ -142,7 +159,7 @@ function deleteRow(rows, id, expectedUpdatedAt) {
   }
   const next = [];
   list.forEach(function (row, i) { if (i !== index) next.push(copyRow_(row)); });
-  return { ok: true, rows: next };
+  return { ok: true, rows: next, removed: copyRow_(current) };
 }
 
 /**
@@ -151,18 +168,27 @@ function deleteRow(rows, id, expectedUpdatedAt) {
  * 取り消しで新規作成を使うと ID が変わり、ローカルの Claude Code が残した参照が
  * 切れる。updated_at だけは戻した時刻にする（戻したことも変更であり、他の人の
  * 画面から見れば「見ていない変更」になる必要があるため）。
+ *
+ * 本物の行を戻すとき、同じ ID の雛形の行は重複とみなさない（雛形の陰にある本物の行を
+ * 消したら戻せなくなるため）。
+ *
+ * opts.allowSameId が true のときは、同じ ID の行があっても戻す（中身が同じでも）。
+ * もともと同じ ID の行が複数あり、その1つを消したときの取り消しに使う（削除前の状態に
+ * 戻すだけ）。二重に戻さないことは呼び出し側が保証する（apiRestorePbi は一度しか使えない
+ * 鍵で預けた行を戻す）。
  */
-function restoreRow(rows, row, allFields, nowText) {
+function restoreRow(rows, row, allFields, nowText, opts) {
   const list = rows || [];
   const src = row || {};
   const key = String(src.id || '').trim();
+  const allowSameId = !!(opts && opts.allowSameId);
   // id が無いのは「既に存在する」のではなく不正な入力である。duplicate_id を
   // 返すと「この PBI は既に存在します」と出てしまい、実際の原因と食い違う。
   if (!key) return { ok: false, reason: 'invalid', current: null };
-  for (let i = 0; i < list.length; i++) {
-    if (String(list[i].id || '').trim() === key) {
-      return { ok: false, reason: 'duplicate_id', current: list[i] };
-    }
+  const srcIsReal = !isPlaceholderRow(src);
+  for (let i = 0; i < list.length && !allowSameId; i++) {
+    if (String(list[i].id || '').trim() !== key || (srcIsReal && isPlaceholderRow(list[i]))) continue;
+    return { ok: false, reason: 'duplicate_id', current: list[i] };
   }
   const back = {};
   (allFields || []).forEach(function (f) { back[f] = ''; });

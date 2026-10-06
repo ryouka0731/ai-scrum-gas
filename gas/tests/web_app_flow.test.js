@@ -95,6 +95,11 @@ function createTestContext(files, opts) {
   };
 
   const props = { SCRUM_FOLDER_ID: 'fake-folder-id' };
+  // CacheService（取り消しの鍵の預け先）。opts.failCachePut: put を常に失敗させる。
+  // 値は { value, expiresAt }。期限（expirationInSeconds、省略は GAS と同じ 600 秒）は clock.now（秒）で見る。
+  // テストは返り値の clock.now を進めて期限切れを再現する。
+  const cache = {};
+  const clock = { now: 0 };
   const context = {
     console: console,
     DriveApp: {
@@ -113,6 +118,23 @@ function createTestContext(files, opts) {
             if (opts.failSetProperty) throw new Error('setProperty はテストで意図的に失敗させています');
             props[key] = value;
           },
+        };
+      },
+    },
+    CacheService: {
+      getScriptCache: function () {
+        return {
+          get: function (k) {
+            if (!Object.prototype.hasOwnProperty.call(cache, k)) return null;
+            if (clock.now >= cache[k].expiresAt) { delete cache[k]; return null; }
+            return cache[k].value;
+          },
+          put: function (k, v, expirationInSeconds) {
+            if (opts.failCachePut) throw new Error('put はテストで意図的に失敗させています');
+            const ttl = expirationInSeconds === undefined ? 600 : Number(expirationInSeconds);
+            cache[k] = { value: String(v), expiresAt: clock.now + ttl };
+          },
+          remove: function (k) { delete cache[k]; },
         };
       },
     },
@@ -137,7 +159,17 @@ function createTestContext(files, opts) {
   gasFileNames().forEach(function (name) {
     vm.runInContext(fs.readFileSync(path.join(GAS_DIR, name), 'utf8'), context, { filename: name });
   });
-  return { ctx: context, files: files, props: props };
+  return { ctx: context, files: files, props: props, cache: cache, clock: clock };
+}
+
+/**
+ * 取り消し用の預かり（CacheService）へ行を直接置き、その鍵を返す。キャッシュの中身が
+ * 想定外になった場合（預けた後に記帳や CSV が変わった・改ざん）でも、復元の検証が効くことを見る。
+ */
+function holdRow(cache, row, shared) {
+  const token = 'held-' + Object.keys(cache).length;
+  cache['undo:' + token] = { value: JSON.stringify({ row: row, shared: !!shared }), expiresAt: Infinity };
+  return token;
 }
 
 // kanban.html の readForm() が実際に送る形（作成は常に全項目）に合わせる。
@@ -169,7 +201,7 @@ test('最大の PBI を削除→作成→取り消し、が成功する（削除
   assert.equal(c4.id, 'PBI-004', 'PBI-003 が再利用された（最大 ID 削除後のバグ）');
 
   // 「取り消す」を押す。PBI-004 が既に存在していても PBI-003 は空いているので復元できる。
-  const restore = ctx.apiRestorePbi(del.removed);
+  const restore = ctx.apiRestorePbi(del.undoToken);
   assert.equal(restore.ok, true, '取り消しが duplicate_id 等で失敗した: ' + JSON.stringify(restore));
 
   // vm コンテキストの配列は別レルムのオブジェクトのため、.map 等の連鎖は
@@ -212,23 +244,23 @@ test('完了バックログ（product_backlog_done.csv）にある最大 ID も�
   assert.equal(created.id, 'PBI-051', '完了バックログの最大 ID より後ろから採番されていない');
 });
 
-test('apiRestorePbi は PBI-\\d+ 形式でない id を拒否する', () => {
-  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+test('apiRestorePbi は預かった行の id が PBI-\\d+ 形式でなければ拒否する', () => {
+  const { ctx, cache } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
   const forms = ['', 'PBI-999999abc', 'DROP TABLE', '  ', 'PBI-'];
   forms.forEach(function (id) {
-    const res = ctx.apiRestorePbi({ id: id, title: 'x', status: 'New' });
+    const res = ctx.apiRestorePbi(holdRow(cache, { id: id, title: 'x', status: 'New' }));
     assert.equal(res.ok, false, 'id=' + JSON.stringify(id) + ' が通ってしまった');
     assert.equal(res.reason, 'invalid', 'id=' + JSON.stringify(id));
   });
 });
 
-test('apiRestorePbi はタイトルが空の行を拒否する', () => {
+test('apiRestorePbi は預かった行のタイトルが空なら拒否する', () => {
   // 空 CSV・記録なしのまま id だけで呼ぶと、title に到達する前に
   // isPbiIdWithinHighWater（採番の上限判定）で reason:'invalid' として拒否され、
   // title ガードを検査したことにならない（両者は reason が同じで区別できない）。
   // 上限を通過させるため、まず1件作って削除し、その removed の title だけを
-  // 空にして復元する。
-  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+  // 空にした行を預かりへ置いて復元する。
+  const { ctx, cache } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
   const created = ctx.apiCreatePbi(fullFields('あとで消す'));
   assert.equal(created.ok, true, JSON.stringify(created));
   const card = findCardInBoard(created.board, created.id);
@@ -236,7 +268,7 @@ test('apiRestorePbi はタイトルが空の行を拒否する', () => {
   assert.equal(del.ok, true, JSON.stringify(del));
 
   const removedWithoutTitle = Object.assign({}, del.removed, { title: '' });
-  const res = ctx.apiRestorePbi(removedWithoutTitle);
+  const res = ctx.apiRestorePbi(holdRow(cache, removedWithoutTitle));
   assert.equal(res.ok, false);
   assert.equal(res.reason, 'invalid');
   // reason だけでは上限判定との区別がつかないため、メッセージの内容まで検査する。
@@ -255,7 +287,7 @@ test('apiRestorePbi は検証を通った行を、元の id / created_at のま�
   const del = ctx.apiDeletePbi('PBI-007', '2026-09-05 10:00:00');
   assert.equal(del.ok, true, JSON.stringify(del));
 
-  const res = ctx.apiRestorePbi(del.removed);
+  const res = ctx.apiRestorePbi(del.undoToken);
   assert.equal(res.ok, true, JSON.stringify(res));
   const card = findCardInBoard(res.board, 'PBI-007');
   assert.ok(card, 'PBI-007 が board に無い');
@@ -289,13 +321,13 @@ test('apiRestorePbi は語彙外の status / priority / 非整数の size を持
   assert.ok(del.removed, '削除した行が返っていない');
 
   // 取り消し: 語彙外の priority / status、非整数の size があっても復元できる。
-  const restore = ctx.apiRestorePbi(del.removed);
+  const restore = ctx.apiRestorePbi(del.undoToken);
   assert.equal(restore.ok, true, '語彙外の値を理由に正当な取り消しが拒否された: ' + JSON.stringify(restore));
   assert.ok(findCardInBoard(restore.board, 'PBI-050'));
 });
 
-test('apiRestorePbi は今の最大値より大きい ID を拒否する（でっち上げによる採番汚染の防止）', () => {
-  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+test('apiRestorePbi は預かった行の ID が今の最大値より大きければ拒否する（採番汚染の防止）', () => {
+  const { ctx, cache } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
   const created = ctx.apiCreatePbi(fullFields('普通'));
   assert.equal(created.id, 'PBI-001');
 
@@ -303,7 +335,7 @@ test('apiRestorePbi は今の最大値より大きい ID を拒否する（で�
     id: 'PBI-999999', title: 'でっちあげ', status: 'New',
     created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
   };
-  const res = ctx.apiRestorePbi(fake);
+  const res = ctx.apiRestorePbi(holdRow(cache, fake));
   assert.equal(res.ok, false, 'でっち上げ ID の復元が通ってしまった');
   assert.equal(res.reason, 'invalid');
 
@@ -312,15 +344,106 @@ test('apiRestorePbi は今の最大値より大きい ID を拒否する（で�
   assert.equal(next.id, 'PBI-002', '拒否されたはずの復元が採番を汚染した: ' + next.id);
 });
 
-test('apiRestorePbi は PBI-000 を拒否する（採番は PBI-001 から始まる）', () => {
-  const { ctx } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
+test('apiRestorePbi は預かった行が PBI-000 なら拒否する（採番は PBI-001 から始まる）', () => {
+  const { ctx, cache } = createTestContext({ 'product_backlog.csv': headerOnlyCsv() });
   const fake = {
     id: 'PBI-000', title: 'ゼロ', status: 'New',
     created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00',
   };
-  const res = ctx.apiRestorePbi(fake);
+  const res = ctx.apiRestorePbi(holdRow(cache, fake));
   assert.equal(res.ok, false, 'PBI-000 の復元が通ってしまった');
   assert.equal(res.reason, 'invalid');
+});
+
+test('apiRestorePbi は鍵だけを受け取り、ブラウザが送る行の中身では戻さない（でっち上げ・知らない鍵は expired）', () => {
+  const csv = headerOnlyCsv() + csvRow({ id: 'PBI-001', title: '本物', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n' +
+    csvRow({ id: 'PBI-002', title: '残る', status: 'New',
+      created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n';
+  const { ctx, files } = createTestContext({ 'product_backlog.csv': csv });
+  const before = files['product_backlog.csv'];
+  // 行の中身・知らない鍵・型の違う値。どれも預かった行が無い。
+  [{ id: 'PBI-002', title: '差し込み', status: 'New' }, { id: 'PBI-001', title: '本物', sharedId: true },
+    'no-such-token', 'undo:x', '', null, undefined, 123, ['a']].forEach(function (arg) {
+    const res = ctx.apiRestorePbi(arg);
+    assert.equal(res.ok, false, JSON.stringify(arg) + ' で戻せてしまった');
+    assert.equal(res.reason, 'expired', JSON.stringify(arg));
+    assert.equal(res.message, '取り消しの期限が切れました。');
+  });
+  assert.equal(files['product_backlog.csv'], before, '預かっていない取り消しで CSV が変わった');
+});
+
+test('apiRestorePbi の鍵は一度しか使えない（2回目は expired。行は1つしか増えない）', () => {
+  const csv = headerOnlyCsv() + csvRow({ id: 'PBI-001', title: '消す', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n';
+  const { ctx, files, cache } = createTestContext({ 'product_backlog.csv': csv });
+  const del = ctx.apiDeletePbi('PBI-001', '2026-09-01 00:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+  assert.equal(typeof del.undoToken, 'string', '鍵が返っていない');
+  assert.equal(Object.keys(cache).length, 1, '消した行が預けられていない');
+  assert.equal(ctx.apiRestorePbi(del.undoToken).ok, true);
+  assert.equal(Object.keys(cache).length, 0, '使った鍵が捨てられていない');
+  const again = ctx.apiRestorePbi(del.undoToken);
+  assert.equal(again.reason, 'expired');
+  const ids = ctx.csvToObjects(files['product_backlog.csv']).map(function (r) { return r.id; });
+  assert.equal(ids.filter(function (x) { return x === 'PBI-001'; }).length, 1);
+});
+
+test('apiRestorePbi は預かった行を戻す。ブラウザが削除後に手元の行を書き換えても、戻るのは消した行', () => {
+  const csv = headerOnlyCsv() + csvRow({ id: 'PBI-001', title: '元の題', description: '元の説明', status: 'Ready',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n';
+  const { ctx, files } = createTestContext({ 'product_backlog.csv': csv });
+  const del = ctx.apiDeletePbi('PBI-001', '2026-09-01 00:00:00');
+  del.removed.title = '書き換えた題';   // 表示用の写しを書き換えても、預かりには影響しない
+  assert.equal(ctx.apiRestorePbi(del.undoToken).ok, true);
+  const row = ctx.csvToObjects(files['product_backlog.csv']).find(function (r) { return r.id === 'PBI-001'; });
+  assert.equal(row.title, '元の題');
+  assert.equal(row.description, '元の説明');
+  assert.equal(row.status, 'Ready');
+});
+
+test('同じ ID・同じ中身の行が2つあり1つを消しても、取り消しで戻せる（updated_at だけ違う重複）', () => {
+  const twin = { id: 'PBI-001', title: 'ふたご', status: 'New', created_at: '2026-09-01 00:00:00' };
+  const csv = headerOnlyCsv() + csvRow(Object.assign({}, twin, { updated_at: '2026-09-01 00:00:00' })) + '\n' +
+    csvRow(Object.assign({}, twin, { updated_at: '2026-09-02 00:00:00' })) + '\n';
+  const { ctx, files } = createTestContext({ 'product_backlog.csv': csv });
+  const del = ctx.apiDeletePbi('PBI-001', '2026-09-01 00:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+  const res = ctx.apiRestorePbi(del.undoToken);
+  assert.equal(res.ok, true, '残った行を戻したものと取り違えた: ' + JSON.stringify(res));
+  const count = function () {
+    return ctx.csvToObjects(files['product_backlog.csv']).filter(function (r) { return r.id === 'PBI-001'; }).length;
+  };
+  assert.equal(count(), 2, '削除前の2行に戻っていない');
+  assert.equal(ctx.apiRestorePbi(del.undoToken).reason, 'expired', '二重押しで増える');
+  assert.equal(count(), 2);
+});
+
+test('取り消しの鍵は 600 秒で切れる（期限の前は戻せ、後は expired）', () => {
+  const csv = headerOnlyCsv() + csvRow({ id: 'PBI-001', title: 'A', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n' +
+    csvRow({ id: 'PBI-002', title: 'B', status: 'New',
+      created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n';
+  const { ctx, clock } = createTestContext({ 'product_backlog.csv': csv });
+  const d1 = ctx.apiDeletePbi('PBI-001', '2026-09-01 00:00:00');
+  const d2 = ctx.apiDeletePbi('PBI-002', '2026-09-01 00:00:00');
+  clock.now = 599;
+  assert.equal(ctx.apiRestorePbi(d1.undoToken).ok, true, '期限の前なのに戻せない');
+  clock.now = 600;
+  const late = ctx.apiRestorePbi(d2.undoToken);
+  assert.equal(late.ok, false, '期限の後に戻せた');
+  assert.equal(late.reason, 'expired');
+  assert.equal(late.message, '取り消しの期限が切れました。');
+});
+
+test('預け入れ（CacheService）が失敗しても削除は成功し、undoToken は null になる', () => {
+  const csv = headerOnlyCsv() + csvRow({ id: 'PBI-001', title: '消す', status: 'New',
+    created_at: '2026-09-01 00:00:00', updated_at: '2026-09-01 00:00:00' }) + '\n';
+  const { ctx, files } = createTestContext({ 'product_backlog.csv': csv }, { failCachePut: true });
+  const del = ctx.apiDeletePbi('PBI-001', '2026-09-01 00:00:00');
+  assert.equal(del.ok, true, JSON.stringify(del));
+  assert.equal(del.undoToken, null);
+  assert.equal(ctx.csvToObjects(files['product_backlog.csv']).length, 0);
 });
 
 test('高水位の記帳が一度も成功していない状態で最後の1行を削除しても、その取り消しが通る（記録が失われない）', () => {
@@ -337,7 +460,7 @@ test('高水位の記帳が一度も成功していない状態で最後の1行�
 
   // 削除後、CSV の行も記録（記帳が一度も成功していない）も空になり、上限が
   // 一つも立たない。ここで拒否すると、削除した行を戻す先が無く失われる。
-  const restore = ctx.apiRestorePbi(del.removed);
+  const restore = ctx.apiRestorePbi(del.undoToken);
   assert.equal(restore.ok, true,
     '記録も CSV も空で上限が立たないため、削除の取り消しが拒否され行が失われた: ' + JSON.stringify(restore));
 });
@@ -355,7 +478,7 @@ test('ローカルの Claude Code が書いた大きい ID をアプリで削除
   const del = ctx.apiDeletePbi('PBI-100', '2026-09-01 00:00:00');
   assert.equal(del.ok, true, JSON.stringify(del));
 
-  const restore = ctx.apiRestorePbi(del.removed);
+  const restore = ctx.apiRestorePbi(del.undoToken);
   assert.equal(restore.ok, true, '外で作られた大きい ID の取り消しが拒否された: ' + JSON.stringify(restore));
 });
 
@@ -764,6 +887,25 @@ test('途中で止まった解決: apiGetView が pending を返し、「解決�
   assert.deepEqual(plain(res.view.pending), []);
 });
 
+test('途中で止まった解決: 未解決側の行の編集は conflict で止め、どのファイルも書かない（I3）', () => {
+  const f = halfResolvedFiles();
+  const before = [f['impediment_log.csv'], f['impediment_log_resolved.csv']];
+  const { ctx } = createTestContext(f);
+  const res = ctx.apiUpdateImpediment('IMP-002', { title: '新しい題', description: '', reported_by: 'マヤ', sprint: 'sprint001' }, IMP2_ROW);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'conflict');
+  assert.equal(res.message, '解決が途中で止まっています。先に「完了する」か「未解決に戻す」で揃えてください');
+  assert.deepEqual([f['impediment_log.csv'], f['impediment_log_resolved.csv']], before);
+  assert.equal(plain(res.view.pending).length, 1, '最新のビュー（途中で止まった操作）を返す');
+});
+
+test('同じ ID でも中身の違う行が解決済にあるだけなら、未解決側の編集は止めない（I3 の対象外）', () => {
+  const f = impFiles(IMP2, 'IMP-002,別の障害物,,マヤ,2026-09-01,Resolved,2026-09-02,直した,sprint001\n');
+  const { ctx } = createTestContext(f);
+  const res = ctx.apiUpdateImpediment('IMP-002', { title: '新しい題', description: '', reported_by: 'マヤ', sprint: 'sprint001' }, IMP2_ROW);
+  assert.equal(res.ok, true, res.message);
+});
+
 test('途中で止まった解決: 「未解決に戻す」で未解決だけに揃う', () => {
   const f = halfResolvedFiles();
   const pending = plain(createTestContext(f).ctx.apiGetView('impediment').view.pending)[0];
@@ -778,6 +920,16 @@ const CMT_HEADER = 'id,target_id,author,created_at,body\n';
 function cmtFiles(body) {
   return { 'product_backlog.csv': headerOnlyCsv(), 'comments.csv': CMT_HEADER + (body || '') };
 }
+
+test('コメントの取り消しは、保存した形（前後の空白を落とした id）の行を restored で返す', () => {
+  const { ctx } = createTestContext(cmtFiles());
+  const res = ctx.apiRestoreComment({ id: ' CMT-0000000f ', target_id: ' PBI-001 ', author: 'me@example.com',
+    created_at: '2026-10-06 10:00:00', body: '戻す' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.restored.id, 'CMT-0000000f');
+  assert.equal(res.restored.target_id, 'PBI-001');
+  assert.equal(res.restored.body, '戻す');
+});
 
 test('apiGetView(board) は comments を載せ、mine を付ける', () => {
   const { ctx } = createTestContext(cmtFiles(
@@ -895,6 +1047,17 @@ function histPbiFiles() {
   return { 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': CHG_HEADER };
 }
 
+test('履歴: 同じ文面を CRLF で送っても変更とみなさない（改行は LF に揃えて書く）', () => {
+  const { ctx, files } = createTestContext(histPbiFiles());
+  const c = ctx.apiCreatePbi(Object.assign(fullFields('A'), { acceptance_criteria: '一\n二' }));
+  const card = findCardInBoard(c.board, 'PBI-001');
+  const res = ctx.apiUpdatePbi('PBI-001', Object.assign(fullFields('A'), { acceptance_criteria: '一\r\n二' }), card.updated_at);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const actions = Array.from(ctx.csvToObjects(files['change_log.csv']), function (r) { return r.action + ':' + r.field; });
+  assert.deepEqual(actions, ['create:'], '見た目の同じ変更が履歴に残った: ' + actions.join(','));
+  assert.equal(files['product_backlog.csv'].indexOf('\r'), -1, 'CRLF がセルに残った');
+});
+
 test('履歴: 状態の変更は status の update 1行。updated_at は出ず、actor はログイン中のメール', () => {
   const { ctx, files } = createTestContext(histPbiFiles());
   const c = ctx.apiCreatePbi(fullFields('A'));
@@ -917,7 +1080,7 @@ test('履歴: 作成は create、削除は delete、取り消しは restore（cr
   const card = findCardInBoard(c.board, 'PBI-001');
   const del = ctx.apiDeletePbi('PBI-001', card.updated_at);
   assert.equal(del.ok, true, del.message);
-  const back = ctx.apiRestorePbi(plain(del.removed));
+  const back = ctx.apiRestorePbi(del.undoToken);
   assert.equal(back.ok, true, back.message);
   assert.deepEqual(histRows(ctx, files).map((r) => [r.target_id, r.action]),
     [['PBI-001', 'create'], ['PBI-001', 'delete'], ['PBI-001', 'restore']]);
@@ -1181,4 +1344,16 @@ test('apiGetHistory: ちょうど上限件なら truncated を付け、それ未
   const under = plain(createTestContext({ 'product_backlog.csv': headerOnlyCsv(), 'change_log.csv': log(limit - 1) }).ctx.apiGetHistory('PBI-001'));
   assert.equal(under.entries.length, limit - 1);
   assert.equal(Object.prototype.hasOwnProperty.call(under, 'truncated'), false);
+});
+
+test('履歴: 障害物も、同じ文面を CRLF で送っても変更とみなさない（改行は LF に揃えて書く）', () => {
+  const row = 'IMP-002,止まっている,"一\n二",マヤ,2026-10-01,Open,,,sprint001\n';
+  const { ctx, files } = createTestContext(histImpFiles(row));
+  const expected = Object.assign({}, IMP2_ROW, { description: '一\n二' });
+  const res = ctx.apiUpdateImpediment('IMP-002',
+    { title: '止まっている', description: '一\r\n二', reported_by: 'マヤ', sprint: 'sprint001' }, expected);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const actions = Array.from(ctx.csvToObjects(files['change_log.csv']), function (r) { return r.action + ':' + r.field; });
+  assert.deepEqual(actions, [], '見た目の同じ変更が履歴に残った: ' + actions.join(','));
+  assert.equal(files['impediment_log.csv'].indexOf('\r'), -1, 'CRLF がセルに残った');
 });

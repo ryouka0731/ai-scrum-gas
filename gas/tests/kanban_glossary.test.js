@@ -227,7 +227,7 @@ function readyWithToast() {
   h.openCard('PBI-001');
   h.click('panel-delete');
   h.calls[h.calls.length - 1].handlers.success({
-    ok: true, removed: CARD_A, board: h.boardOf(cols({ New: [CARD_B] }))
+    ok: true, undoToken: 'tok-del', removed: CARD_A, board: h.boardOf(cols({ New: [CARD_B] }))
   });
   assert.equal(h.hiddenOf('toast'), false, '前提: 通知が出ていない');
   return h;

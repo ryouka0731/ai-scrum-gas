@@ -278,6 +278,8 @@ async function launch(opts) {
     pid: proc.pid,
     open: open,
     evaluate: evaluate,
+    // 生の CDP（Input.dispatchKeyEvent で本物の Tab を押す等、evaluate では作れない入力に使う）。
+    send: send,
     waitFor: waitFor,
     close: async function () {
       try { ws.close(); } catch (_) {}

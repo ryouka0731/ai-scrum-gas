@@ -95,6 +95,18 @@ function appendImpediment(rows, id, fields, todayText) {
   return { ok: true, rows: list.map(impCopy_).concat([row]), row: row };
 }
 
+/**
+ * 解決が途中で止まっているか（未解決と解決済の両方に、同じ障害物の本物の行がある）。
+ * その間に未解決側だけを編集すると、揃えたときにどちらの内容を残すかが決まらなくなる。
+ */
+function impedimentHalfResolved(openRows, resolvedRows, id) {
+  const open = openRows || [];
+  const resolved = resolvedRows || [];
+  const oi = impRealIndex_(open, id);
+  const ri = impRealIndex_(resolved, id);
+  return oi !== -1 && ri !== -1 && impedimentSameIdentity(open[oi], resolved[ri]);
+}
+
 function updateImpediment(rows, id, fields, expected) {
   const list = rows || [];
   const i = impRealIndex_(list, id);   // 雛形の行は編集させない
@@ -162,5 +174,5 @@ function planUnresolve(openRows, resolvedRows, moved, resolvedRow) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { impedimentRowsEqual, impedimentSameIdentity, appendImpediment, updateImpediment, planResolve, planUnresolve };
+  module.exports = { impedimentRowsEqual, impedimentSameIdentity, impedimentHalfResolved, appendImpediment, updateImpediment, planResolve, planUnresolve };
 }

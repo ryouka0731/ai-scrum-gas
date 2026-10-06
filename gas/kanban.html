@@ -51,6 +51,8 @@
   }
   button:hover { background: var(--card-2); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* カードの開く入口（タイトル、tabindex=0）と、焦点の戻り先の入れ物（tabindex=-1）にも輪郭を出す */
+  .card .title:focus-visible, #board:focus-visible, #table-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button[disabled] { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   button.primary:hover { filter: brightness(1.08); }
@@ -234,6 +236,12 @@
      落ちた）。overflow-wrap: anywhere は「どこでも折り返せる」ことで自動的な
      最小幅そのものを小さくするため、これ単体で両方直る（実測: 単体で全件通過）。 */
   #toast-text { overflow-wrap: anywhere; }
+  /* タイトルが長くても通知が画面より高くならないよう、本文は3行で切る（全文は title 属性）。
+     通知は固定位置でスクロールできず、高くなりすぎると「取り消す」が画面の外へ出る。 */
+  #toast-text {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+    line-clamp: 3; overflow: hidden;
+  }
   #toast button {
     background: transparent; border-color: transparent; color: var(--bg);
     text-decoration: underline; padding: var(--sp-1) var(--sp-2);
@@ -269,6 +277,8 @@
   tr.clickable { cursor: pointer; }
   tr.clickable:hover td, tr.clickable:focus td { background: var(--card-2); }
   tr.clickable:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  tr.clickable.pending { opacity: .55; cursor: default; }
+  tr.clickable.pending:hover td { background: none; }
   .table-actions { margin: var(--sp-3) 0; }
 
   .tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--line); }
@@ -345,8 +355,8 @@
 <div class="views" id="views" role="tablist"></div>
 <div id="summary"></div>
 <div id="main">
-  <div id="board"></div>
-  <div id="table-view" class="table-wrap" hidden></div>
+  <div id="board" tabindex="-1"></div>
+  <div id="table-view" class="table-wrap" tabindex="-1" hidden></div>
   <aside id="panel" class="side-panel" hidden aria-label="PBI の詳細">
     <div class="panel-head">
       <h2 id="panel-title">PBI</h2>
@@ -755,8 +765,29 @@ function render(b) {
   if (!b) return;
   board = b;
   var root = document.getElementById('board');
+  // カードは毎回作り直す。焦点のあった要素が消えると焦点は body へ落ち、キーボードの人は
+  // 応答のたびに盤面の先頭から辿り直すことになる。焦点がカード（の中）にあれば、同じ ID のカードへ戻す。
+  var focusId = focusedCardId(root);
   clearHost(root);
   b.columns.forEach(function (col) { root.appendChild(renderColumn(col)); });
+  if (focusId === null) return;
+  var cards = root.querySelectorAll('.card');
+  for (var i = 0; i < cards.length; i++) {
+    if (cards[i].dataset.id === focusId) { cardFocusTarget(cards[i]).focus(); return; }
+  }
+}
+
+/** カードで焦点を受ける要素（開く入口のタイトル）。 */
+function cardFocusTarget(cardEl) {
+  return cardEl.querySelector('.title') || cardEl;
+}
+
+/** 焦点が root の中のカード（またはその中の要素）にあれば、そのカードの ID。無ければ null。 */
+function focusedCardId(root) {
+  for (var n = document.activeElement; n && n !== root; n = n.parentNode) {
+    if (n.classList && n.classList.contains('card') && n.dataset && n.dataset.id) return n.dataset.id;
+  }
+  return null;
 }
 
 function renderColumn(col) {
@@ -793,6 +824,7 @@ function renderColumn(col) {
   add.className = 'add';
   add.type = 'button';
   fillButton(add, 'plus', '追加');
+  add.dataset.status = col.status;
   add.addEventListener('click', function () { onAddClick(col.status); });
   div.appendChild(add);
   return div;
@@ -803,7 +835,43 @@ function onAddClick(status) {
   // 盤面が隠れているとき起こらない）。#board は hidden で隠れていても DOM からは
   // 消えていないため、この防御が無いと隠れた盤面の「追加」ボタンから書き込みが飛ぶ。
   if (activeView !== 'board') return;
-  openPanel(null, status);
+  openPanel(null, status, {
+    find: function () {
+      var adds = document.querySelectorAll('#board .add');
+      for (var i = 0; i < adds.length; i++) { if (adds[i].dataset.status === status) return adds[i]; }
+      return null;
+    },
+    fallbackId: 'board'
+  });
+}
+
+/**
+ * パネルを閉じたとき焦点を戻す先。盤面・表は開くたびに作り直されるため、要素そのものではなく
+ * 「探し方」を持つ。見つからなければ fallbackId の要素（盤面 / 表の入れ物）へ戻す。
+ */
+var panelOpener = null;
+var impPanelOpener = null;
+
+function cardOpener(id) {
+  return {
+    find: function () {
+      var cards = document.querySelectorAll('#board .card');
+      for (var i = 0; i < cards.length; i++) { if (cards[i].dataset.id === id) return cardFocusTarget(cards[i]); }
+      return null;
+    },
+    fallbackId: 'board'
+  };
+}
+
+/** パネルを閉じたあと、焦点が失われた（body か閉じたパネルの中）ときだけ、開いた元へ戻す。 */
+function restoreFocus(opener, panelId) {
+  var a = document.activeElement;
+  var panel = document.getElementById(panelId);
+  var lost = !a || a === document.body || a === document.documentElement || (panel && panel.contains(a));
+  if (!lost || !opener) return;
+  var target = opener.find ? opener.find() : null;
+  if (!target || target.hidden) target = document.getElementById(opener.fallbackId);
+  if (target && typeof target.focus === 'function') target.focus();
 }
 
 /**
@@ -831,6 +899,8 @@ function renderCard(card) {
     + (panelState.id === card.id ? ' selected' : '');
   el.draggable = !pendingIds[card.id];
   el.dataset.id = card.id;
+  // カード自体には role を付けない。中に優先度の補足（? ボタン）があり、role=button の子孫は
+  // 支援技術から見えなくなるため。開く操作はタイトルが受け持つ（下）。マウスはカードのどこでも開ける。
 
   var prio = document.createElement('div');
   prio.className = 'prio';
@@ -854,9 +924,14 @@ function renderCard(card) {
   prio.appendChild(idText);
   el.appendChild(prio);
 
+  // キーボードで開く入口（Tab で止まり、Enter / Space で開く）。名前は ID とタイトル。
+  // <button> にしないのは、ボタンの上から始めたドラッグを始めないブラウザ（Firefox）があるため。
   var title = document.createElement('div');
   title.className = 'title';
   title.textContent = card.title;
+  title.setAttribute('tabindex', '0');
+  title.setAttribute('role', 'button');
+  title.setAttribute('aria-label', card.id + ' ' + (card.title || ''));
   el.appendChild(title);
 
   var meta = document.createElement('div');
@@ -891,7 +966,16 @@ function renderCard(card) {
     if (pendingIds[card.id]) return;
     // 盤面タブを見ていないのに開かせない（move() と同じ規則）。
     if (activeView !== 'board') return;
-    openPanel(card.id, null);
+    openPanel(card.id, null, cardOpener(card.id));
+  });
+  // 中の「?」ボタン等で起きたキー操作には応えない（開く入口＝タイトルに焦点があるときだけ）。
+  title.addEventListener('keydown', function (ev) {
+    if (ev.target !== title) return;
+    if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+    ev.preventDefault();   // Space で画面がスクロールしないように
+    if (pendingIds[card.id]) return;
+    if (activeView !== 'board') return;
+    openPanel(card.id, null, cardOpener(card.id));
   });
   return el;
 }
@@ -951,7 +1035,72 @@ function mergeOneCard(current, serverBoard, id) {
   var to = columnStatusOf(serverBoard, id);
   var card = findCard(serverBoard, id);
   if (to === null || !card) return boardWithCardRemoved(current, id);
+  // 遅れて届いた応答の写しは、その後に確定した自分の書き込み（移動・保存）より古いことがある。
+  // 今のカードの方が updated_at が新しければ、確定済みの方を残す（同時刻ならサーバの写しを使う）。
+  var now = findCard(current, id);
+  if (now && String(now.updated_at || '') > String(card.updated_at || '')) return current;
+  // 削除が確定したカードは、それより前に出した書き込みの遅れた応答で戻さない。
+  if (deletedPbiIds[id] !== undefined) return boardWithCardRemoved(current, id);
   return boardWithCardUpserted(current, card, to);
+}
+
+// この画面で削除が確定した PBI の id → 確定した時点の boardWriteIssued。ID は使い回されないので、
+// この id への応答はそれより前に出した自分の書き込みのものだけになる。
+// 外すのは次のとき: 戻す成功、信じてよい盤面全体（読み込み・重なっていない応答）にその id が
+// 載っていた（別の経路で戻った）、確定した時点で送信中だった盤面の書き込みがすべて返った
+// （それより後に出した書き込みの写しは削除を含むので、もう守る必要が無い）。
+var deletedPbiIds = {};
+// 取り消し（戻す）が確定した PBI の id → 戻す書き込みの発行番号。それより前に出した書き込みの
+// 遅れた応答は戻す前の写し（このカードが無い）を運ぶので、その応答では消さない（自分の確定した操作の重ね）。
+// 外すのは次のとき: その id の削除の確定、それより前に出した盤面の書き込みがすべて返った。
+var restoredPbiIds = {};
+// 盤面の書き込みの発行番号と、送信中のもの（発行番号 → true）。
+var boardWriteIssued = 0;
+var boardPending = {};
+
+/** 盤面の書き込みを出す。発行番号を返す（応答・失敗のどちらでも settleBoardWrite に渡す）。 */
+function issueBoardWrite() {
+  boardWriteIssued++;
+  boardPending[boardWriteIssued] = true;
+  return boardWriteIssued;
+}
+
+/** 盤面の書き込みが返った。確定時点で送信中だった書き込みが無くなった削除の控えを捨てる。 */
+function settleBoardWrite(issued) {
+  delete boardPending[issued];
+  var oldest = oldestPending(boardPending);
+  Object.keys(deletedPbiIds).forEach(function (id) {
+    if (oldest > deletedPbiIds[id]) delete deletedPbiIds[id];
+  });
+  Object.keys(restoredPbiIds).forEach(function (id) {
+    if (oldest >= restoredPbiIds[id]) delete restoredPbiIds[id];
+  });
+}
+
+/**
+ * 発行番号 issued の書き込みの応答から作った盤面 next に、それより後に戻したカードが無い（または古い）なら、
+ * 今の画面のそのカードを残す。issued が無いとき（読み込み等）は何もしない。
+ */
+function keepRestoredCards(next, issued) {
+  if (!issued) return next;
+  var out = next;
+  Object.keys(restoredPbiIds).forEach(function (id) {
+    if (restoredPbiIds[id] <= issued) return;
+    var mine = findCard(board, id);
+    if (!mine) return;
+    var theirs = findCard(out, id);
+    if (theirs && String(theirs.updated_at || '') >= String(mine.updated_at || '')) return;
+    out = boardWithCardUpserted(out, mine, columnStatusOf(board, id));
+  });
+  return out;
+}
+
+/** 信じてよい盤面全体を受け取る。そこに載っている id は削除の控えから外す（別の経路で戻った）。 */
+function trustBoard(b) {
+  ((b && b.columns) || []).forEach(function (col) {
+    (col.cards || []).forEach(function (c) { delete deletedPbiIds[c.id]; });
+  });
+  return b;
 }
 
 /** board を複製し、id のカードを newStatus の列へ移した新しい board を返す（元の board は変えない）。 */
@@ -1000,15 +1149,31 @@ function settleOverlap() {
  * 見た目上は正しい列に映るのに updated_at だけ古いままになり、そのカードを
  * 開いて保存すると必ず一度 conflict する。mergeOneCard と同じ取り込み方にする。
  */
-function applyServerBoard(serverBoard, id, trustWholeBoard) {
-  if (trustWholeBoard) return serverBoard;
-  return mergeOneCard(board, serverBoard, id);
+function applyServerBoard(serverBoard, id, trustWholeBoard, issued) {
+  var next = trustWholeBoard ? trustBoard(serverBoard) : mergeOneCard(board, serverBoard, id);
+  return keepRestoredCards(next, issued);
 }
 
 /**
  * 楽観的に動かした位置に今もカードが居るときだけ元の列へ戻す。
  * 応答を待つ間に別の応答がこのカードを動かしていたら、そちらが新しい。
  */
+// 削除の送信中のカード id → { card, status }（削除が失敗したときの戻し先）。
+// 先に出した移動の応答がその間に届いたら、戻し先をその結果に合わせる（楽観的な移動先へ戻さない）。
+var deleteRestore = {};
+
+/** 移動の応答で、削除の送信中のカードの戻し先を直す。serverBoard が無ければ移動前の列へ戻す。 */
+function retargetDeleteRestore(id, serverBoard, newStatus, originalStatus) {
+  var r = deleteRestore[id];
+  if (!r) return;
+  if (serverBoard) {
+    var card = findCard(serverBoard, id);
+    if (card) { r.card = card; r.status = columnStatusOf(serverBoard, id); }
+  } else if (r.status === newStatus) {
+    r.status = originalStatus;
+  }
+}
+
 function rollbackCard(id, newStatus, originalStatus) {
   if (columnStatusOf(board, id) !== newStatus) return board;
   return boardWithCardMoved(board, id, originalStatus);
@@ -1176,12 +1341,13 @@ function writeForm(card, status) {
 }
 
 /** id が null なら新規作成。presetStatus は新規作成時の初期ステータス。 */
-function openPanel(id, presetStatus) {
+function openPanel(id, presetStatus, opener) {
   closeImpPanel();   // 障害物のパネルと同時には開かない
   var card = id ? findCard(board, id) : null;
   if (id && !card) return;
   var status = id ? columnStatusOf(board, id) : (presetStatus || STATUS_OPTIONS[0]);
   panelSeq++;
+  panelOpener = opener || panelOpener;
   panelState = { id: id, expectedUpdatedAt: card ? card.updated_at : '', status: status, fields: null };
   document.getElementById('panel-title').textContent = id ? id : '新しい PBI';
   document.getElementById('panel-delete').hidden = !id;
@@ -1198,12 +1364,17 @@ function openPanel(id, presetStatus) {
   document.getElementById('f-title').focus();
 }
 
-function closePanel() {
+function closePanel(restore) {
+  var wasOpen = !document.getElementById('panel').hidden;
+  var opener = panelOpener;
+  panelOpener = null;
   document.getElementById('panel').hidden = true;
   panelSeq++;   // 閉じたあとに応答が来ても、そのパネルは既に無い
   panelState = { id: null, expectedUpdatedAt: '', status: STATUS_OPTIONS[0], fields: null };
   forgetHistory('panel-history');
   render(board);
+  // 利用者が閉じた・保存や削除が済んだときだけ戻す（別のパネルを開く・タブ切替では戻さない）。
+  if (restore === true && wasOpen) restoreFocus(opener, 'panel');
 }
 
 // 送信中もフォームの入力欄が編集できてしまうと、応答が成功したときに
@@ -1245,6 +1416,7 @@ function savePanel() {
   // としか照合しないので、このキーが表示に出ることはない）。
   var pendKey = id ? id : '(new)' + seq;
   pendingIds[pendKey] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
   render(board);   // 送信中のカードに pending の印を付ける（move() と対称にする）
@@ -1262,18 +1434,18 @@ function savePanel() {
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
         var newId = id || res.id;
-        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, newId));
-        if (mine) closePanel();
+        render(applyServerBoard(res.board, newId, trustWholeBoard, bw));
+        if (mine) closePanel(true);
         setMessage((id ? id + ' を保存しました。' : res.id + ' を作成しました。'), 'info');
         afterHistoryWrite(res, newId, msgMark);
       } else {
         // 検証エラーではパネルを閉じない。閉じると入力が消える。
-        if (res.board) {
-          if (id) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
-          // 作成失敗はまだ id が無く、1枚だけ取り込む先が無いので、重なっている
-          // ときは board に触らない（他の送信中の反映を巻き戻さないため）。
-          else if (trustWholeBoard) render(res.board);
-        }
+        if (res.board && id) render(applyServerBoard(res.board, id, trustWholeBoard, bw));
+        // 作成失敗はまだ id が無く、1枚だけ取り込む先が無いので、重なっている
+        // ときは board に触らない（他の送信中の反映を巻き戻さないため）。
+        else if (res.board && trustWholeBoard) render(keepRestoredCards(trustBoard(res.board), bw));
+        // busy・error は board を運ばない。それでも描き直し、送信中の印を外してドラッグできるようにする。
+        else render(board);
         // 競合だけは基準を進める。検証エラー等で進めると、次の保存が他の人の
         // 変更を一度も見せないまま黙って上書きしてしまう。
         if (mine && id && res.reason === 'conflict') syncPanelExpectedUpdatedAt(id);
@@ -1281,6 +1453,7 @@ function savePanel() {
         if (mine) setPanelMessage(res.message, 'error');
         else setMessage((id || '新規作成') + ': ' + res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[pendKey];
@@ -1295,6 +1468,7 @@ function savePanel() {
       } else {
         setMessage((id || '新規作成') + ': ' + verb + 'に失敗しました: ' + err.message, 'error');
       }
+      settleBoardWrite(bw);
     });
 
   if (id) runner.apiUpdatePbi(id, fields, panelState.expectedUpdatedAt);
@@ -1314,13 +1488,19 @@ var activeToastText = null;
 var stickyToast = null;
 var shownIsSticky = false;
 
-function renderToast(text, onUndo, actionLabel, iconName) {
+// 表示中の通知が対象にしている障害物の id（無ければ null）。その id の書き込みの送信中はボタンを塞ぐ。
+var shownToastImpId = null;
+
+function renderToast(text, onUndo, actionLabel, iconName, impId) {
   var el = document.getElementById('toast');
+  shownToastImpId = impId || null;
   document.getElementById('toast-text').textContent = text;
+  document.getElementById('toast-text').title = text;   // 3行で切れた分も全文を見られる
   var btn = document.getElementById('toast-undo');
   btn.innerHTML = '';
   fillButton(btn, iconName || 'undo', actionLabel || '取り消す');
   btn.onclick = onUndo;
+  btn.disabled = !!shownToastImpId && impBusyId(shownToastImpId);
   el.hidden = false;
 }
 
@@ -1329,15 +1509,19 @@ function renderToast(text, onUndo, actionLabel, iconName) {
  * actionLabel はボタンの文言（既定は「取り消す」。途中で止まった書き込みを完了させるときは「完了する」）、
  * iconName はそのアイコン（既定は undo。「完了する」は check）。
  * sticky が真なら時間では消さず、別の通知が出ても、その通知が消えたあとに出し直す。
+ * sticky に障害物の id（文字列）を渡すと、その id の途中で止まった操作が無くなった時点で
+ * 通知を外す（releaseStickyIfDone。別の経路で完了したのに押せる通知を残さない）。
+ * impId は時間付きの通知が対象にする障害物の id（sticky の id と同じく、その id の送信中はボタンを塞ぐ）。
  */
-function showUndoToast(text, onUndo, actionLabel, iconName, sticky) {
+function showUndoToast(text, onUndo, actionLabel, iconName, sticky, impId) {
   // 取り消せなくなるのは、時間付きの通知が別の通知に上書きされるときだけ（sticky は戻ってくる）。
   if (toastTimer && activeToastText) {
     setMessage(activeToastText + '（もう取り消せません）', 'info');
   }
   if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
   if (sticky) {
-    var self = { text: text, onUndo: onUndo, label: actionLabel, icon: iconName };
+    var self = { text: text, onUndo: onUndo, label: actionLabel, icon: iconName,
+      impId: typeof sticky === 'string' ? sticky.trim() : null };
     stickyToast = self;
     shownIsSticky = true;
     activeToastText = null;
@@ -1345,11 +1529,11 @@ function showUndoToast(text, onUndo, actionLabel, iconName, sticky) {
       if (stickyToast === self) stickyToast = null;   // 押したら手放す。再び止まれば、また sticky で出る
       hideToast();
       onUndo();
-    }, actionLabel, iconName);
+    }, actionLabel, iconName, self.impId);
     return;
   }
   shownIsSticky = false;
-  renderToast(text, function () { hideToast(); onUndo(); }, actionLabel, iconName);
+  renderToast(text, function () { hideToast(); onUndo(); }, actionLabel, iconName, impId);
   activeToastText = text;
   toastTimer = setTimeout(hideToast, UNDO_SECONDS * 1000);
 }
@@ -1362,8 +1546,21 @@ function hideToast() {
   shownIsSticky = false;
   if (stickyToast) {
     var st = stickyToast;
-    showUndoToast(st.text, st.onUndo, st.label, st.icon, true);
+    showUndoToast(st.text, st.onUndo, st.label, st.icon, st.impId || true);
   }
+}
+
+/**
+ * 「完了する」の通知の対象が、受け入れた障害物のビューの「途中で止まった操作」に
+ * もう無ければ通知を外す（途中で止まった操作の節から完了した等）。残すと、押した瞬間に
+ * 選んだのと逆の操作を送ったり、「既に解決済みです」になったりする。
+ */
+function releaseStickyIfDone(view) {
+  if (!stickyToast || !stickyToast.impId || !view) return;
+  var id = stickyToast.impId;
+  if ((view.pending || []).some(function (p) { return impKey(p) === id; })) return;
+  stickyToast = null;
+  if (shownIsSticky) hideToast();
 }
 
 /**
@@ -1378,11 +1575,13 @@ function deletePbi() {
   var title = document.getElementById('f-title').value;
   var expectedUpdatedAt = panelState.expectedUpdatedAt;
   // 失敗したときにこの1枚だけを元へ戻すため、消す前の位置を控えておく。
-  var originalCard = findCard(board, id);
-  var originalStatus = columnStatusOf(board, id);
+  var restore = { card: findCard(board, id), status: columnStatusOf(board, id) };
+  deleteRestore[id] = restore;
+  var forget = function () { if (deleteRestore[id] === restore) delete deleteRestore[id]; };
 
   setPanelBusy(true);
   pendingIds[id] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
   render(boardWithCardRemoved(board, id));   // 楽観的に消す
@@ -1391,22 +1590,30 @@ function deletePbi() {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete pendingIds[id];
+      forget();
       inflight--;
       var trustWholeBoard = settleOverlap();
       var mine = (seq === panelSeq);
       if (mine) setPanelBusy(false);
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
-        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
-        if (mine) closePanel();
-        showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed); });
+        deletedPbiIds[id] = boardWriteIssued;
+        delete restoredPbiIds[id];
+        render(applyServerBoard(res.board, id, trustWholeBoard, bw));
+        if (mine) closePanel(true);
+        // 取り消しはサーバが預かった行を鍵（undoToken）で戻す。預けられなかったときは取り消しを出さない。
+        if (res.undoToken) {
+          showUndoToast(id + '「' + title + '」を削除しました。', function () { restorePbi(res.removed, res.undoToken); });
+        } else {
+          setMessage(id + '「' + title + '」を削除しました（取り消しはできません）。', 'info');
+        }
         afterHistoryWrite(res, id, msgMark);
       } else {
-        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, id));
+        if (res.board) render(applyServerBoard(res.board, id, trustWholeBoard, bw));
         // パネルを開いたままの間にこのカードが board から消えていることがある
-        // （別の応答が先に処理した等）。その場合 originalCard は null になるので、
+        // （別の応答が先に処理した等）。その場合 restore.card は null になるので、
         // 存在しないカードを元に戻そうとして例外にしない。
-        else if (originalCard) render(boardWithCardUpserted(board, originalCard, originalStatus));
+        else if (restore.card) render(boardWithCardUpserted(board, restore.card, restore.status));
         else render(board);
         // 保存と同じく、競合のあとは基準を進めないと二度と削除できない。
         if (mine && res.reason === 'conflict') syncPanelExpectedUpdatedAt(id);
@@ -1414,12 +1621,14 @@ function deletePbi() {
         if (mine) setPanelMessage(res.message, 'error');
         else setMessage(id + ': ' + res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
+      forget();
       inflight--;
       settleOverlap();
-      if (originalCard) render(boardWithCardUpserted(board, originalCard, originalStatus));
+      if (restore.card) render(boardWithCardUpserted(board, restore.card, restore.status));
       else render(board);
       var mine = (seq === panelSeq);
       if (mine) {
@@ -1428,13 +1637,17 @@ function deletePbi() {
       } else {
         setMessage(id + ': 削除に失敗しました: ' + err.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .apiDeletePbi(id, expectedUpdatedAt);
 }
 
-/** 削除を取り消す。元の ID と作成日を保ったまま戻す（apiCreatePbi は使わない）。 */
-function restorePbi(row) {
-  if (!row) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+/**
+ * 削除を取り消す。元の ID と作成日を保ったまま戻す（apiCreatePbi は使わない）。
+ * 送るのは削除の応答が運んだ鍵だけ。戻す行はサーバが預かったもので、row は表示（id）にだけ使う。
+ */
+function restorePbi(row, token) {
+  if (!row || !token) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
   setMessage(row.id + ' を戻しています…', 'info');
   // pendingIds は実在カードの表示・操作抑止にも使われる。素の id で載せると、
   // 送信中に loadView() で board へ戻ってきた同じ id のカードが送信中扱いになり、
@@ -1442,6 +1655,7 @@ function restorePbi(row) {
   // （作成の (new) キーと同じく、会計側だけに載せるためのもの）。
   var pendKey = '(undo)' + row.id;
   pendingIds[pendKey] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
 
@@ -1453,21 +1667,26 @@ function restorePbi(row) {
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
-        render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
+        delete deletedPbiIds[row.id];
+        render(applyServerBoard(res.board, row.id, trustWholeBoard, bw));
+        // 戻したカードを、この取り消しより前に出した書き込みの遅れた応答から守る。
+        restoredPbiIds[row.id] = bw;
         setMessage(row.id + ' を戻しました。', 'info');
         afterHistoryWrite(res, row.id, msgMark);
       } else {
-        if (res.board) render(trustWholeBoard ? res.board : mergeOneCard(board, res.board, row.id));
+        if (res.board) render(applyServerBoard(res.board, row.id, trustWholeBoard, bw));
         setMessage(res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[pendKey];
       inflight--;
       settleOverlap();
       setMessage('取り消せませんでした: ' + err.message, 'error');
+      settleBoardWrite(bw);
     })
-    .apiRestorePbi(row);
+    .apiRestorePbi(token);
 }
 
 // --- 障害物パネル -----------------------------------------------------------
@@ -1508,12 +1727,14 @@ var impPanelBusy = false;
 
 /** 送信中は全部、解決策の入力中は解決策以外の欄を塞ぐ（送らない編集を黙って捨てないため）。 */
 function applyImpLocks() {
+  // 同じ障害物への別の書き込み（「完了する」等）が送信中なら、パネルからは送らせない。
+  var busy = impPanelBusy || (!!impPanelState.id && impBusyId(impPanelState.id));
   // 解決策の入力中は保存を押せない（保存して閉じると、打った解決策を黙って捨てるため）。
-  document.getElementById('imp-panel-save').disabled = impPanelBusy || impPanelState.resolving;
-  document.getElementById('imp-panel-resolve').disabled = impPanelBusy;
-  document.getElementById('imp-panel-cancel-resolve').disabled = impPanelBusy;
+  document.getElementById('imp-panel-save').disabled = busy || impPanelState.resolving;
+  document.getElementById('imp-panel-resolve').disabled = busy;
+  document.getElementById('imp-panel-cancel-resolve').disabled = busy;
   IMP_FORM_FIELD_IDS.forEach(function (id) {
-    document.getElementById(id).disabled = impPanelBusy || (impPanelState.resolving && id !== 'i-resolution');
+    document.getElementById(id).disabled = busy || (impPanelState.resolving && id !== 'i-resolution');
   });
 }
 
@@ -1538,11 +1759,13 @@ function setImpResolving(on) {
 }
 
 /** id が null なら新規作成。 */
-function openImpPanel(id) {
+function openImpPanel(id, opener) {
   var row = id ? findImpRow(id) : null;
   if (id && !row) return;
+  if (id && impBusyId(id)) return;   // その障害物への書き込みの送信中は開かない（行も送信中として出している）
   closePanel();   // PBI のパネルと同時には開かない
   impPanelSeq++;
+  impPanelOpener = opener || impPanelOpener;
   impPanelState = { id: id, expected: row, resolving: false };
   document.getElementById('imp-panel-title').textContent = id ? id : '新しい障害物';
   document.getElementById('i-title').value = (row && row.title) || '';
@@ -1564,11 +1787,15 @@ function openImpPanel(id) {
   document.getElementById('i-title').focus();
 }
 
-function closeImpPanel() {
+function closeImpPanel(restore) {
+  var wasOpen = !document.getElementById('imp-panel').hidden;
+  var opener = impPanelOpener;
+  impPanelOpener = null;
   document.getElementById('imp-panel').hidden = true;
   impPanelSeq++;
   impPanelState = { id: null, expected: null, resolving: false };
   forgetHistory('imp-panel-history');
+  if (restore === true && wasOpen) restoreFocus(opener, 'imp-panel');
 }
 
 function readImpForm() {
@@ -1580,18 +1807,106 @@ function readImpForm() {
   };
 }
 
+// 障害物: [{ id, issued, open, resolved, pending（確定した応答のビューにあった、その id の行と、その直前の行の id）, mark }]
+var impOverlay = [];
+var impSummary = null;   // 最後に描いた障害物の要約（古い応答で控えだけを当てるときの基準）
+
+function impKey(r) { return String((r || {}).id || '').trim(); }
+
+/** 確定した自分の障害物の操作を控える。その id の行が、確定した応答のビューでどこにあったかを持つ。 */
+function noteOwnImp(id, issued, view) {
+  var key = String(id || '').trim();
+  if (!key || !view) return;
+  var pick = function (list) {
+    var rows = [];
+    var after = null;
+    (list || []).forEach(function (r, i) {
+      if (impKey(r) !== key) return;
+      if (rows.length === 0) after = i > 0 ? impKey(list[i - 1]) : '';
+      rows.push(r);
+    });
+    return { rows: rows, after: after };
+  };
+  impOverlay = noteOwn(impOverlay, key, issued,
+    { open: pick(view.open), resolved: pick(view.resolved), pending: pick(view.pending), mark: impWriteIssued });
+}
+
+function pruneImpOverlay() {
+  var oldest = oldestPending(impPending);
+  impOverlay = impOverlay.filter(function (e) { return oldest <= e.mark; });
+}
+
+/**
+ * list の id の行を placed.rows に差し替える。list に出ていればその位置へ。出ていなければ、
+ * 確定した応答で直前にあった行（placed.after。'' なら先頭）の後ろへ、それも無ければ末尾へ足す。
+ */
+function withImpRows(list, id, placed) {
+  var out = [];
+  var at = -1;
+  (list || []).forEach(function (r) {
+    if (impKey(r) === id) { if (at < 0) at = out.length; } else out.push(r);
+  });
+  if (at < 0 && placed.after === '') at = 0;
+  if (at < 0 && placed.after) {
+    for (var i = 0; i < out.length; i++) if (impKey(out[i]) === placed.after) { at = i + 1; break; }
+  }
+  if (at < 0) at = out.length;
+  return out.slice(0, at).concat(placed.rows, out.slice(at));
+}
+
+/** ビューに控えを当てた写しを返す（控えが無ければ同じもの）。 */
+function overlayImpView(view) {
+  if (!view || impOverlay.length === 0) return view;
+  var next = Object.assign({}, view);
+  impOverlay.forEach(function (e) {
+    next.open = withImpRows(next.open, e.id, e.open);
+    next.resolved = withImpRows(next.resolved, e.id, e.resolved);
+    next.pending = withImpRows(next.pending, e.id, e.pending);
+  });
+  return next;
+}
+
+/** 控えを当てて行数が変わった分だけ、要約の件数を直す。 */
+function impSummaryFor(view, base, baseView) {
+  if (!base || !baseView || view === baseView) return base;
+  var len = function (v, k) { return ((v && v[k]) || []).length; };
+  return Object.assign({}, base, {
+    open: base.open + len(view, 'open') - len(baseView, 'open'),
+    resolved: base.resolved + len(view, 'resolved') - len(baseView, 'resolved'),
+    pending: base.pending + len(view, 'pending') - len(baseView, 'pending'),
+  });
+}
+
 /**
  * 障害物の書き込みの応答を受ける共通部分。表と要約は、今も障害物のビューを見ているときだけ
  * 描き直す（応答待ちの間に別タブへ移っていれば、そのタブの表と要約を上書きしない）。
+ * ownId は、この応答で確定した（成功・途中で停止）自分の書き込みの対象。控えに足す。
  */
-function applyImpResponse(res, issued, commentSeen) {
+function applyImpResponse(res, issued, commentSeen, ownId) {
   if (res.sprintChoices) impSprintChoices = res.sprintChoices;
-  if (!res.view) return;
+  if (!res.view) { pruneImpOverlay(); return; }
+  var own = !!ownId && (res.ok || res.reason === 'partial');
+  if (own) noteOwnImp(ownId, issued, res.view);
   // 後から発行した書き込みの応答を既に反映しているなら、この応答は古い。表と要約を戻さない。
+  // ただし、この書き込み自身の結果だけは今の表に重ねる（反映済みの写しが含まないことがある）。
   // （後の書き込みがビュー無しで返った場合は、この応答が最新の手がかりなので反映する）
-  if (issued <= lastAppliedImp) return;
+  if (issued <= lastAppliedImp) {
+    if (own && impView) {
+      var before = impView;
+      impView = overlayImpView(impView);
+      impSummary = impSummaryFor(impView, impSummary, before);
+      if (impView !== before && activeView === 'impediment' && !tableLoading) {
+        renderTable(impView);
+        renderSummary(impSummary);
+      }
+      releaseStickyIfDone(impView);
+    }
+    pruneImpOverlay();
+    return;
+  }
   lastAppliedImp = issued;
-  impView = res.view;
+  impView = overlayImpView(res.view);
+  impSummary = impSummaryFor(impView, res.summary, res.view);
   // 応答が運ぶコメントは、読み込み（loadView）と同じ「全体の写し」として扱う。ただし
   // コメントの書き込みと競りうるときは使わない: 障害物の書き込みを出した時点で送信中の
   // コメントがあった、または出してから新たにコメントを書いた（commentSeen が今の
@@ -1602,10 +1917,12 @@ function applyImpResponse(res, issued, commentSeen) {
     lastAppliedComment = commentWriteIssued;
   }
   if (activeView === 'impediment') {
-    renderTable(res.view);
-    renderSummary(res.summary);
+    renderTable(impView);
+    renderSummary(impSummary);
   }
   if (takeComments) refreshOpenComments();
+  releaseStickyIfDone(impView);
+  pruneImpOverlay();
 }
 
 /** 障害物の書き込みを出す時点で控える値。送信中のコメントがあれば -1（応答のコメントを使わない）。 */
@@ -1619,20 +1936,27 @@ function commentSeenNow() {
  */
 function sendImpWrite(method, args, label, after, onPartial) {
   var seq = impPanelSeq;
+  // 既存の障害物（更新・解決）は id を先頭の引数に持つ。応答まで、その id への他の書き込みを塞ぐ。
+  // 塞ぐ判定は会計より先に行う。後だと、送らなかった書き込みが impPending に残り続け、
+  // oldestPending が動かず、以後の確定した操作の控え（impOverlay）を捨てられなくなる。
+  var busyId = typeof args[0] === 'string' ? args[0] : null;
+  if (busyId && impSettlingNow(busyId)) return;
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
   setImpPanelBusy(true);
+  if (busyId) markImpBusy(busyId, true);
   var runner = google.script.run
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
+      if (busyId) markImpBusy(busyId, false);
       var mine = (seq === impPanelSeq);
       if (mine) setImpPanelBusy(false);
-      if (res.ok) writeSeq++;
-      applyImpResponse(res, issued, commentSeen);
+      if (res.ok || res.reason === 'partial') writeSeq++;
       // 対象は先頭の引数（更新・解決）か、作成なら応答の id。
       var target = typeof args[0] === 'string' ? args[0] : res.id;
+      applyImpResponse(res, issued, commentSeen, target);
       if (res.ok) { after(res, mine); afterHistoryWrite(res, target, msgMark); return; }
       if (res.reason === 'partial' && onPartial) { onPartial(res, mine); afterHistoryWrite(res, target, msgMark); return; }
       // 競合のあとは、次に送る基準を最新の行へ進める（PBI の syncPanelExpectedUpdatedAt と同じ理由）。
@@ -1645,6 +1969,8 @@ function sendImpWrite(method, args, label, after, onPartial) {
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
+      if (busyId) markImpBusy(busyId, false);
+      pruneImpOverlay();
       if (seq === impPanelSeq) {
         setImpPanelBusy(false);
         setImpPanelMessage(label + 'に失敗しました: ' + err.message, 'error');
@@ -1660,12 +1986,12 @@ function saveImpPanel() {
   var fields = readImpForm();
   if (id) {
     sendImpWrite('apiUpdateImpediment', [id, fields, impPanelState.expected], '保存', function (res, mine) {
-      if (mine) closeImpPanel();
+      if (mine) closeImpPanel(true);
       setMessage(id + ' を保存しました。', 'info');
     });
   } else {
     sendImpWrite('apiCreateImpediment', [fields], '作成', function (res, mine) {
-      if (mine) closeImpPanel();
+      if (mine) closeImpPanel(true);
       setMessage(res.id + ' を作成しました。', 'info');
     });
   }
@@ -1683,11 +2009,11 @@ function resolveImp() {
   var resolution = document.getElementById('i-resolution').value;
   var expected = impPanelState.expected;
   sendImpWrite('apiResolveImpediment', [id, resolution, expected], '解決', function (res, mine) {
-    if (mine) closeImpPanel();
+    if (mine) closeImpPanel(true);
     showResolveOutcome(id, resolution, expected, res);
   }, function (res, mine) {
     // 解決済に足した行が正になり、未解決には出なくなる。パネルを開いたままにしない。
-    if (mine) closeImpPanel();
+    if (mine) closeImpPanel(true);
     showResolveOutcome(id, resolution, expected, res);
   });
 }
@@ -1700,16 +2026,67 @@ function showResolveOutcome(id, resolution, expected, res) {
   if (res.ok) {
     // 通知の題は送った側の行から取る（編集欄の値ではない）。
     var title = (res.moved && res.moved.title) || (expected && expected.title) || '';
-    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); });
+    showUndoToast(id + '「' + title + '」を解決しました。', function () { unresolveImp(res.moved, res.resolvedRow); },
+      undefined, undefined, false, id);
     return;
   }
   setMessage(res.message, 'error');
   showUndoToast(id + ' の解決が途中で止まりました。',
-    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check', true);
+    function () { retryResolveImp(id, resolution, expected); }, '完了する', 'check', id);
+}
+
+// 書き込み（保存・解決・完了・取り消し）を送信中の障害物の id → 送信中の数。途中で止まった操作は
+// 「完了する」の通知と「途中で止まった操作」の2つのボタンとパネルのどれからでも送れ、両方が成功しうる。
+// 同じ id へ重ねて送るとサーバがどちらを後に処理したか画面では分からず、表が最終の状態と食い違うため、
+// 応答まで次を送らせない（行は送信中として出し、その id のボタンは塞ぐ）。
+var impSettling = {};
+
+function impBusyId(id) { return !!impSettling[String(id || '').trim()]; }
+
+/** id の書き込みの送信を数える（on が偽なら応答・失敗で外す）。塞ぐ表示も直す。 */
+function markImpBusy(id, on) {
+  var key = String(id || '').trim();
+  if (!key) return;
+  if (on) impSettling[key] = (impSettling[key] || 0) + 1;
+  else if (impSettling[key] > 1) impSettling[key]--;
+  else delete impSettling[key];
+  refreshImpBusy();
+}
+
+/** 送信中の障害物に合わせて、パネル・表の行・途中で止まった操作のボタン・通知のボタンを塞ぐ（描き直さずに直す）。 */
+function refreshImpBusy() {
+  applyImpLocks();
+  document.querySelectorAll('#table-view tr.clickable').forEach(function (tr) { markImpRow(tr, tr.dataset.id); });
+  ['resolve', 'unresolve'].forEach(function (which) {
+    document.querySelectorAll('#table-view button').forEach(function (b) {
+      var prefix = 'imp-pending-' + which + '-';
+      if (String(b.id || '').indexOf(prefix) === 0) b.disabled = impBusyId(b.id.slice(prefix.length));
+    });
+  });
+  if (!document.getElementById('toast').hidden) {
+    document.getElementById('toast-undo').disabled = !!shownToastImpId && impBusyId(shownToastImpId);
+  }
+}
+
+/** 未解決の行に送信中の印を付ける・外す。 */
+function markImpRow(tr, id) {
+  var busy = impBusyId(id);
+  if (busy) tr.classList.add('pending'); else tr.classList.remove('pending');
+  if (busy) tr.setAttribute('aria-disabled', 'true'); else tr.removeAttribute('aria-disabled');
+}
+
+/** id の書き込みを送信中なら知らせて true を返す。 */
+function impSettlingNow(id) {
+  if (!impBusyId(id)) return false;
+  setMessage(id + ' の操作を送っています。応答を待ってから、もう一度お試しください。', 'error');
+  return true;
 }
 
 /** 途中で止まった解決を、最初と同じ引数で送り直す（サーバは冪等）。パネルには触らない。 */
 function retryResolveImp(id, resolution, expected) {
+  if (impSettlingNow(id)) return;
+  var key = String(id || '').trim();
+  markImpBusy(key, true);
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
@@ -1718,8 +2095,9 @@ function retryResolveImp(id, resolution, expected) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
-      if (res.ok) writeSeq++;
-      applyImpResponse(res, issued, commentSeen);
+      markImpBusy(key, false);
+      if (res.ok || res.reason === 'partial') writeSeq++;
+      applyImpResponse(res, issued, commentSeen, id);
       if (res.ok || res.reason === 'partial') {
         if (res.ok) setMessage(id + ' を解決しました。', 'info');
         showResolveOutcome(id, resolution, expected, res);
@@ -1731,6 +2109,8 @@ function retryResolveImp(id, resolution, expected) {
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
+      markImpBusy(key, false);
+      pruneImpOverlay();
       setMessage('解決に失敗しました: ' + err.message, 'error');
     })
     .apiResolveImpediment(id, resolution, expected);
@@ -1738,6 +2118,9 @@ function retryResolveImp(id, resolution, expected) {
 
 function unresolveImp(moved, resolvedRow) {
   if (!moved || !resolvedRow) { setMessage('取り消せませんでした。最新にしてから確認してください。', 'error'); return; }
+  if (impSettlingNow(moved.id)) return;
+  var key = String(moved.id || '').trim();
+  markImpBusy(key, true);
   var issued = ++impWriteIssued;
   impPending[issued] = true;
   var commentSeen = commentSeenNow();
@@ -1746,18 +2129,21 @@ function unresolveImp(moved, resolvedRow) {
     .withSuccessHandler(function (res) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete impPending[issued];
-      if (res.ok) writeSeq++;
-      applyImpResponse(res, issued, commentSeen);
+      markImpBusy(key, false);
+      if (res.ok || res.reason === 'partial') writeSeq++;
+      applyImpResponse(res, issued, commentSeen, moved.id);
       setMessage(res.ok ? moved.id + ' を未解決に戻しました。' : res.message, res.ok ? 'info' : 'error');
       if (res.reason === 'partial') {
         // 通知は押した時点で閉じている。送り直す手段を通知で出し直す（サーバは冪等）。
         showUndoToast(moved.id + ' の取り消しが途中で止まりました。',
-          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', true);
+          function () { unresolveImp(moved, resolvedRow); }, '完了する', 'check', moved.id);
       }
       afterHistoryWrite(res, res.ok ? moved.id : null, msgMark);
     })
     .withFailureHandler(function (err) {
       delete impPending[issued];
+      markImpBusy(key, false);
+      pruneImpOverlay();
       setMessage('取り消せませんでした: ' + err.message, 'error');
     })
     .apiUnresolveImpediment(moved, resolvedRow);
@@ -1891,7 +2277,7 @@ function fillCommentList(box, hostId, targetId) {
   var list = commentsOf(targetId);
   var ul = document.createElement('ul');
   ul.className = 'comment-list';
-  list.forEach(function (c) {
+  list.forEach(function (c, index) {
     var li = document.createElement('li');
     li.dataset.id = c.id;
     var meta = document.createElement('div');
@@ -1912,6 +2298,9 @@ function fillCommentList(box, hostId, targetId) {
       del.type = 'button';
       del.className = 'comment-delete danger';
       fillButton(del, 'trash', '削除');
+      // 同じパネルに「削除」が並ぶので、どのコメントのものかを名前に含める（日時が無ければ何件目か）。
+      del.setAttribute('aria-label', commentAuthorLabel(c.author) + ' のコメントを削除（'
+        + (c.created_at ? c.created_at : (index + 1) + '件目') + '）');
       del.disabled = !!commentDeleting[c.id];
       del.addEventListener('click', function () { deleteComment(hostId, targetId, c.id); });
       meta.appendChild(del);
@@ -1952,13 +2341,70 @@ function withoutDeletedComments(comments) {
 /**
  * コメントの書き込みの応答が運ぶ全体の写しを取り込む。後から発行した書き込みの応答を
  * 既に反映していれば古いので捨てる。取り込んだら件数（盤面・障害物の表）と開いている節を描き直す。
+ * 取り込む写しには、確定した自分の操作（commentOverlay）を当て直す。
  */
 function applyComments(comments, issued) {
   if (!comments || issued <= lastAppliedComment) return false;
   lastAppliedComment = issued;
-  commentsByTarget = withoutDeletedComments(comments);
+  commentsByTarget = overlayComments(withoutDeletedComments(comments));
   redrawComments();
   return true;
+}
+
+// --- 確定した自分の書き込みの重ね（コメント・障害物） ---
+// サーバは同時に出した書き込みを発行順に処理するとは限らない。後から発行した書き込みが先に
+// 処理されると、その応答は発行番号では新しいのに、先に確定した自分の書き込みを含まない古い写しを
+// 運ぶ。発行番号だけで新旧を決めると、成功した自分の書き込みが画面から消える。
+// そこで確定した自分の操作を控え、受け入れる写しへ毎回当て直す（何度当てても同じ結果になる）。
+// 控えは、確定した時点で送信中だった（それ以前に発行した）書き込みがすべて返ったら捨てる。
+// それより後に発行した書き込みはこの確定より後に処理されるので、その写しは確定を含む。
+// 読み込み（loadView）には当てない。読み込みは応答までに書き込みが確定していたら捨てられるため、
+// 受け入れる読み込みは出した時点までに確定した書き込みを必ず含む。
+
+/** 送信中の書き込みのうち最も古い発行番号（無ければ Infinity）。 */
+function oldestPending(pending) {
+  var keys = Object.keys(pending).map(Number);
+  return keys.length ? Math.min.apply(null, keys) : Infinity;
+}
+
+// コメント: [{ id, row（消したなら null）, issued（その書き込みの発行番号）, mark（確定した時点の commentWriteIssued） }]
+var commentOverlay = [];
+
+/**
+ * 同じ対象への自分の操作は、後から発行した方が後に処理されている（追加 → 削除 → 戻す は、前の操作の
+ * 成功を待たないと成功しない）。後から発行した操作の控えがあれば、遅れて届いた前の操作では上書きしない。
+ */
+function noteOwn(list, id, issued, fields) {
+  var prev = list.filter(function (e) { return e.id === id; })[0];
+  if (prev && prev.issued > issued) return list;
+  return list.filter(function (e) { return e.id !== id; }).concat([Object.assign({ id: id, issued: issued }, fields)]);
+}
+
+/** 確定した自分のコメントの操作を控える。row があれば「この行がある」、null なら「この id は無い」。 */
+function noteOwnComment(id, issued, row) {
+  if (!id) return;
+  commentOverlay = noteOwn(commentOverlay, id, issued,
+    { row: row ? Object.assign({}, row, { mine: true }) : null, mark: commentWriteIssued });
+}
+
+function pruneCommentOverlay() {
+  var oldest = oldestPending(commentPending);
+  commentOverlay = commentOverlay.filter(function (e) { return oldest <= e.mark; });
+}
+
+/** comments に控えを当てた写しを返す。変わらなければ同じものを返す。 */
+function overlayComments(comments) {
+  var out = comments;
+  commentOverlay.forEach(function (e) { out = withOwnComment(out, e.id, e.row); });
+  return out;
+}
+
+/** 今の一覧に控えを当て、変わったら描き直す（写しを取り込まなかった応答で使う）。 */
+function applyCommentOverlay() {
+  var next = overlayComments(commentsByTarget);
+  if (next === commentsByTarget) return;
+  commentsByTarget = next;
+  redrawComments();
 }
 
 /** 件数（盤面・障害物の表）と開いている節を、今の commentsByTarget から描き直す。 */
@@ -1969,39 +2415,37 @@ function redrawComments() {
 }
 
 /**
- * 写しとしては古い（後から発行した書き込みの応答を既に反映した）成功の応答でも、その書き込み
- * 自身の操作だけは一覧へ入れる。サーバは同時に出した書き込みを発行順に処理するとは限らず、
- * 先に反映した写しがこの書き込みを含まないことがあるため。何度当てても同じ結果になるようにする。
- * add: comment を足す（同じ id が無ければ。作成日時の古い順、同じ日時なら既存の後ろ）。
- * remove: id の行を外す（あれば）。
+ * 確定した自分のコメントの操作1件を comments に当てた写しを返す（変わらなければ同じもの）。
+ * 何度当てても同じ結果になる。
+ * row があれば: その行を row.target_id の一覧へ足す（同じ id が無ければ。作成日時の古い順、
+ * 同じ日時なら既存の後ろ）。他の対象の一覧に同じ id があれば外す。
+ * row が null なら: id の行をどの一覧からも外す。
  */
-function applyOwnComment(add, removeId) {
+function withOwnComment(comments, id, row) {
+  var src = comments || {};
   var next = {};
-  Object.keys(commentsByTarget || {}).forEach(function (k) { next[k] = commentsByTarget[k]; });
+  Object.keys(src).forEach(function (k) { next[k] = src[k]; });
   var changed = false;
-  if (removeId) {
-    Object.keys(next).forEach(function (k) {
-      var list = Array.isArray(next[k]) ? next[k] : [];
-      var kept = list.filter(function (c) { return c.id !== removeId; });
-      if (kept.length !== list.length) { next[k] = kept; changed = true; }
-    });
-  }
-  if (add && add.id && add.target_id && !commentDeletedIds[add.id]) {
-    var cur = Array.isArray(next[add.target_id]) ? next[add.target_id] : [];
-    var exists = cur.some(function (c) { return c.id === add.id; });
+  var home = row && row.target_id ? row.target_id : null;
+  Object.keys(next).forEach(function (k) {
+    if (k === home) return;
+    var list = Array.isArray(next[k]) ? next[k] : [];
+    var kept = list.filter(function (c) { return c.id !== id; });
+    if (kept.length !== list.length) { next[k] = kept; changed = true; }
+  });
+  if (home) {
+    var cur = Array.isArray(next[home]) ? next[home] : [];
+    var exists = cur.some(function (c) { return c.id === id; });
     if (!exists) {
-      var row = Object.assign({}, add, { mine: true });   // 自分の追加・取り消しだけがここへ来る
       var at = cur.length;
       for (var i = 0; i < cur.length; i++) {
         if (String(cur[i].created_at || '') > String(row.created_at || '')) { at = i; break; }
       }
-      next[add.target_id] = cur.slice(0, at).concat([row], cur.slice(at));
+      next[home] = cur.slice(0, at).concat([row], cur.slice(at));
       changed = true;
     }
   }
-  if (!changed) return;
-  commentsByTarget = next;
-  redrawComments();
+  return changed ? next : comments;
 }
 
 function sendComment(hostId, targetId) {
@@ -2028,10 +2472,12 @@ function sendComment(hostId, targetId) {
         var cur = commentUiFor(hostId, targetId);
         if (cur) cur.input.value = '';   // 描き直しで引き継がれないよう、先に空にする
       }
+      if (res.ok && res.comment) noteOwnComment(res.comment.id, issued, res.comment);
       if (!applyComments(res.comments, issued)) {
-        if (res.ok) applyOwnComment(res.comment, null);
+        applyCommentOverlay();
         refreshOpenComments();
       }
+      pruneCommentOverlay();
       var now = commentUiFor(hostId, targetId);
       if (res.ok) {
         if (now) setCommentMessage(now, '', 'info');
@@ -2045,6 +2491,7 @@ function sendComment(hostId, targetId) {
     })
     .withFailureHandler(function (err) {
       settle();
+      pruneCommentOverlay();
       refreshOpenComments();
       var now = commentUiFor(hostId, targetId);
       var text = 'コメントを送れませんでした: ' + err.message;
@@ -2054,9 +2501,45 @@ function sendComment(hostId, targetId) {
     .apiAddComment(targetId, body);
 }
 
+/** 消すコメントの前後で、削除ボタンを持つ最も近いコメントの id（次を先に、無ければ前）。 */
+function commentDeleteNeighbours(hostId, commentId) {
+  var box = document.getElementById(hostId);
+  var items = box ? box.querySelectorAll('li') : [];
+  var at = -1;
+  for (var i = 0; i < items.length; i++) { if (items[i].dataset.id === commentId) at = i; }
+  var withDelete = function (li) { return !!li.querySelector('.comment-delete'); };
+  var next = null, prev = null;
+  for (var n = at + 1; at >= 0 && n < items.length && !next; n++) { if (withDelete(items[n])) next = items[n].dataset.id; }
+  for (var p = at - 1; p >= 0 && !prev; p--) { if (withDelete(items[p])) prev = items[p].dataset.id; }
+  return { next: next, prev: prev };
+}
+
+/**
+ * コメントを消した（または消せなかった）あと、焦点が失われていれば移す。
+ * 消せなかったときは同じ削除ボタン。消せたときは次のコメントの削除、無ければ前、無ければ入力欄。
+ * 利用者が別の場所へ焦点を移していたら動かさない。
+ */
+function focusAfterCommentDelete(hostId, targetId, commentId, neighbours, kept) {
+  var a = document.activeElement;
+  var box = document.getElementById(hostId);
+  if (a && a !== document.body && a !== document.documentElement && !(box && box.contains(a) && a.disabled)) return;
+  var ui = commentUiFor(hostId, targetId);
+  if (!ui || !box) return;
+  var btnOf = function (id) {
+    var items = box.querySelectorAll('li');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].dataset.id === id) return items[i].querySelector('.comment-delete');
+    }
+    return null;
+  };
+  var target = (kept ? btnOf(commentId) : null) || btnOf(neighbours.next) || btnOf(neighbours.prev) || ui.input;
+  if (target && typeof target.focus === 'function') target.focus();
+}
+
 /** 自分のコメントを消す。確認は挟まず、取り消せる通知を出す。 */
 function deleteComment(hostId, targetId, commentId) {
   if (commentDeleting[commentId]) return;
+  var neighbours = commentDeleteNeighbours(hostId, commentId);   // 消えたあとの焦点の行き先
   commentDeleting[commentId] = true;
   var issued = ++commentWriteIssued;
   commentPending[issued] = true;
@@ -2075,18 +2558,25 @@ function deleteComment(hostId, targetId, commentId) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       settle();
       if (res.ok) commentWritesDone++;
-      if (res.ok && res.removed && res.removed.id) commentDeletedIds[res.removed.id] = true;
+      if (res.ok && res.removed && res.removed.id) {
+        commentDeletedIds[res.removed.id] = true;
+        noteOwnComment(res.removed.id, issued, null);
+      }
       if (!applyComments(res.comments, issued)) {
-        if (res.ok) applyOwnComment(null, res.removed && res.removed.id);
+        applyCommentOverlay();
         refreshOpenComments();
       }
+      pruneCommentOverlay();
+      focusAfterCommentDelete(hostId, targetId, commentId, neighbours, !(res.ok && res.removed));
       if (res.ok) showUndoToast('コメントを削除しました。', function () { restoreComment(res.removed); });
       else fail(res.message);
       afterHistoryWrite(res, res.ok ? targetId : null, msgMark);
     })
     .withFailureHandler(function (err) {
       settle();
+      pruneCommentOverlay();
       refreshOpenComments();
+      focusAfterCommentDelete(hostId, targetId, commentId, neighbours, true);
       fail('コメントを削除できませんでした: ' + err.message);
     })
     .apiDeleteComment(commentId);
@@ -2110,15 +2600,21 @@ function restoreComment(row) {
       var msgMark = messageSeq;   // この応答の処理で出した文言を見分ける
       delete commentPending[issued];
       if (res.ok) commentWritesDone++;
+      // 重ねるのはサーバが保存した形の行（restored。id の前後の空白を落としたもの）。
+      // 送った行のままだと id が食い違い、写しの行と一時的に二重に出る。無ければ送った行を使う。
+      var back = (res.ok && res.restored) || row;
       if (res.ok && row.id) delete commentDeletedIds[row.id];
-      // 戻す応答は戻した行を運ばない。送った行（row）を使う。
-      if (!applyComments(res.comments, issued) && res.ok) applyOwnComment(row, null);
+      if (res.ok && back.id) delete commentDeletedIds[back.id];
+      if (res.ok) noteOwnComment(back.id, issued, back);
+      if (!applyComments(res.comments, issued)) applyCommentOverlay();
+      pruneCommentOverlay();
       if (res.ok) setMessage('コメントを戻しました。', 'info');
       else failRestore(res.message);
       afterHistoryWrite(res, res.ok ? row.target_id : null, msgMark);
     })
     .withFailureHandler(function (err) {
       delete commentPending[issued];
+      pruneCommentOverlay();
       failRestore('取り消せませんでした: ' + err.message);
     })
     .apiRestoreComment(row);
@@ -2630,11 +3126,15 @@ function loadView() {
           commentsByTarget = withoutDeletedComments(res.comments);
           lastAppliedComment = Math.max(lastAppliedComment, commentFloor);
         }
-        if (requestedView === 'board') { render(res.view); } else { renderTable(res.view); }
+        if (requestedView === 'board') { render(trustBoard(res.view)); } else { renderTable(res.view); }
         renderSummary(res.summary);
         if (takeComments) refreshOpenComments();
         // 障害物の読み直しは、出した時点で確定していた書き込みより新しい状態。それより古い応答で表を戻さない。
-        if (requestedView === 'impediment') lastAppliedImp = Math.max(lastAppliedImp, impFloor);
+        if (requestedView === 'impediment') {
+          lastAppliedImp = Math.max(lastAppliedImp, impFloor);
+          impSummary = res.summary;
+          releaseStickyIfDone(res.view);
+        }
         setMessage('', 'info');
       } else {
         // 失敗が確定した（＝捨てるべき応答ではない）。placeholder が出ていれば畳む。
@@ -2729,9 +3229,10 @@ function objectTable(columns, rows, onRow, withCommentCount) {
       tr.setAttribute('tabindex', '0');
       tr.setAttribute('role', 'button');
       tr.setAttribute('aria-label', String(row.id) + ' ' + String(row.title || '') + ' を開く');
-      tr.addEventListener('click', function () { onRow(row); });
+      markImpRow(tr, row.id);   // その障害物への書き込みの送信中は、押せない行として出す
+      tr.addEventListener('click', function () { if (!impBusyId(row.id)) onRow(row); });
       tr.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter' || ev.key === ' ') { if (ev.preventDefault) ev.preventDefault(); onRow(row); }
+        if (ev.key === 'Enter' || ev.key === ' ') { if (ev.preventDefault) ev.preventDefault(); if (!impBusyId(row.id)) onRow(row); }
       });
     }
     tbody.appendChild(tr);
@@ -2779,11 +3280,13 @@ function pendingSection(pending) {
     done.id = 'imp-pending-resolve-' + p.id;
     done.type = 'button';
     fillButton(done, 'check', '解決済として完了');
+    done.disabled = impBusyId(p.id);
     done.addEventListener('click', function () { retryResolveImp(p.id, p.resolved.resolution, p.open); });
     var back = document.createElement('button');
     back.id = 'imp-pending-unresolve-' + p.id;
     back.type = 'button';
     fillButton(back, 'undo', '未解決に戻す');
+    back.disabled = impBusyId(p.id);
     back.addEventListener('click', function () { unresolveImp(p.open, p.resolved); });
     actionTd.appendChild(done);
     actionTd.appendChild(back);
@@ -2825,11 +3328,22 @@ function renderTable(view) {
     add.id = 'imp-add';
     add.type = 'button';
     fillButton(add, 'plus', '障害物を追加');
-    add.addEventListener('click', function () { openImpPanel(null); });
+    add.addEventListener('click', function () {
+      openImpPanel(null, { find: function () { return document.getElementById('imp-add'); }, fallbackId: 'table-view' });
+    });
     actions.appendChild(add);
     host.appendChild(actions);
     if (view.pending && view.pending.length > 0) host.appendChild(pendingSection(view.pending));
-    host.appendChild(tableSection('未解決', view.columns, view.open, function (row) { openImpPanel(row.id); }, true));
+    host.appendChild(tableSection('未解決', view.columns, view.open, function (row) {
+      openImpPanel(row.id, {
+        find: function () {
+          var rs = document.querySelectorAll('#table-view tr.clickable');
+          for (var i = 0; i < rs.length; i++) { if (rs[i].dataset.id === row.id) return rs[i]; }
+          return null;
+        },
+        fallbackId: 'table-view'
+      });
+    }, true));
     host.appendChild(tableSection('解決済', view.columns, view.resolved, null, true));
     return;
   }
@@ -2860,6 +3374,7 @@ function move(id, newStatus) {
   var originalStatus = columnStatusOf(board, id);
 
   pendingIds[id] = true;
+  var bw = issueBoardWrite();   // 削除の控えをいつ捨ててよいかの会計
   inflight++;
   if (inflight > 1) overlapped = true;
   render(boardWithCardMoved(board, id, newStatus));
@@ -2873,24 +3388,29 @@ function move(id, newStatus) {
       var trustWholeBoard = settleOverlap();
       if (res.ok) {
         writeSeq++;   // loadView() が発行後の書き込みを見分けるための会計
-        render(applyServerBoard(res.board, id, trustWholeBoard));
+        retargetDeleteRestore(id, res.board, newStatus, originalStatus);
+        render(applyServerBoard(res.board, id, trustWholeBoard, bw));
         setMessage(id + ' を ' + newStatus + ' に移しました。', 'info');
         afterHistoryWrite(res, id, msgMark);
       } else {
         // res.board があれば競合等でサーバが返した最新の内容、無ければ
         // 今の画面からこのカードだけを元の列へ戻す。
+        retargetDeleteRestore(id, res.board, newStatus, originalStatus);
         render(res.board
-          ? applyServerBoard(res.board, id, trustWholeBoard)
+          ? applyServerBoard(res.board, id, trustWholeBoard, bw)
           : rollbackCard(id, newStatus, originalStatus));
         setMessage(res.message, 'error');
       }
+      settleBoardWrite(bw);
     })
     .withFailureHandler(function (err) {
       delete pendingIds[id];
       inflight--;
       settleOverlap();
+      retargetDeleteRestore(id, null, newStatus, originalStatus);
       render(rollbackCard(id, newStatus, originalStatus));
       setMessage('更新に失敗しました: ' + err.message, 'error');
+      settleBoardWrite(bw);
     })
     .apiUpdateStatus(id, newStatus, expectedUpdatedAt);
 }
@@ -2910,6 +3430,7 @@ window.addEventListener('resize', function () { closeOpenHelp(); });
 document.getElementById('panel-close').appendChild(makeIcon('close'));
 fillButton(document.getElementById('panel-save'), 'save', '保存');
 fillButton(document.getElementById('panel-delete'), 'trash', '削除');
+document.getElementById('panel-delete').setAttribute('aria-label', 'PBI を削除');
 fillButton(document.getElementById('imp-panel-save'), 'save', '保存');
 fillButton(document.getElementById('imp-panel-cancel-resolve'), 'close', 'やめる');
 document.getElementById('imp-panel-cancel-resolve').addEventListener('click', function () {
@@ -2917,10 +3438,10 @@ document.getElementById('imp-panel-cancel-resolve').addEventListener('click', fu
   document.getElementById('imp-panel-resolve').focus();   // 押したボタンが隠れるので、フォーカスを残す
 });
 document.getElementById('imp-panel-close').appendChild(makeIcon('close'));
-document.getElementById('imp-panel-close').addEventListener('click', closeImpPanel);
+document.getElementById('imp-panel-close').addEventListener('click', function () { closeImpPanel(true); });
 document.getElementById('imp-panel-save').addEventListener('click', saveImpPanel);
 document.getElementById('imp-panel-resolve').addEventListener('click', resolveImp);
-document.getElementById('panel-close').addEventListener('click', closePanel);
+document.getElementById('panel-close').addEventListener('click', function () { closePanel(true); });
 document.getElementById('panel-save').addEventListener('click', savePanel);
 fillButton(document.getElementById('toast-undo'), 'undo', '取り消す');
 document.getElementById('panel-delete').addEventListener('click', deletePbi);
@@ -2955,8 +3476,8 @@ document.addEventListener('keydown', function (ev) {
   if (closeOpenHelp()) return;
   // 「完了する」の通知は閉じない（完了させる手段が他に無い）。普通の通知だけ閉じる。
   if (!document.getElementById('toast').hidden && !shownIsSticky) { hideToast(); return; }
-  if (!document.getElementById('panel').hidden) { closePanel(); return; }
-  if (!document.getElementById('imp-panel').hidden) closeImpPanel();
+  if (!document.getElementById('panel').hidden) { closePanel(true); return; }
+  if (!document.getElementById('imp-panel').hidden) closeImpPanel(true);
 });
 renderTabs();
 showView(activeView);

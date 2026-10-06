@@ -67,8 +67,8 @@ function advanceLastPbiIdWatermark_(rows) {
     const recorded = getLastPbiId_();
     const scannedMax = highWaterPbiId(scanRows, '');
     if (scannedMax === null) return;
-    const recordedN = recorded ? pbiIdNumber(recorded) : null;
-    if (recordedN === null || pbiIdNumber(scannedMax) > recordedN) setLastPbiId_(scannedMax);
+    // 番号は数字列のまま比べる（2^53 を超える番号でも大小を誤らない）。
+    if (!recorded || pbiIdNumber(recorded) === null || comparePbiIds(scannedMax, recorded) > 0) setLastPbiId_(scannedMax);
   } catch (e) {
     // best-effort: 記録できなくても書き戻し本体は続行する。
   }
@@ -200,6 +200,11 @@ function appendHistory_(eventsOrThunk) {
     // 既存の行は解釈し直さない。ファイルが大きくなってもロック中の処理が増えないよう、
     // 見出し行だけを検査し、新しい行を文字列のまま末尾へ足す。
     if (!blank) assertHeaderMatches(text.split(/\r?\n/, 1)[0], HISTORY_FIELDS);
+    // 末尾が閉じていない引用符の中で終わっていると、足した行はそのセルの続きとして
+    // 飲み込まれ、黙って読めなくなる。足さずに警告する（文字の走査だけで、行は解釈しない）。
+    if (!blank && csvEndsInsideQuotes(text)) {
+      return '変更履歴のファイルが壊れています（引用符が閉じていません）。docs/setup.md の手順で切り替えてください';
+    }
     const added = toCsv(historyRows(events, { at: nowText_(), actor: currentUserEmail_(), newId: newHistoryId_ }), HISTORY_FIELDS);
     const next = blank ? added : (/\n$/.test(text) ? text : text + '\n') + added.slice(added.indexOf('\n') + 1);
     writeScrumFile_(HISTORY_CSV_NAME, next);
@@ -213,9 +218,20 @@ function appendHistory_(eventsOrThunk) {
 }
 
 /**
+ * 見出しより多いセルに中身のある行があれば例外にする（余りが空セルだけなら通す）。書き戻しの前に呼ぶ。
+ * そのまま書き戻すと、見出しに無いセル（引用されていないカンマの後ろ等）が黙って消える。
+ */
+function assertNoOverlongRows_(text, name) {
+  const bad = findOverlongCsvRow(text);
+  if (!bad) return;
+  const where = bad.id ? bad.id + ' の行（' + bad.line + '行目）' : bad.line + '行目';
+  throw new Error('scrum/' + name + ' の ' + where + 'に列が多すぎます。CSV を直してから操作してください');
+}
+
+/**
  * 書き戻しを伴う API の共通手順。
  *
- * mutate(rows) は { ok:true, rows, id?, removed? } か { ok:false, reason, message } を返すこと。
+ * mutate(rows) は { ok:true, rows, id?, removed?, afterWrite? } か { ok:false, reason, message } を返すこと。
  * ロックを取ってから読み直すのは、画面を描いた時点のデータを信じないため
  * （Drive 同期には数秒から数分のラグがある）。
  */
@@ -229,6 +245,7 @@ function withBacklogWrite_(mutate) {
     // 未知の列を持つ CSV へ書き戻すと列が消えるため、読み直した直後・
     // 書き戻しより前に必ずヘッダーを検査する。
     assertHeaderMatches(text, BACKLOG_FIELDS);
+    assertNoOverlongRows_(text, BACKLOG_CSV_NAME);
     const rows = csvToObjects(text);
     // mutate の前に必ず高水位を進める。今の pure 層（pure_merge.js）は rows を
     // 直接書き換えず新しい配列を返すので mutate の後でも安全なはずだが、
@@ -247,6 +264,16 @@ function withBacklogWrite_(mutate) {
       };
     }
     writeScrumFile_(BACKLOG_CSV_NAME, toCsv(result.rows, BACKLOG_FIELDS));
+    // 本体が書けた直後（まだロックの中）に、操作ごとの後始末を行う（取り消しの鍵の預け入れ・破棄）。
+    // 返した項目は応答に足す。
+    const extra = typeof result.afterWrite === 'function' ? result.afterWrite() : null;
+    // 採番した ID の高水位は、本体が書けてから進める。書く前に進めると、書き込みが
+    // 失敗したときに使われていない ID が消費され、次の作成で欠番になる。
+    // 記帳は best-effort（advanceLastPbiIdWatermark_ と同じ）。失敗しても新しい行は
+    // CSV に残るので、次の採番はそれを見て再利用しない。
+    if (result.highWaterId) {
+      try { setLastPbiId_(result.highWaterId); } catch (e) { /* best-effort */ }
+    }
     // 本体は書けた。履歴は後追いで、失敗しても本体を失敗にしない。
     const warning = appendHistory_(function () {
       return diffRows(rows, result.rows, BACKLOG_FIELDS, ['updated_at', 'created_at']).map(function (e) {
@@ -260,6 +287,7 @@ function withBacklogWrite_(mutate) {
       removed: result.removed || null
     };
     if (warning) out.historyWarning = warning;
+    if (extra) Object.keys(extra).forEach(function (k) { out[k] = extra[k]; });
     return out;
   } catch (e) {
     return { ok: false, reason: 'error', message: e.message, board: null };
@@ -283,12 +311,18 @@ function conflictMessage_(reason, retryHint) {
   return 'この PBI が見つかりません。最新の内容に更新しました。';
 }
 
-/** 編集を許した項目だけを取り出す。それ以外は捨てる。 */
+/**
+ * 編集を許した項目だけを取り出す。それ以外は捨てる。
+ * 改行は LF に揃える（CSV の読み取り＝csvToObjects と同じ）。揃えないと、同じ文面の CRLF を
+ * 送っただけで「変わった」とみなされ、見た目の同じ変更が履歴に残る。
+ */
 function pickEditableFields_(fields) {
   const src = fields || {};
   const out = {};
   PBI_EDITABLE_FIELDS.forEach(function (f) {
-    if (Object.prototype.hasOwnProperty.call(src, f)) out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]);
+    if (Object.prototype.hasOwnProperty.call(src, f)) {
+      out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]).replace(/\r\n?/g, '\n');
+    }
   });
   return out;
 }
@@ -333,8 +367,8 @@ function apiCreatePbi(fields) {
     if (!r.ok) {
       return { ok: false, reason: r.reason, message: 'ID が重複しました。もう一度お試しください。' };
     }
-    setLastPbiId_(id);
-    return { ok: true, rows: r.rows, id: id };
+    // 高水位は withBacklogWrite_ が本体を書けたあとに進める（highWaterId）。
+    return { ok: true, rows: r.rows, id: id, highWaterId: id };
   });
 }
 
@@ -356,10 +390,19 @@ function apiUpdatePbi(id, fields, expectedUpdatedAt) {
   });
 }
 
+/** 取り消し用に消した行を預ける時間（秒）。通知が消えたあとも少しのあいだは戻せる。 */
+const PBI_UNDO_TTL_SECONDS = 600;
+const PBI_UNDO_KEY_PREFIX = 'undo:';
+
 /**
  * PBI を消す。確認ダイアログは置かず、実行後に取り消せる通知で受ける
  * （apiRestorePbi）。「完了」は Done 列への移動で表すので、これは
  * 「間違って作った」場合の操作である。
+ *
+ * 消した行はサーバ側（CacheService）に預け、その鍵（undoToken）だけを返す。
+ * 取り消しは鍵を受け取り、預かった行だけを戻す（ブラウザが送る行の中身は信じない）。
+ * removed は通知の表示に使うだけで、取り消しには使わない。
+ * 預けられなかったとき（キャッシュの失敗）は undoToken を null にする（削除そのものは成功）。
  */
 function apiDeletePbi(id, expectedUpdatedAt) {
   return withBacklogWrite_(function (rows) {
@@ -370,18 +413,49 @@ function apiDeletePbi(id, expectedUpdatedAt) {
         message: conflictMessage_(r.reason, '内容を確認し、もう一度削除すると更新後の内容ごと消します。')
       };
     }
-    // 取り消しに使うため、消した行そのものを返す。
-    let removed = null;
-    rows.forEach(function (row) {
-      if (String(row.id || '').trim() === String(id || '').trim()) removed = row;
-    });
-    return { ok: true, rows: r.rows, removed: removed };
+    // deleteRow が実際に消した行を預ける（同じ ID の行が複数あっても、消した行と預ける行が食い違わない）。
+    // 同じ ID の本物の行がまだ残るときは shared を記録する。取り消しはそれを見て、残った行を
+    // 重複とみなさずに戻す（削除前の状態に戻すだけ。鍵は一度しか使えないので二重には増えない）。
+    const key = String(id || '').trim();
+    const shared = r.rows.some(function (x) { return String(x.id || '').trim() === key && !isPlaceholderRow(x); });
+    const held = JSON.stringify({ row: r.removed, shared: shared });
+    return {
+      ok: true, rows: r.rows, removed: r.removed,
+      // 本体を書けてから預ける（書けなかった削除の鍵を残さない）。ロックの中で呼ばれる。
+      afterWrite: function () {
+        try {
+          const token = String(Utilities.getUuid());
+          CacheService.getScriptCache().put(PBI_UNDO_KEY_PREFIX + token, held, PBI_UNDO_TTL_SECONDS);
+          return { undoToken: token };
+        } catch (e) {
+          return { undoToken: null };
+        }
+      }
+    };
   });
+}
+
+/** 預けた行を鍵で引く。無い・期限切れ・壊れているときは null。 */
+function takeHeldPbi_(token) {
+  if (typeof token !== 'string' || !token) return null;
+  try {
+    const text = CacheService.getScriptCache().get(PBI_UNDO_KEY_PREFIX + token);
+    if (!text) return null;
+    const held = JSON.parse(text);
+    return held && held.row ? held : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
  * 削除した PBI を戻す。通知の「取り消す」から呼ばれる。
  * apiCreatePbi ではなくこちらを使うのは、元の id と created_at を保つため。
+ *
+ * 引数は apiDeletePbi が返した undoToken だけ。戻すのはサーバが預かった行で、ブラウザが
+ * 送る中身は使わない（google.script.run はブラウザから任意の値で呼べるため、行を受け取ると
+ * 別の行を同じ ID で差し込める）。鍵は戻せたときに捨てる（一度しか使えない）。
+ * 鍵が無い・期限切れなら reason 'expired' で断る。
  *
  * 復元は「今そこに表示・編集・削除できていた行を、そのまま戻す」操作である。
  * status / priority / size が語彙外の行（ローカルの Claude Code が直接 CSV に
@@ -389,20 +463,23 @@ function apiDeletePbi(id, expectedUpdatedAt) {
  * 取り消し操作が名目だけになる（changedFields のコメントにある「常に検証する
  * と保存そのものが塞がれる」と同じ理由）。そのため語彙は検証しない。
  *
- * google.script.run はブラウザから任意の値で呼べるため、次の3点だけを検証する。
+ * 預かった行にも次の3点を検証する（預けた後に記帳や CSV が変わることがあるため）。
  * - title が空でないこと（空タイトルの行は isPlaceholderRow で盤面に出ないため、
  *   戻しても見えない）
  * - id が PBI-\d+ の形であること
  * - id の番号が「今までに採番された最大値」を超えていないこと
- *   （isPbiIdWithinHighWater。復元は既存の行を戻す操作であり、最大値を超える
- *   ことは原理的にありえない。超えていれば、でっち上げ ID や改ざんとみなし、
- *   以後の採番を汚染させない。ただし上限が一つも立たないとき＝記帳が
+ *   （isPbiIdWithinHighWater。ただし上限が一つも立たないとき＝記帳が
  *   best-effort ゆえ一度も成功していないときは、判定をあきらめて通す。
  *   詳しくは isPbiIdWithinHighWater のコメント参照）
  */
-function apiRestorePbi(row) {
+function apiRestorePbi(token) {
   return withBacklogWrite_(function (rows) {
-    const id = String((row || {}).id || '').trim();
+    const held = takeHeldPbi_(token);
+    if (!held) {
+      return { ok: false, reason: 'expired', message: '取り消しの期限が切れました。' };
+    }
+    const row = held.row;
+    const id = String(row.id || '').trim();
     if (!PBI_ID_RE.test(id)) {
       return { ok: false, reason: 'invalid', message: 'PBI ID の形式が不正です: ' + id };
     }
@@ -410,19 +487,27 @@ function apiRestorePbi(row) {
     if (!isPbiIdWithinHighWater(id, scanRows, getLastPbiId_())) {
       return { ok: false, reason: 'invalid', message: 'PBI ID が採番済みの範囲を超えています: ' + id };
     }
-    const title = String((row || {}).title || '').trim();
+    const title = String(row.title || '').trim();
     if (!title) {
       return { ok: false, reason: 'invalid', message: 'タイトルを入力してください。' };
     }
 
-    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_());
+    // shared は削除の時点で同じ ID の行が残っていた印（その場合だけ同じ ID でも戻す）。
+    const r = restoreRow(rows, row, BACKLOG_FIELDS, nowText_(), { allowSameId: held.shared === true });
     if (!r.ok) {
       const message = r.reason === 'invalid'
         ? 'PBI ID が指定されていません。'
         : 'この PBI は既に存在します。取り消しは要りません。';
       return { ok: false, reason: r.reason, message: message };
     }
-    return { ok: true, rows: r.rows, historyAction: 'restore' };
+    return {
+      ok: true, rows: r.rows, historyAction: 'restore',
+      // 書けてから鍵を捨てる。ロックの中なので、同じ鍵の2回目は必ずこの後に読み、expired になる。
+      afterWrite: function () {
+        try { CacheService.getScriptCache().remove(PBI_UNDO_KEY_PREFIX + token); } catch (e) { /* best-effort */ }
+        return null;
+      }
+    };
   });
 }
 
@@ -448,6 +533,7 @@ function readImpedimentRows_(name) {
   }
   // 未知の列を持つ CSV へ書き戻すと列が消えるため、書く前に必ず検査する。
   assertHeaderMatches(text, IMPEDIMENT_FIELDS);
+  assertNoOverlongRows_(text, name);
   return csvToObjects(text);
 }
 
@@ -481,13 +567,21 @@ function withImpedimentWrite_(first, mutate) {
     writes.sort(function (a, b) { return (a.key === first ? 0 : 1) - (b.key === first ? 0 : 1); });
     const openBefore = open;
     const written = {};
+    let completed = false;
     // この呼び出しで書けたものだけを履歴にする。完了の再送で書かなかった側は記録しない。
+    // ただし途中で止まった操作を逆向きに揃えたとき（解決の途中を「未解決に戻す」で完了した等）は、
+    // 最新の履歴が最終の状態と食い違うので、完了した側の操作を記録する。
+    const moveEvent = function (action, wroteMain) {
+      if (wroteMain) return [{ target_id: result.historyId, action: action }];
+      if (completed && lastHistoryAction_(result.historyId) !== action) return [{ target_id: result.historyId, action: action }];
+      return [];
+    };
     const historyEvents = function () {
       if (result.historyKind === 'diff') {
         return written.open ? diffRows(openBefore, result.open, IMPEDIMENT_FIELDS, []) : [];
       }
-      if (result.historyKind === 'resolve') return written.resolved ? [{ target_id: result.historyId, action: 'resolve' }] : [];
-      if (result.historyKind === 'unresolve') return written.open ? [{ target_id: result.historyId, action: 'unresolve' }] : [];
+      if (result.historyKind === 'resolve') return moveEvent('resolve', written.resolved);
+      if (result.historyKind === 'unresolve') return moveEvent('unresolve', written.open);
       return [];
     };
     for (let i = 0; i < writes.length; i++) {
@@ -505,6 +599,7 @@ function withImpedimentWrite_(first, mutate) {
         }, impedimentPayload_(open, resolved), partialWarning ? { historyWarning: partialWarning } : {});
       }
     }
+    completed = true;
     if (result.open) open = result.open;
     if (result.resolved) resolved = result.resolved;
     const warning = appendHistory_(historyEvents);
@@ -516,6 +611,20 @@ function withImpedimentWrite_(first, mutate) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * 対象の最新の履歴の操作名（無ければ空文字）。途中で止まった操作を揃えたときだけ読む。
+ * 同じ時刻なら後に足された行を新しいとみなす。
+ */
+function lastHistoryAction_(targetId) {
+  const key = String(targetId || '').trim();
+  let best = null;
+  readCsvRowsBestEffort_(HISTORY_CSV_NAME).forEach(function (row) {
+    if (String(row.target_id || '').trim() !== key) return;
+    if (!best || String(row.at || '') >= String(best.at || '')) best = row;
+  });
+  return best ? String(best.action || '') : '';
 }
 
 /** 障害物の競合・不在の定型文。 */
@@ -532,8 +641,11 @@ function impedimentMessage_(reason, retryHint, id) {
 function pickImpedimentFields_(fields) {
   const src = fields || {};
   const out = {};
+  // 改行は LF に揃える（pickEditableFields_ と同じ理由。同じ文面の CRLF で見た目の同じ変更を履歴に残さない）。
   IMPEDIMENT_EDITABLE_FIELDS.forEach(function (f) {
-    if (Object.prototype.hasOwnProperty.call(src, f)) out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]);
+    if (Object.prototype.hasOwnProperty.call(src, f)) {
+      out[f] = String(src[f] === null || src[f] === undefined ? '' : src[f]).replace(/\r\n?/g, '\n');
+    }
   });
   return out;
 }
@@ -553,7 +665,11 @@ function apiCreateImpediment(fields) {
 
 /** 未解決の障害物を書き換える。expected は画面が描いた時点の行（全列）。 */
 function apiUpdateImpediment(id, fields, expected) {
-  return withImpedimentWrite_('open', function (open) {
+  return withImpedimentWrite_('open', function (open, resolved) {
+    // 解決が途中で止まった行を片側だけ直すと、揃えるときにどちらの内容を残すか決まらない。先に揃えさせる。
+    if (impedimentHalfResolved(open, resolved, id)) {
+      return { ok: false, reason: 'conflict', message: '解決が途中で止まっています。先に「完了する」か「未解決に戻す」で揃えてください' };
+    }
     const picked = pickImpedimentFields_(fields);
     const v = validateImpedimentFields(picked);
     if (!v.ok) return { ok: false, reason: 'invalid', message: v.errors.join('\n') };
@@ -635,6 +751,7 @@ function withCommentWrite_(mutate) {
       return { ok: false, reason: 'error', message: 'scrum/' + COMMENT_CSV_NAME + ' が見つかりません。配布し直してください。' };
     }
     assertHeaderMatches(text, COMMENT_FIELDS);
+    assertNoOverlongRows_(text, COMMENT_CSV_NAME);
     const rows = csvToObjects(text);
     const me = currentUserEmail_();
     const result = mutate(rows, me);
@@ -694,7 +811,11 @@ function apiRestoreComment(row) {
     }
     const r = restoreComment(rows, picked);
     if (!r.ok) return { ok: false, reason: 'invalid', message: '戻す内容が不正です。' };
-    return { ok: true, rows: r.unchanged ? null : r.rows,
+    // 保存した形の行（id・target_id は前後の空白を落とす）を返す。画面は送った行ではなくこれで重ねる
+    // （送った行のままだと id が食い違い、サーバの写しの行と一時的に二重に出る）。
+    const id = String(picked.id || '').trim();
+    const saved = r.rows.filter(function (x) { return String(x.id || '').trim() === id; })[0];
+    return { ok: true, rows: r.unchanged ? null : r.rows, extra: { restored: saved },
       history: [{ target_id: String(picked.target_id || '').trim(), action: 'comment_restore' }] };
   });
 }

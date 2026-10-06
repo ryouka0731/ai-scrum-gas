@@ -14,42 +14,72 @@ const LINE_DIFF_MAX = 500;
 
 function histText_(v) { return v === undefined || v === null ? '' : String(v); }
 
-/** 行配列を id（trim）で引ける形にする。id が空の行は無視する。 */
-function histIndex_(rows) {
-  const map = {};
-  const order = [];
+/** 行配列を id（trim）ごとの行の並びにする。id が空の行は無視する。 */
+function histGroup_(rows) {
+  const map = Object.create(null);   // '__proto__' のような id でも壊れないように
   (rows || []).forEach(function (row) {
     const id = histText_((row || {}).id).trim();
-    if (!id || Object.prototype.hasOwnProperty.call(map, id)) return;
-    map[id] = row;
-    order.push(id);
+    if (!id) return;
+    (map[id] = map[id] || []).push({ row: row, used: false });
   });
-  return { map: map, order: order };
+  return map;
+}
+
+function histSame_(x, y, cols) {
+  return cols.every(function (f) { return histText_(x[f]) === histText_(y[f]); });
 }
 
 /**
  * 前後の行から変更を作る。fields のうち ignore に無い列だけ比べる。
  * 並びは after の行順、消えた行はその後に before の行順。
+ *
+ * 同じ id の行が複数あってもよい（配布の雛形と本物の行が同じ ID を持つ、ローカルで
+ * 重複した ID が書かれた、など）。id ごとに、まず中身の変わらない行どうしを対応づけ、
+ * 残りを並び順に対応づける。対応のつかない after の行は create、before の行は delete。
+ * id の最初の行だけを見ると、雛形の陰にある本物の行の編集が記録されず、重複の片方の
+ * 削除が「存在しない update」として記録される。
  */
 function diffRows(beforeRows, afterRows, fields, ignore) {
   const skip = ignore || [];
   const cols = (fields || []).filter(function (f) { return f !== 'id' && skip.indexOf(f) === -1; });
-  const b = histIndex_(beforeRows);
-  const a = histIndex_(afterRows);
-  const out = [];
-  a.order.forEach(function (id) {
-    if (!Object.prototype.hasOwnProperty.call(b.map, id)) {
-      out.push({ target_id: id, action: 'create' });
-      return;
+  const b = histGroup_(beforeRows);
+  const afterList = [];
+  (afterRows || []).forEach(function (row) {
+    const id = histText_((row || {}).id).trim();
+    if (id) afterList.push({ id: id, row: row, pair: null });
+  });
+  // 1巡目: 中身の変わらない行どうし
+  afterList.forEach(function (x) {
+    const cands = b[x.id] || [];
+    for (let i = 0; i < cands.length; i++) {
+      if (!cands[i].used && histSame_(cands[i].row, x.row, cols)) { cands[i].used = true; x.pair = cands[i].row; x.same = true; return; }
     }
+  });
+  // 2巡目: 残りを並び順に
+  afterList.forEach(function (x) {
+    if (x.pair) return;
+    const cands = b[x.id] || [];
+    for (let i = 0; i < cands.length; i++) {
+      if (!cands[i].used) { cands[i].used = true; x.pair = cands[i].row; return; }
+    }
+  });
+  const out = [];
+  afterList.forEach(function (x) {
+    if (!x.pair) { out.push({ target_id: x.id, action: 'create' }); return; }
+    if (x.same) return;
     cols.forEach(function (f) {
-      const x = histText_(b.map[id][f]);
-      const y = histText_(a.map[id][f]);
-      if (x !== y) out.push({ target_id: id, action: 'update', field: f, before: x, after: y });
+      const v0 = histText_(x.pair[f]);
+      const v1 = histText_(x.row[f]);
+      if (v0 !== v1) out.push({ target_id: x.id, action: 'update', field: f, before: v0, after: v1 });
     });
   });
-  b.order.forEach(function (id) {
-    if (!Object.prototype.hasOwnProperty.call(a.map, id)) out.push({ target_id: id, action: 'delete' });
+  (beforeRows || []).forEach(function (row) {
+    const id = histText_((row || {}).id).trim();
+    if (!id) return;
+    const cands = b[id];
+    for (let i = 0; i < cands.length; i++) {
+      if (cands[i].row === row && !cands[i].used) { cands[i].used = true; out.push({ target_id: id, action: 'delete' }); return; }
+    }
   });
   return out;
 }

@@ -8,13 +8,19 @@
 
 const IMPEDIMENT_ID_NUM_RE = /^IMP-(\d+)$/;
 
+// 番号は数字列のまま比べ・足す（2^53 超・指数表記の対策。pure_pbi_id.js 参照）。
+if (typeof require !== 'undefined' && typeof idDigitsIncrement_ === 'undefined') {
+  globalThis.idDigitsCompare_ = require('./pure_pbi_id.js').idDigitsCompare_;
+  globalThis.idDigitsIncrement_ = require('./pure_pbi_id.js').idDigitsIncrement_;
+}
+
 function nextImpedimentId(rows) {
-  let max = 0;
+  let max = '0';
   (rows || []).forEach(function (r) {
     const m = IMPEDIMENT_ID_NUM_RE.exec(String((r && r.id) || '').trim());
-    if (m) max = Math.max(max, parseInt(m[1], 10));
+    if (m && idDigitsCompare_(m[1], max) > 0) max = m[1];
   });
-  const n = String(max + 1);
+  const n = idDigitsIncrement_(max);
   return 'IMP-' + (n.length < 3 ? ('000' + n).slice(-3) : n);
 }
 

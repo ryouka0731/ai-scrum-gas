@@ -181,7 +181,7 @@ test('8b. ドラッグ・削除・削除の取り消しの historyWarning も全
   h.openCard('PBI-001');
   h.click('panel-delete');
   const removed = { id: 'PBI-001', title: 'A' };
-  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), removed: removed,
+  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), undoToken: 'tok-del', removed: removed,
     historyWarning: WARN + '（削除）' });
   // 削除の成功は通知で伝える。前の操作の文言（ドラッグ）に足さない。
   assert.equal(h.textOf('message'), WARN + '（削除）');
@@ -198,7 +198,7 @@ test('8g. 成功の文言を出さない応答（削除は通知で伝える）�
   assert.equal(h.textOf('message'), 'PBI-002 を Ready に移しました。');
   h.openCard('PBI-001');
   h.click('panel-delete');
-  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), removed: { id: 'PBI-001', title: 'A' },
+  latest(h).handlers.success({ ok: true, board: h.boardOf(WITHOUT_1), undoToken: 'tok-del', removed: { id: 'PBI-001', title: 'A' },
     historyWarning: WARN });
   assert.equal(h.textOf('message'), WARN, '前の操作の文言に足した');
 });
@@ -243,22 +243,26 @@ test('8d. 解決が途中で止まった応答の historyWarning は、止まっ
   assert.equal(h.textOf('message'), '途中で止まりました。 ' + WARN);
 });
 
-test('8h. 解決が途中で止まった応答の間に同じ障害物のパネルを開き直して履歴を開いていれば、その対象で取り直す', () => {
+test('8h. 同じ障害物のパネルで履歴を開いている間に、通知から送った操作が確定すれば、その対象で取り直す', () => {
+  // 送信中の障害物はパネルを開き直せない（I3）。パネルを開いたまま、通知の「完了する」から送る経路で確かめる。
   const h = onImpediment();
   h.clickImpRow('IMP-002');
   h.click('imp-panel-resolve');
   h.setValue('i-resolution', '直した');
   h.click('imp-panel-resolve');
-  const resolveCall = latest(h);
-  // 応答が届く前にパネルを閉じて同じ障害物を開き直し、履歴を開く。
-  h.click('imp-panel-close');
+  const resolvedRow = Object.assign({}, ROW, { status: 'Resolved', resolved_at: '2026-10-06', resolution: '直した' });
+  latest(h).handlers.success(impResponse([], { moved: ROW, resolvedRow: resolvedRow }));
+  h.click('toast-undo');   // 取り消し → 途中で止まる（未解決にも行が見えている）
+  latest(h).handlers.success(impResponse([ROW], { ok: false, reason: 'partial', message: '途中で止まりました。' }));
   h.clickImpRow('IMP-002');
   h.historyToggle('imp-panel-history');
   latest(h).handlers.success({ ok: true, entries: [] });
-  resolveCall.handlers.success(impResponse([], { ok: false, reason: 'partial', message: '途中で止まりました。' }));
+  const before = callsOf(h, 'apiGetHistory').length;
+  h.click('toast-undo');   // 「完了する」
+  latest(h).handlers.success(impResponse([ROW]));
   const again = callsOf(h, 'apiGetHistory');
-  assert.equal(again.length, 1, '途中で止まった後に取り直していない');
-  assert.deepEqual(again[0].args, ['IMP-002']);
+  assert.equal(again.length, before + 1, '確定した後に取り直していない');
+  assert.deepEqual(again[again.length - 1].args, ['IMP-002']);
 });
 
 test('8f. 解決の取り消しの historyWarning も、戻した旨の文言を残して足す', () => {

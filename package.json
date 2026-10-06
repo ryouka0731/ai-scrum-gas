@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node --test \"gas/tests/*.test.js\"",
     "test:browser": "node --test \"gas/tests/browser/*.test.js\"",
-    "test:all": "npm test && npm run test:browser"
+    "test:all": "npm test && npm run test:browser",
+    "test:stress": "node scripts/test-stress.js"
   }
 }

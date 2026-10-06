@@ -156,13 +156,57 @@ Element.prototype.appendChild = function (child) {
   return child;
 };
 Element.prototype.setAttribute = function (name, value) { this.attributes[name] = String(value); };
+Element.prototype.removeAttribute = function (name) { delete this.attributes[name]; };
 Element.prototype.getAttribute = function (name) {
   return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
 };
 Element.prototype.addEventListener = function (type, fn) {
   (this.listeners[type] || (this.listeners[type] = [])).push(fn);
 };
-Element.prototype.focus = function () { this.focusCount++; };
+// 焦点はハーネス（文書）ごとに持つ。要素は作った文書の焦点の控え（_focus）を持ち、静的な要素は
+// createHarness が祖先まで印を付ける。focus() は自分か祖先の控えへ「最後に focus() した要素」を書く。
+// 共有の変数にすると、2つ目のハーネスを作った時点で1つ目の document.activeElement が消える。
+Element.prototype.focus = function () {
+  this.focusCount++;
+  let n = this;
+  while (n && !n._focus) n = n.parentNode;
+  if (n) n._focus.active = this;
+};
+Element.prototype.contains = function (other) {
+  for (let n = other; n; n = n.parentNode) { if (n === this) return true; }
+  return false;
+};
+
+/** 単純なセレクタ（タグ / #id / .class の複合を空白でつないだ子孫指定）だけ解く。 */
+function matchesCompound(el, compound) {
+  const m = compound.match(/^([a-z0-9]*)((?:[#.][A-Za-z0-9_-]+)*)$/i);
+  if (!m) throw new Error('シムが解けないセレクタ: ' + compound);
+  if (m[1] && el.tagName !== m[1].toLowerCase()) return false;
+  const parts = m[2].match(/[#.][A-Za-z0-9_-]+/g) || [];
+  return parts.every(function (p) {
+    return p[0] === '#' ? el.id === p.slice(1) : el.classList.contains(p.slice(1));
+  });
+}
+function selectAll(root, selector) {
+  const chain = selector.trim().split(/\s+/);
+  const out = [];
+  (function walk(node, ancestors) {
+    node.children.forEach(function (c) {
+      // 末尾が c に合い、それより前の指定が祖先（root の外を含む）に順に当たること。
+      if (matchesCompound(c, chain[chain.length - 1])) {
+        let k = chain.length - 2;
+        for (let i = ancestors.length - 1; i >= 0 && k >= 0; i--) {
+          if (matchesCompound(ancestors[i], chain[k])) k--;
+        }
+        if (k < 0) out.push(c);
+      }
+      walk(c, ancestors.concat([c]));
+    });
+  })(root, []);
+  return out;
+}
+Element.prototype.querySelectorAll = function (selector) { return selectAll(this, selector); };
+Element.prototype.querySelector = function (selector) { return selectAll(this, selector)[0] || null; };
 
 /**
  * 位置と大きさ。シムはレイアウトしないので、既定は原点の 0×0。
@@ -362,7 +406,11 @@ function cloneColumns(cols) {
  * そのまま初期読み込みになるため、apiGetView がちょうど1件積まれる）。
  */
 function createHarness(initialColumns) {
+  const focus = { active: null };   // この文書の焦点（document.activeElement の元）
   const byId = buildStaticElements();
+  Object.keys(byId).forEach(function (id) {
+    for (let n = byId[id]; n; n = n.parentNode) n._focus = focus;
+  });
   const calls = [];
   let timerSeq = 0;
   const timers = {};
@@ -372,6 +420,7 @@ function createHarness(initialColumns) {
   // 実測がある）。既定は同じ値にしておき、食い違わせたいテストだけが setWindowInner で
   // ずらす（どちらを読んでいるかを見分けられるようにするため）。
   const documentElement = new Element('html');
+  documentElement._focus = focus;
   documentElement.clientWidth = 1440;
   documentElement.clientHeight = 900;
 
@@ -381,9 +430,29 @@ function createHarness(initialColumns) {
     getElementById: function (id) {
       return Object.prototype.hasOwnProperty.call(byId, id) ? byId[id] : null;
     },
-    createElement: function (tag) { return new Element(String(tag).toLowerCase()); },
+    // 実ブラウザと同じく、文書から外れた要素に焦点があるときは焦点なし（null）を返す。
+    get activeElement() {
+      const activeElement = focus.active;
+      let n = activeElement;
+      while (n && n.parentNode) n = n.parentNode;
+      if (!n) return null;
+      // 静的な要素は <body>（id を持たない）の下に繋がっている。その根に届けば文書の中。
+      const rootOf = function (e) { while (e && e.parentNode) e = e.parentNode; return e; };
+      const inDoc = Object.keys(byId).some(function (id) { return byId[id] === n || rootOf(byId[id]) === n; });
+      return inDoc ? activeElement : null;
+    },
+    querySelectorAll: function (selector) {
+      const out = [];
+      // 静的な要素（と、その子孫）を順に探す。祖先の指定は探し始めた要素の中でだけ効く。
+      Object.keys(byId).forEach(function (id) {
+        selectAll({ children: [byId[id]] }, selector).forEach(function (e) { if (out.indexOf(e) === -1) out.push(e); });
+      });
+      return out;
+    },
+    createElement: function (tag) { const el = new Element(String(tag).toLowerCase()); el._focus = focus; return el; },
     createElementNS: function (ns, tag) {
       const el = new Element(String(tag).toLowerCase());
+      el._focus = focus;
       el.namespaceURI = ns;
       return el;
     },
